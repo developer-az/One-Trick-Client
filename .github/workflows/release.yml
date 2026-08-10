@@ -83,11 +83,12 @@ jobs:
             - **PageDown** / **Numpad 3** — Support Flash, or Mid Ignite/TP
             - Works while League has focus (low-level keyboard hook). If League is Run as Administrator, run One Trick elevated too.
             - Ctrl+Shift+U unlock/lock · Ctrl+Shift+H hide
+            - Main window parks during matches on purpose — live HUD is the overlay
 
             ### Highlights
-            - Stable overlay persistence mid-match
-            - Reliable summoner timers + role-aware hotkeys
-            - Core-first item checklist (boots after first spike)
-            - Pro loading doctrine + rotating tips (Pyke / Yone / Pantheon)
-            - Purpose-first ward UI + gank probability square
+            - Mid-match HUD no longer freezes on Live Client blips (wards / items / jungle keep updating)
+            - PageUp/PageDown rebind mid-game; tip rail keeps rotating
+            - Smite-based jungle tracking + gank probability square
+            - Lower overlay DWM churn (better FPS vs 1.0.0)
+            - Site ChromeMark app icon + dashboard polish
           generateReleaseNotes: true
