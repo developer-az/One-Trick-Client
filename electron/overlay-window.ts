@@ -276,9 +276,9 @@ export function createOverlayWindow(): BrowserWindow {
 }
 
 /**
- * Cheap periodic self-heal: Windows can drop topmost / ignore-mouse mid-match.
- * Only touch always-on-top / ignore-mouse when they actually drifted — calling
- * setIgnoreMouseEvents every poll forces DWM recomposition and tanks FPS.
+ * Cheap periodic self-heal: Windows can drop topmost / visibility mid-match.
+ * Do NOT re-arm setIgnoreMouseEvents every poll — that causes brief mouse freezes
+ * while Windows rebinds the layered-window hit-test path over League.
  */
 export function keepOverlayOnTop(): void {
     if (!overlayWin || overlayWin.isDestroyed()) return;
@@ -293,17 +293,6 @@ export function keepOverlayOnTop(): void {
     if (!overlayWin.isVisible()) return;
     if (!overlayWin.isAlwaysOnTop()) {
         assertAlwaysOnTop(overlayWin);
-    }
-    // Re-apply click-through only when locked — avoid no-op churn every poll
-    if (clickThrough && !alignMode) {
-        try {
-            if (overlayWin.isFocusable()) {
-                overlayWin.setFocusable(false);
-            }
-            overlayWin.setIgnoreMouseEvents(true, { forward: true });
-        } catch {
-            // ignore
-        }
     }
 }
 
@@ -399,8 +388,10 @@ export function setClickThrough(enabled: boolean): void {
         alignMode = false;
         applyFullscreenBounds();
         overlayWin.setFocusable(false);
-        // forward:true keeps League receiving clicks under the transparent regions
-        overlayWin.setIgnoreMouseEvents(true, { forward: true });
+        // No { forward: true }: forwarding still routes every mousemove through
+        // Chromium for hit-testing, which hitchs the cursor over League. Locked
+        // UI is paint-only (pointer-events: none) — OS pass-through is enough.
+        overlayWin.setIgnoreMouseEvents(true);
         // Never steal focus back from League when re-locking
         if (overlayWin.isVisible()) {
             overlayWin.showInactive();
@@ -448,8 +439,8 @@ export function setAlignMode(enabled: boolean): boolean {
         applyFullscreenBounds();
         overlayWin.setFocusable(true);
         overlayWin.setIgnoreMouseEvents(false);
-        overlayWin.show();
-        overlayWin.focus();
+        // showInactive — focus() steals input from League and can freeze the cursor
+        overlayWin.showInactive();
     } else {
         alignMode = false;
         // Back to compact movable panel (still unlocked)
@@ -457,7 +448,7 @@ export function setAlignMode(enabled: boolean): boolean {
         applyCompactPanelBounds();
         overlayWin.setFocusable(true);
         overlayWin.setIgnoreMouseEvents(false);
-        overlayWin.show();
+        overlayWin.showInactive();
     }
     broadcastOverlayMeta();
     return alignMode;
