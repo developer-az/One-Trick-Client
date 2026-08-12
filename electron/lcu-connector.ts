@@ -2,6 +2,11 @@ import { exec } from 'child_process';
 import { randomUUID } from 'crypto';
 import axios from 'axios';
 import https from 'https';
+import fs from 'fs';
+import path from 'path';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 let credentials: { port: string; token: string; protocol: string } | null = null;
 
@@ -11,33 +16,68 @@ let credentials: { port: string; token: string; protocol: string } | null = null
 // avoidable socket churn competing with the game for CPU.
 const lcuHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
-export const connectToLCU = (): Promise<{ port: string; token: string; protocol: string }> => {
-    return new Promise((resolve, reject) => {
-        // Use PowerShell to find the process, it's more reliable on modern Windows than wmic
-        const command = `powershell -Command "Get-CimInstance Win32_Process -Filter \\"name = 'LeagueClientUx.exe'\\" | Select-Object -ExpandProperty CommandLine"`;
+const LOCKFILE_CANDIDATES = [
+    path.join('C:', 'Riot Games', 'League of Legends', 'lockfile'),
+    path.join('D:', 'Riot Games', 'League of Legends', 'lockfile'),
+    path.join('E:', 'Riot Games', 'League of Legends', 'lockfile'),
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Riot Games', 'League of Legends', 'lockfile'),
+    path.join(process.env.LOCALAPPDATA || '', 'Riot Games', 'League of Legends', 'lockfile'),
+];
 
-        exec(command, (error, stdout) => {
-            if (error || !stdout || !stdout.trim()) {
-                console.log('LCU not found or error:', error);
-                reject(new Error('League Client not found — open the League client and try again'));
-                return;
-            }
+function parseLockfile(raw: string): { port: string; token: string; protocol: string } | null {
+    // Format: LeagueClient:pid:port:password:https
+    const parts = raw.trim().split(':');
+    if (parts.length < 5) return null;
+    const port = parts[2];
+    const token = parts[3];
+    const protocol = parts[4] || 'https';
+    if (!/^\d+$/.test(port) || !token) return null;
+    return { port, token, protocol };
+}
 
-            const portMatch = stdout.match(/--app-port=([0-9]*)/);
-            const tokenMatch = stdout.match(/--remoting-auth-token=([\w-]*)/);
+async function connectViaLockfile(): Promise<{ port: string; token: string; protocol: string } | null> {
+    for (const lockPath of LOCKFILE_CANDIDATES) {
+        try {
+            const raw = await fs.promises.readFile(lockPath, 'utf8');
+            const parsed = parseLockfile(raw);
+            if (parsed) return parsed;
+        } catch {
+            // try next
+        }
+    }
+    return null;
+}
 
-            if (portMatch && tokenMatch) {
-                credentials = {
-                    port: portMatch[1],
-                    token: tokenMatch[1],
-                    protocol: 'https'
-                };
-                resolve(credentials);
-            } else {
-                reject(new Error('Could not parse LCU credentials from: ' + stdout));
-            }
-        });
-    });
+/** Slow fallback — PowerShell+CIM can stall the machine for seconds. Prefer lockfile. */
+async function connectViaPowerShell(): Promise<{ port: string; token: string; protocol: string }> {
+    const command = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name = 'LeagueClientUx.exe'\\" | Select-Object -ExpandProperty CommandLine"`;
+    const { stdout } = await execAsync(command, { timeout: 8000, windowsHide: true });
+    if (!stdout?.trim()) {
+        throw new Error('League Client not found — open the League client and try again');
+    }
+    const portMatch = stdout.match(/--app-port=([0-9]*)/);
+    const tokenMatch = stdout.match(/--remoting-auth-token=([\w-]*)/);
+    if (!portMatch || !tokenMatch) {
+        throw new Error('Could not parse LCU credentials from process command line');
+    }
+    return { port: portMatch[1], token: tokenMatch[1], protocol: 'https' };
+}
+
+export const connectToLCU = async (): Promise<{ port: string; token: string; protocol: string }> => {
+    const fromLock = await connectViaLockfile();
+    if (fromLock) {
+        credentials = fromLock;
+        return credentials;
+    }
+    try {
+        credentials = await connectViaPowerShell();
+        return credentials;
+    } catch (error) {
+        console.log('LCU not found or error:', error);
+        throw error instanceof Error
+            ? error
+            : new Error('League Client not found — open the League client and try again');
+    }
 };
 
 /** Refresh credentials before write ops — tokens rotate when the client restarts. */

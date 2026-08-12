@@ -371,7 +371,9 @@ export const OverlayApp: React.FC = () => {
 
   return (
     <div
-      className="w-screen h-screen bg-transparent overflow-hidden select-none"
+      className={`w-screen h-screen bg-transparent overflow-hidden select-none${
+        clickThrough && !alignMode ? ' pointer-events-none' : ''
+      }`}
       style={{ ['--overlay-scale' as string]: `${0.75 + hudScale / 200}` }}
     >
       {/* HUD frames: fullscreen pass-through or align mode only — never on the compact panel */}
