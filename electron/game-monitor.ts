@@ -51,6 +51,13 @@ const POLL_INGAME_HIDDEN_MS = 12000;
 const CLIPBOARD_MIN_INTERVAL_MS = 20000;
 /** Soft end requires this many consecutive failed ticks (~14s at 3.5s poll). */
 const END_GAME_STRIKES_NEEDED = 4;
+/** Lobby/menu LCU reconnect backoff. */
+const LCU_RECONNECT_IDLE_MS = 5000;
+/**
+ * Mid-match reconnect backoff. PowerShell/WMI fallback can freeze the PC for
+ * seconds — never thrash it while Live Client is still the source of truth.
+ */
+const LCU_RECONNECT_INGAME_MS = 45000;
 
 let lastClipboardWrite = 0;
 
@@ -90,10 +97,11 @@ export function setMatchStartHotkeyHandler(handler: (() => void) | null): void {
     onMatchStartHotkeys = handler;
 }
 
-/** Attempt (re)connect, respecting a 5s backoff. Only called after a request already failed. */
+/** Attempt (re)connect with backoff. Mid-match uses a long cooldown to avoid PowerShell stalls. */
 async function ensureLcuConnected(): Promise<boolean> {
     const now = Date.now();
-    if (now - lastLcuConnectAttempt < 5000) return false;
+    const backoff = inGame ? LCU_RECONNECT_INGAME_MS : LCU_RECONNECT_IDLE_MS;
+    if (now - lastLcuConnectAttempt < backoff) return false;
     lastLcuConnectAttempt = now;
     try {
         await connectToLCU();
@@ -257,9 +265,9 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
     const enemyKey = (payload.enemies || [])
         .map((e) => `${e.championName}:${e.level}:${e.isDead ? 1 : 0}`)
         .join('|');
-    // 1s buckets — ward countdown / cannon windows need second-level updates.
-    // Poll is already ~4s, so this just avoids skipping a tick inside a 6s bin.
-    const timeBucket = Math.floor((payload.gameTime || 0) / 1);
+    // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
+    // Per-second buckets forced an IPC + full React reconcile every poll.
+    const timeBucket = Math.floor((payload.gameTime || 0) / 10);
     return [
         payload.gameflowPhase || '',
         payload.gameMode || '',
@@ -323,8 +331,16 @@ async function tick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
     try {
+        // Mid-match: prefer Live Client first. Never spawn a PowerShell LCU
+        // reconnect while the game API is healthy — that stalls mouse/input.
+        let live: LiveClientAllGameData | null = null;
+        const overlayHidden = isOverlayUserHidden();
+        if (inGame && !(overlayHidden && inGame)) {
+            live = await fetchLiveClientData();
+        }
+
         let phase = await pollGameflowPhase();
-        if (phase === null) {
+        if (phase === null && !(inGame && live)) {
             const reconnected = await ensureLcuConnected();
             if (reconnected) {
                 phase = await pollGameflowPhase();
@@ -348,9 +364,7 @@ async function tick(): Promise<void> {
         // already know we are in a terminal post-game phase (saves sockets + CPU),
         // and when the overlay is hidden there is nothing to feed — only the
         // gameflow phase matters for knowing the match ended.
-        const overlayHidden = isOverlayUserHidden();
-        let live: LiveClientAllGameData | null = null;
-        if ((phaseInGame || phase === null || inGame) && !(overlayHidden && phaseInGame)) {
+        if (live === null && (phaseInGame || phase === null || inGame) && !(overlayHidden && phaseInGame)) {
             if (!phaseMatchOver || inGame) {
                 live = await fetchLiveClientData();
             }

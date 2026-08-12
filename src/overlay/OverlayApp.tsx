@@ -261,9 +261,12 @@ export const OverlayApp: React.FC = () => {
   const cueFirstSeen = useRef<Map<string, number>>(new Map());
   const [nowTick, setNowTick] = useState(() => Date.now());
   useEffect(() => {
+    // Only tick the whole tree when cues need TTL expiry — avoids 1 Hz
+    // ChromeGameHud / rail re-renders for the entire match.
+    if (!state.inGame || rawCues.length === 0) return;
     const id = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [state.inGame, rawCues.length]);
   useEffect(() => {
     // Reset TTLs when match ends / restarts
     if (!state.inGame) cueFirstSeen.current.clear();
@@ -356,7 +359,9 @@ export const OverlayApp: React.FC = () => {
 
   return (
     <div
-      className="w-screen h-screen bg-transparent overflow-hidden select-none"
+      className={`w-screen h-screen bg-transparent overflow-hidden select-none${
+        clickThrough && !alignMode ? ' pointer-events-none' : ''
+      }`}
       style={{ ['--overlay-scale' as string]: `${0.75 + hudScale / 200}` }}
     >
       {/* HUD frames: fullscreen pass-through or align mode only — never on the compact panel */}
