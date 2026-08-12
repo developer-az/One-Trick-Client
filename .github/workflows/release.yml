@@ -86,9 +86,9 @@ jobs:
             - Main window parks during matches on purpose — live HUD is the overlay
 
             ### Highlights
-            - Mid-match HUD no longer freezes on Live Client blips (wards / items / jungle keep updating)
-            - PageUp/PageDown rebind mid-game; tip rail keeps rotating
-            - Smite-based jungle tracking + gank probability square
-            - Lower overlay DWM churn (better FPS vs 1.0.0)
-            - Site ChromeMark app icon + dashboard polish
+            - Fix mid-match mouse hitch: no ignore-mouse re-arm / `forward` when locked
+            - LCU reconnect prefers lockfile; long backoff mid-match (avoids PowerShell freezes)
+            - Fewer overlay IPC/React rebuilds (10s fingerprint buckets)
+            - Mid-match HUD holds through Live Client blips; PageUp/PageDown rebind
+            - Smite jungle tracking + lower overlay DWM churn
           generateReleaseNotes: true
