@@ -9,12 +9,17 @@ interface Props {
     selections: Record<string, Champion | null>;
     roles?: string[]; // Optional: specify which roles to show
     layout?: 'stack' | 'row';
+    compact?: boolean;
 }
 
-export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, selections, roles, layout = 'stack' }) => {
+export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, selections, roles, layout = 'stack', compact = false }) => {
     const displayRoles = roles || ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
     const gridClass = layout === 'row' && displayRoles.length > 1
-      ? 'md:grid-cols-5'
+      ? displayRoles.length >= 5
+        ? 'sm:grid-cols-5'
+        : displayRoles.length === 2
+          ? 'sm:grid-cols-2'
+          : 'sm:grid-cols-3'
       : 'grid-cols-1';
     const [openDropdowns, setOpenDropdowns] = useState<{ [key: string]: boolean }>({});
     const [searchTerms, setSearchTerms] = useState<{ [key: string]: string }>({});
@@ -112,8 +117,10 @@ export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, 
                 const filteredChampions = getFilteredChampions(role);
 
                 return (
-                    <div key={role} className="flex flex-col gap-1.5 relative" style={{ zIndex: 200 }}>
-                        <label className={`font-mono uppercase tracking-[0.16em] text-[10px] mb-0.5 ${
+                    <div key={role} className={`flex flex-col ${compact ? 'gap-0.5' : 'gap-1.5'} relative`} style={{ zIndex: 200 }}>
+                        <label className={`uppercase tracking-wide mb-0 ${
+                            compact ? 'text-[9px] text-chrome-dim' : 'font-mono tracking-[0.16em] text-[10px]'
+                        } ${
                             role === 'YourADC' ? 'text-chrome-dim' : 'text-chrome-silver'
                         }`}>
                             {role === 'YourADC'
@@ -145,7 +152,7 @@ export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, 
                                 <input
                                     type="text"
                                     className={`hud-input w-full pr-8 ${selectedChampion ? 'pl-9' : ''}`}
-                                    placeholder="Type to search..."
+                                    placeholder={compact ? role : 'Search…'}
                                     value={selectedChampion ? selectedChampion.name : searchTerm}
                                     onChange={(e) => {
                                         const val = e.target.value;
@@ -226,7 +233,7 @@ export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, 
                         </div>
 
                         {/* Selected Champion Info */}
-                        {selectedChampion && (
+                        {selectedChampion && !compact && (
                             <div className="flex gap-2 mt-0.5">
                                 <span className="hud-chip !py-0.5 !text-[8px] text-chrome-dim">
                                     {selectedChampion.damageType}

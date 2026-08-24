@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Windows League companion for Pyke Support, Pantheon Support, and Yone Mid — matchup doctrine, loadout export, and a live in-game overlay**
+**Windows League overlay client for Pyke Support, Pantheon Support, and Yone Mid — loadout export and a live HUD**
 
 [![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.0.2)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -18,7 +18,7 @@
 
 ## Overview
 
-**One Trick** connects to the League Client, fills enemy picks in champion select, recommends items and runes for your profile, exports loadouts into the client, and keeps a dual-rail chrome overlay alive while you play.
+**One Trick** connects to the League Client, fills enemy picks in champion select, recommends items and runes for your profile, exports loadouts into the client, and keeps a click-through HUD alive while you play.
 
 Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 
@@ -32,7 +32,7 @@ Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 - **Profile builds** — core path first, then boots, then situational (boots are not forced to the front of the checklist)
 - **Rune pages** adapted to poke, CC, and lane shape
 - **Dominance gauge** for how favorable the setup is
-- **Loading-screen doctrine** — exact how-to-play lines for the matchup so you can leave the companion UI and focus on macro
+- **Loading-screen plan** — matchup notes stay in champ select; the overlay does not lecture mid-fight
 - **Ally context** — ADC / Mid / Jungle when the draft asks
 
 ### League Client integration
@@ -44,11 +44,11 @@ Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 
 ### In-game overlay
 
-- Dual-rail HUD: enemy summoners on the left, cues / buy / vision on the right
+- HUD modules you can toggle: enemy summoners, gank square, vision, next-buy icons, one time-critical action line
 - **Gank probability square** — yellow = fog / low-vision risk; red = brief high window from per-jungler pathing
-- **Purpose-first wards** — what the ward is for, pink count, sweep targets when Oracle / Control Ward is held (pots first early — no pink on the open)
-- **Pro-level tips** and roam / cannon windows (no basic filler)
-- Transparent chrome around ability bar and minimap; **Sync LoL** reads Interface scales from `game.cfg`
+- **Vision** — short location + pink/sweep hint (detail in tooltip)
+- **Ability / minimap frames** are off by default — turn on Frames if you want them
+- Transparent click-through HUD; **Sync LoL** reads Interface scales from `game.cfg`
 - Stays visible mid-match — click-through healed, soft LCU flaps do not tear it down
 
 ### Summoner timers
@@ -85,9 +85,8 @@ Builds land in `release/`.
 
 1. Start **League of Legends**, then open **One Trick**
 2. Lock in on a supported profile (Pyke / Pantheon / Yone)
-3. Review **items**, **runes**, and **matchup doctrine**
-4. Click **Export** to push into the client
-5. Overlay appears when the match starts (Borderless display mode)
+3. Review **items** and **runes**, then **Export**
+4. Overlay HUD appears when the match starts (Borderless display mode)
 
 Manual enemy picks still work when LCU is unavailable (Demo mode).
 
@@ -101,7 +100,8 @@ Manual enemy picks still work when LCU is unavailable (Demo mode).
 | Toggle Support Flash / Mid Ignite·TP | **PageDown** or **Numpad 3** |
 | Show / hide overlay | **Ctrl+Shift+H** |
 | Lock (click-through) / unlock panel | **Ctrl+Shift+U** |
-| Align HUD / minimap frames | Unlock → **Align** → nudge Ability / Map |
+| HUD modules (sums, gank, vision, buy, action, frames) | Companion **HUD** row |
+| Align HUD / minimap frames | Unlock → **Align** (enable **Frames** first) |
 | Match League scales | **Sync LoL** or HUD / Map sliders |
 
 ### Display mode (FPS)

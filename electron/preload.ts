@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setOverlayHudScale: (scale: number) => ipcRenderer.invoke('overlay-set-hud-scale', scale),
     setOverlayMapScale: (scale: number) => ipcRenderer.invoke('overlay-set-map-scale', scale),
     setOverlayChromeColor: (color: string) => ipcRenderer.invoke('overlay-set-chrome-color', color),
+    setOverlayHudModules: (modules: unknown) => ipcRenderer.invoke('overlay-set-hud-modules', modules),
     syncLeagueScales: () => ipcRenderer.invoke('overlay-sync-league-scales'),
     adjustOverlayCalibration: (target: 'ability' | 'minimap', field: 'dx' | 'dy' | 'dw' | 'dh', delta: number) =>
         ipcRenderer.invoke('overlay-adjust-calibration', target, field, delta),

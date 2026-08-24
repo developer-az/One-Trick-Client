@@ -5,31 +5,31 @@
 :root {
   --chrome-silver: #d4d8de;
   --chrome-bright: #f2f4f7;
-  --chrome-dim: #8a919c;
-  --chrome-ink: #070708;
-  --chrome-panel: rgba(8, 8, 10, 0.78);
-  --chrome-blood: #9b1c2e;
-  --chrome-line: rgba(212, 216, 222, 0.55);
-  /* Legacy aliases → chrome (existing classNames) */
+  --chrome-dim: #8b9098;
+  --chrome-ink: #0b0c0e;
+  --chrome-panel: rgba(20, 21, 24, 0.88);
+  --chrome-blood: #e85d4c;
+  --chrome-gold: #e8b84a;
+  --chrome-line: rgba(255, 255, 255, 0.08);
   --pyke-green: var(--chrome-silver);
   --pyke-green-dim: var(--chrome-dim);
   --hound-blood: var(--chrome-blood);
   --hound-steel: var(--chrome-dim);
   --hound-cyan: #aeb4be;
-  --hud-line: rgba(212, 216, 222, 0.55);
-  --hud-glow: rgba(242, 244, 247, 0.12);
-  --hud-fill: rgba(8, 8, 10, 0.55);
-  --font-display: 'Cinzel', 'Times New Roman', serif;
-  --font-body: 'Syne', 'Segoe UI', sans-serif;
+  --hud-line: var(--chrome-line);
+  --hud-glow: rgba(232, 184, 74, 0.16);
+  --hud-fill: rgba(11, 12, 14, 0.55);
+  --font-display: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --radius: 8px;
 
   font-family: var(--font-body);
-  line-height: 1.45;
-  font-weight: 500;
-
+  line-height: 1.4;
+  font-weight: 400;
   color-scheme: dark;
-  color: rgba(242, 244, 247, 0.9);
-  background-color: #070708;
+  color: rgba(242, 244, 247, 0.92);
+  background-color: #0b0c0e;
 }
 
 body {
@@ -40,270 +40,117 @@ body {
   color: var(--chrome-silver);
   overflow-x: hidden;
   position: relative;
-  background: #070708;
+  background: #0b0c0e;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Main window — base ink; atmosphere layer paints the gradients */
 html:not(.overlay-root) body {
-  background: #070708;
-}
-
-html:not(.overlay-root) body::before {
-  display: none;
+  background: #0b0c0e;
 }
 
 html.overlay-root,
 html.overlay-root body {
   background: transparent !important;
   min-height: 0;
+  font-family: var(--font-body);
+  color: var(--chrome-silver);
 }
 
-/* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0a0c;
+  background: #0b0c0e;
 }
 ::-webkit-scrollbar-thumb {
   background: #2a2c32;
-  border-radius: 2px;
+  border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--chrome-silver);
+  background: var(--chrome-dim);
 }
 
-/* ——— Chrome Hearts main-app panels ——— */
+/* Quiet panels — hairline, no clip-path ornament */
 .hud-panel {
   --accent: var(--chrome-silver);
-  --accent-soft: rgba(212, 216, 222, 0.14);
   position: relative;
-  /* Site-matched fill — no backdrop-filter (GPU tax while League is open) */
-  background:
-    linear-gradient(135deg, rgba(242, 244, 247, 0.06), transparent 42%),
-    linear-gradient(165deg, rgba(22, 22, 26, 0.88), rgba(8, 8, 10, 0.72) 55%, rgba(10, 8, 10, 0.8));
-  border: 1px solid rgba(212, 216, 222, 0.28);
-  clip-path: polygon(
-    0 14px, 14px 0, calc(100% - 14px) 0, 100% 14px,
-    100% calc(100% - 14px), calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px)
-  );
-  box-shadow:
-    inset 0 0 0 1px rgba(0, 0, 0, 0.35),
-    0 18px 48px rgba(0, 0, 0, 0.4),
-    0 0 24px var(--accent-soft);
+  background: var(--chrome-panel);
+  border: 1px solid var(--chrome-line);
+  border-radius: var(--radius);
   overflow: hidden;
   contain: layout paint;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.hud-panel::before {
-  content: '';
-  position: absolute;
-  inset: 5px;
-  pointer-events: none;
-  z-index: 1;
-  border: 1px solid rgba(212, 216, 222, 0.1);
-  clip-path: polygon(
-    0 10px, 10px 0, calc(100% - 10px) 0, 100% 10px,
-    100% calc(100% - 10px), calc(100% - 10px) 100%, 10px 100%, 0 calc(100% - 10px)
-  );
-}
-
-.hud-panel--compact {
-  clip-path: polygon(
-    0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px,
-    100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px)
-  );
-}
-
-.hud-accent-green {
-  --accent: var(--chrome-silver);
-  --accent-soft: rgba(212, 216, 222, 0.14);
-}
-.hud-accent-blood {
-  --accent: var(--chrome-blood);
-  --accent-soft: rgba(155, 28, 46, 0.2);
-}
-.hud-accent-steel {
-  --accent: var(--chrome-dim);
-  --accent-soft: rgba(138, 145, 156, 0.14);
-}
-.hud-accent-cyan {
-  --accent: #aeb4be;
-  --accent-soft: rgba(174, 180, 190, 0.14);
-}
+.hud-accent-green { --accent: var(--chrome-gold); }
+.hud-accent-blood { --accent: var(--chrome-blood); }
+.hud-accent-steel { --accent: var(--chrome-dim); }
+.hud-accent-cyan { --accent: #aeb4be; }
 
 .hud-panel-body {
   position: relative;
-  z-index: 2;
+  z-index: 1;
 }
-
-.hud-corner {
-  position: absolute;
-  width: 20px;
-  height: 20px;
-  z-index: 3;
-  pointer-events: none;
-  border-color: var(--accent);
-  filter: drop-shadow(0 0 3px rgba(242, 244, 247, 0.25));
-}
-
-.hud-panel-mark {
-  position: absolute;
-  z-index: 4;
-  color: var(--chrome-bright);
-  line-height: 0;
-  pointer-events: none;
-  filter: drop-shadow(0 1px 2px #000) drop-shadow(0 0 4px rgba(255, 255, 255, 0.25));
-  opacity: 0.92;
-}
-.hud-panel-mark--tl { top: 6px; left: 8px; }
-.hud-panel-mark--tr { top: 6px; right: 8px; }
-.hud-corner-tl {
-  top: 4px;
-  left: 4px;
-  border-top: 2px solid;
-  border-left: 2px solid;
-}
-.hud-corner-tr {
-  top: 4px;
-  right: 4px;
-  border-top: 2px solid;
-  border-right: 2px solid;
-}
-.hud-corner-bl {
-  bottom: 4px;
-  left: 4px;
-  border-bottom: 2px solid;
-  border-left: 2px solid;
-}
-.hud-corner-br {
-  bottom: 4px;
-  right: 4px;
-  border-bottom: 2px solid;
-  border-right: 2px solid;
-}
-
-.hud-rail {
-  position: absolute;
-  left: 22px;
-  right: 22px;
-  height: 1px;
-  z-index: 3;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--accent) 18%,
-    color-mix(in srgb, var(--accent) 40%, white) 50%,
-    var(--accent) 82%,
-    transparent
-  );
-  opacity: 0.55;
-  animation: hud-rail-pulse 3.2s ease-in-out infinite;
-}
-.hud-rail-top { top: 0; }
-.hud-rail-bottom { bottom: 0; animation-delay: 1.1s; }
-
-.hud-tick {
-  position: absolute;
-  top: 18%;
-  bottom: 18%;
-  width: 2px;
-  z-index: 3;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent, var(--accent), transparent);
-  opacity: 0.35;
-}
-.hud-tick-l { left: 0; }
-.hud-tick-r { right: 0; }
 
 .hud-tag {
   position: absolute;
   top: 8px;
-  right: 14px;
-  z-index: 4;
+  right: 10px;
+  z-index: 2;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--accent);
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  background: rgba(0, 0, 0, 0.35);
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  color: var(--chrome-dim);
 }
 
 .hud-heading {
-  font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-family: var(--font-body);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-}
-
-.hud-chevron {
-  display: inline-flex;
-  color: var(--chrome-bright);
-  font-family: var(--font-mono);
-  letter-spacing: -0.12em;
-  text-shadow: 0 0 10px rgba(242, 244, 247, 0.35);
-  animation: hud-chevron-flicker 4s steps(2, end) infinite;
+  gap: 0.4rem;
 }
 
 .hud-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 0.3rem 0.65rem;
-  color: var(--accent, var(--pyke-green));
-  border: 1px solid color-mix(in srgb, var(--accent, var(--pyke-green)) 40%, transparent);
+  padding: 0.2rem 0.5rem;
+  color: var(--accent, var(--chrome-silver));
+  border: 1px solid var(--chrome-line);
   background: rgba(0, 0, 0, 0.28);
-  clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
+  border-radius: 4px;
+}
+
+.hud-chip--quiet {
+  --accent: var(--chrome-dim);
+  color: var(--chrome-dim);
+}
+
+.hud-chip.hud-accent-green,
+.hud-chip.ready {
+  color: var(--chrome-gold);
+  border-color: rgba(232, 184, 74, 0.45);
+  background: rgba(232, 184, 74, 0.1);
 }
 
 .hud-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 8px currentColor;
-  animation: hud-dot-breathe 2.4s ease-in-out infinite;
-}
-
-.hud-scanlines::after {
-  content: '';
-  pointer-events: none;
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  opacity: 0.06;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(255, 255, 255, 0.06) 2px,
-    rgba(255, 255, 255, 0.06) 3px
-  );
 }
 
 .hud-brand {
-  font-family: var(--font-display);
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  background: linear-gradient(180deg, #ffffff 15%, #d4d8de 55%, #8a919c 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  /* Soft glow via text-shadow only — cheaper than filter: drop-shadow on large type */
-  text-shadow: 0 0 28px rgba(242, 244, 247, 0.12);
+  font-family: var(--font-body);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--chrome-bright);
 }
 
 .hud-app-shell {
@@ -312,28 +159,14 @@ html.overlay-root body {
   min-height: 100vh;
 }
 
-/* Site atmosphere — fixed CSS gradients + faint grid (no blur, no animated noise) */
 .app-atmosphere {
   pointer-events: none;
   position: fixed;
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(1100px 560px at 12% -8%, rgba(242, 244, 247, 0.07), transparent 55%),
-    radial-gradient(900px 480px at 92% 8%, rgba(155, 28, 46, 0.14), transparent 52%),
-    linear-gradient(180deg, #0e0e12 0%, #070708 48%, #050506 100%);
-}
-
-.app-atmosphere::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  opacity: 0.04;
-  background-image:
-    linear-gradient(rgba(212, 216, 222, 0.45) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(212, 216, 222, 0.35) 1px, transparent 1px);
-  background-size: 56px 56px;
-  mask-image: radial-gradient(ellipse at center, black 18%, transparent 78%);
+    radial-gradient(900px 420px at 8% -10%, rgba(232, 184, 74, 0.05), transparent 55%),
+    linear-gradient(180deg, #121316 0%, #0b0c0e 55%, #090a0c 100%);
 }
 
 .app-content {
@@ -343,91 +176,23 @@ html.overlay-root body {
 
 .chrome-rule {
   height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(212, 216, 222, 0.45) 18%,
-    rgba(155, 28, 46, 0.35) 50%,
-    rgba(212, 216, 222, 0.45) 82%,
-    transparent
-  );
+  background: var(--chrome-line);
 }
 
 .hud-titlebar {
-  background:
-    linear-gradient(90deg, rgba(155, 28, 46, 0.14), transparent 32%, transparent 68%, rgba(212, 216, 222, 0.06)),
-    linear-gradient(180deg, #121214, #070708);
-  border-bottom: 1px solid rgba(212, 216, 222, 0.22);
-  box-shadow: 0 1px 0 rgba(155, 28, 46, 0.18);
+  background: #101114;
+  border-bottom: 1px solid var(--chrome-line);
 }
 
-.hud-titlebar::after {
-  content: '';
-  position: absolute;
-  left: 12%;
-  right: 12%;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--chrome-bright), transparent);
-  opacity: 0.45;
-}
-
-/* Overlay — Chrome Hearts gothic (black / polished silver) */
-html.overlay-root {
-  --chrome-silver: #d4d8de;
-  --chrome-bright: #f2f4f7;
-  --chrome-dim: #8a919c;
-  --chrome-ink: #070708;
-  --chrome-panel: rgba(8, 8, 10, 0.72);
-  --chrome-blood: #9b1c2e;
-  --chrome-line: rgba(212, 216, 222, 0.55);
-  --font-display: 'Cinzel', 'Times New Roman', serif;
-  --font-body: 'Syne', 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
-}
-
-html.overlay-root,
-html.overlay-root body {
-  font-family: var(--font-body);
-  color: var(--chrome-silver);
-}
-
+/* Overlay widgets — flat, cheap to composite */
 .hud-overlay-panel {
-  --accent: var(--chrome-silver, #d4d8de);
-  --accent-soft: rgba(212, 216, 222, 0.12);
+  --accent: var(--chrome-silver);
   position: relative;
-  /* Deliberately no backdrop-filter here — real-time framebuffer blur behind a
-     fullscreen always-on-top window is the single biggest GPU/FPS cost an
-     Electron overlay can add on top of a game. Flat, low-opacity fill only. */
-  background: rgba(8, 8, 10, 0.32);
-  border: 1px solid rgba(212, 216, 222, 0.28);
-  border-left: 2px solid rgba(212, 216, 222, 0.55);
+  background: rgba(11, 12, 14, 0.34);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
   overflow: hidden;
   font-family: var(--font-body);
-}
-
-.hud-overlay-panel .hud-corner {
-  width: 14px;
-  height: 14px;
-  border-color: var(--chrome-silver, #d4d8de);
-  opacity: 0.6;
-  filter: none;
-}
-
-.hud-overlay-panel .hud-rail {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(212, 216, 222, 0.5) 50%,
-    transparent
-  );
-  height: 1px;
-  opacity: 0.4;
-  animation: none;
-}
-
-.hud-overlay-panel .hud-tick {
-  display: none;
 }
 
 .hud-chrome-header {
@@ -436,98 +201,67 @@ html.overlay-root body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.55rem 0.85rem;
-  border-bottom: 1px solid rgba(212, 216, 222, 0.18);
-  background:
-    linear-gradient(90deg, rgba(155, 28, 46, 0.12), transparent 40%, transparent 60%, rgba(212, 216, 222, 0.05)),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.45), transparent);
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.28);
 }
 
 .hud-chrome-title {
-  font-family: var(--font-display);
   font-weight: 600;
   font-size: 11px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--chrome-bright, #f2f4f7);
-  text-shadow: 0 0 18px rgba(242, 244, 247, 0.15);
+  letter-spacing: 0.04em;
+  color: var(--chrome-bright);
 }
 
 .hud-chrome-meta {
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--chrome-dim, #8a919c);
-}
-
-.hud-chrome-section {
-  font-family: var(--font-display);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.26em;
-  text-transform: uppercase;
-  color: var(--chrome-silver, #d4d8de);
-  margin-bottom: 0.4rem;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  color: var(--chrome-dim);
 }
 
 .hud-chrome-cue {
-  position: relative;
-  padding: 0.3rem 0.45rem 0.3rem 0.55rem;
-  border: 1px solid rgba(212, 216, 222, 0.22);
-  background: rgba(0, 0, 0, 0.35);
-  clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
-  font-size: 10px;
-  line-height: 1.3;
-  color: #c8ccd4;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.32);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  color: #d8dce3;
+  letter-spacing: 0.02em;
 }
 .hud-chrome-cue--spike {
-  border-color: rgba(242, 244, 247, 0.45);
-  background: linear-gradient(90deg, rgba(242, 244, 247, 0.1), rgba(0, 0, 0, 0.35));
-  color: var(--chrome-bright, #f2f4f7);
-  box-shadow: inset 2px 0 0 rgba(242, 244, 247, 0.65);
+  border-color: rgba(232, 184, 74, 0.45);
+  color: var(--chrome-gold);
 }
 .hud-chrome-cue--warn {
-  border-color: rgba(155, 28, 46, 0.45);
-  background: linear-gradient(90deg, rgba(155, 28, 46, 0.18), rgba(0, 0, 0, 0.35));
-  color: #f0d0d4;
-  box-shadow: inset 2px 0 0 rgba(155, 28, 46, 0.85);
+  border-color: rgba(232, 93, 76, 0.4);
+  color: #f0c4c0;
 }
 .hud-chrome-cue--info {
-  border-color: rgba(138, 145, 156, 0.35);
   color: #aeb4be;
 }
 
-/* Vision indicator — intentionally its own compact row, never a cue card. */
 .hud-ward {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.2rem 0.45rem;
+  padding: 0.15rem 0.35rem;
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
   line-height: 1.2;
   color: #9fd8c8;
-  border: 1px solid rgba(122, 198, 176, 0.3);
-  background: rgba(20, 40, 36, 0.35);
-  clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
+  border: 1px solid rgba(122, 198, 176, 0.28);
+  background: rgba(20, 40, 36, 0.32);
+  border-radius: 4px;
 }
-
 .hud-ward--due {
   color: #d9f3e9;
-  border-color: rgba(122, 198, 176, 0.7);
-  box-shadow: inset 2px 0 0 rgba(122, 198, 176, 0.8);
+  border-color: rgba(122, 198, 176, 0.65);
 }
-
-.hud-ward-icon {
-  flex-shrink: 0;
-  opacity: 0.9;
-}
-
+.hud-ward-icon { flex-shrink: 0; opacity: 0.9; }
 .hud-ward-where {
   flex: 1 1 auto;
   min-width: 0;
@@ -535,176 +269,83 @@ html.overlay-root body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .hud-ward-meta {
   flex-shrink: 0;
   opacity: 0.75;
   font-size: 9px;
-  letter-spacing: 0.1em;
 }
-
 .hud-ward-copy {
   flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.05rem;
 }
+.hud-ward-why { display: none; }
 
-.hud-ward-why {
-  font-size: 8px;
-  opacity: 0.72;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-/* Gank probability square — yellow = fog risk, red = brief high window */
 .hud-gank {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.2rem 0.45rem;
+  gap: 0.35rem;
+  padding: 0.15rem 0.35rem;
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.04em;
   line-height: 1.2;
-  border: 1px solid rgba(212, 216, 222, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(0, 0, 0, 0.28);
-  clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
+  border-radius: 4px;
   color: #c8ccd4;
 }
-
 .hud-gank-sq {
   width: 10px;
   height: 10px;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
-
 .hud-gank--red {
   color: #f0c4c4;
-  border-color: rgba(220, 80, 80, 0.55);
-  background: rgba(60, 16, 16, 0.45);
+  border-color: rgba(232, 93, 76, 0.5);
+  background: rgba(60, 16, 16, 0.4);
 }
 .hud-gank--red .hud-gank-sq {
-  background: #e04545;
-  box-shadow: 0 0 6px rgba(224, 69, 69, 0.55);
+  background: #e85d4c;
 }
-
 .hud-gank--yellow {
   color: #e8d9a8;
-  border-color: rgba(210, 170, 60, 0.5);
-  background: rgba(48, 40, 12, 0.4);
+  border-color: rgba(232, 184, 74, 0.45);
+  background: rgba(48, 40, 12, 0.35);
 }
 .hud-gank--yellow .hud-gank-sq {
-  background: #d4b03a;
+  background: #e8b84a;
 }
-
-.hud-gank--dim {
-  opacity: 0.72;
-}
-.hud-gank--dim .hud-gank-sq {
-  background: #5a6270;
-}
-
+.hud-gank--dim { opacity: 0.7; }
+.hud-gank--dim .hud-gank-sq { background: #5a6270; }
 .hud-gank-label {
   font-size: 9px;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.hud-gank-meta {
-  font-size: 8px;
-  opacity: 0.7;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hud-build-path-label {
-  font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: #8a919c;
-  margin-bottom: 0.25rem;
-}
-
-.hud-chrome-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  padding: 0.3rem 0.5rem;
-  border: 1px solid rgba(212, 216, 222, 0.16);
-  background: rgba(0, 0, 0, 0.28);
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
-  color: #e4e6ea;
-}
-.hud-chrome-row--dead {
-  opacity: 0.4;
-  color: #6b7280;
-}
-
-.hud-overlay-panel .hud-chip {
-  --accent: var(--chrome-silver, #d4d8de);
-  color: var(--chrome-bright, #f2f4f7);
-  border-color: rgba(212, 216, 222, 0.35);
-  background: rgba(0, 0, 0, 0.4);
-  font-family: var(--font-mono);
-  letter-spacing: 0.12em;
-  clip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%);
-}
-
-.hud-overlay-panel .hud-chip.hud-accent-blood {
-  --accent: var(--chrome-blood, #9b1c2e);
-  color: #f0b8c0;
-  border-color: rgba(155, 28, 46, 0.55);
-  background: rgba(155, 28, 46, 0.15);
-}
-
-.hud-overlay-panel .hud-btn {
-  color: var(--chrome-dim, #8a919c);
-  border-color: rgba(212, 216, 222, 0.28);
-  background: rgba(0, 0, 0, 0.4);
-  font-family: var(--font-mono);
-}
-.hud-overlay-panel .hud-btn:hover {
-  color: var(--chrome-bright, #f2f4f7);
-  border-color: rgba(242, 244, 247, 0.55);
-  box-shadow: 0 0 12px rgba(242, 244, 247, 0.12);
-}
-
-.hud-chrome-mark {
-  color: var(--chrome-silver, #d4d8de);
-  flex-shrink: 0;
-  opacity: 0.85;
-}
+.hud-gank-meta { display: none; }
 
 .hud-overlay-scale {
   transform: scale(var(--overlay-scale, 0.85));
-  transform-origin: top right;
 }
+.hud-overlay-scale--left { transform-origin: top left; }
+.hud-overlay-scale--right { transform-origin: top right; }
 
 .hud-overlay-controls {
-  --accent: var(--chrome-silver, #d4d8de);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.35rem 0.55rem;
-  background: rgba(6, 6, 8, 0.62);
-  border: 1px solid rgba(212, 216, 222, 0.35);
-  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  padding: 0.3rem 0.5rem;
+  background: rgba(11, 12, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
   font-family: var(--font-mono);
-  color: var(--chrome-dim, #8a919c);
+  color: var(--chrome-dim);
 }
 
 .hud-nudge-group {
@@ -712,40 +353,25 @@ html.overlay-root body {
   align-items: center;
   gap: 0.15rem;
   padding: 0.1rem 0.3rem;
-  border-left: 1px solid rgba(212, 216, 222, 0.2);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
-
 .hud-nudge-btn {
   font-family: var(--font-mono);
   font-size: 9px;
   line-height: 1;
   padding: 0.2rem 0.35rem;
-  color: var(--chrome-dim, #8a919c);
-  border: 1px solid rgba(212, 216, 222, 0.28);
+  color: var(--chrome-dim);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
   cursor: pointer;
 }
 .hud-nudge-btn:hover {
-  color: var(--chrome-bright, #f2f4f7);
-  border-color: rgba(242, 244, 247, 0.55);
+  color: var(--chrome-bright);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
-.hud-overlay-controls .hud-btn {
-  color: var(--chrome-dim, #8a919c);
-  border-color: rgba(212, 216, 222, 0.28);
-  background: rgba(0, 0, 0, 0.35);
-}
-.hud-overlay-controls .hud-btn:hover {
-  color: var(--chrome-bright, #f2f4f7);
-  border-color: rgba(242, 244, 247, 0.5);
-  box-shadow: 0 0 10px rgba(242, 244, 247, 0.1);
-}
-
-/* ——— Chrome corner brackets (ability + minimap alignment) ———
-   Deliberately no SVG, no filter, no backdrop-filter, no animation: these paint
-   once and stay static, so they cost almost nothing to composite every frame
-   while a game is running underneath. Corners-only (no filled rect) keeps the
-   playable area open — only a small alignment mark, not a covering frame. */
+/* Ability / minimap frames — optional module, static paint only */
 .chrome-game-hud {
   pointer-events: none;
   position: fixed;
@@ -753,60 +379,34 @@ html.overlay-root body {
   z-index: 1;
   overflow: visible;
 }
-
 .chrome-game-viewport {
   position: absolute;
   box-sizing: border-box;
-  border: 1px solid rgba(212, 216, 222, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
 }
-
 .chrome-frame-box {
   position: absolute;
   box-sizing: border-box;
 }
-
 .chrome-frame-live {
-  border: 1px solid color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 42%, transparent);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.45),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 36%, transparent);
 }
-
 .chrome-frame-inner {
   position: absolute;
   inset: 3px;
-  border: 1px solid color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 16%, transparent);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 7%, transparent),
-    transparent 55%
-  );
+  border: 1px solid color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 12%, transparent);
   pointer-events: none;
 }
-
-.chrome-frame-inner--map {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 9%, transparent),
-    transparent 60%
-  );
-}
-
+.chrome-frame-inner--map { border-color: color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 10%, transparent); }
 .chrome-frame-guide {
-  background: color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 14%, rgba(0, 0, 0, 0.35));
+  background: color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 12%, rgba(0, 0, 0, 0.3));
   border: 1px dashed color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 70%, transparent);
-  box-shadow:
-    inset 0 0 0 1px rgba(0, 0, 0, 0.4),
-    0 0 24px rgba(0, 0, 0, 0.25);
 }
-
 .chrome-frame-guide-map {
-  background: rgba(120, 200, 180, 0.16);
-  border-color: rgba(120, 200, 180, 0.7);
+  background: rgba(120, 200, 180, 0.14);
+  border-color: rgba(120, 200, 180, 0.65);
 }
-
 .chrome-frame-label {
   position: absolute;
   inset: 0;
@@ -814,17 +414,15 @@ html.overlay-root body {
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
-  line-height: 1.35;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(240, 244, 248, 0.95);
+  color: rgba(240, 244, 248, 0.92);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   pointer-events: none;
   padding: 0.35rem;
 }
-
 .chrome-align-banner {
   position: absolute;
   top: 52px;
@@ -832,44 +430,42 @@ html.overlay-root body {
   transform: translateX(-50%);
   max-width: min(960px, 92vw);
   padding: 0.4rem 0.85rem;
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: rgba(240, 244, 248, 0.92);
   background: rgba(0, 0, 0, 0.62);
-  border: 1px solid rgba(212, 216, 222, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
   pointer-events: none;
   z-index: 2;
   text-align: center;
 }
-
 .chrome-corner-bracket {
   position: absolute;
   box-sizing: border-box;
-  opacity: 0.85;
+  opacity: 0.75;
   z-index: 1;
 }
-
 .chrome-thorn-tip {
   position: absolute;
   display: block;
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   transform: rotate(45deg);
-  opacity: 0.9;
+  opacity: 0.8;
 }
-
 .chrome-edge-tick {
   position: absolute;
   z-index: 1;
-  opacity: 0.55;
+  opacity: 0.45;
   pointer-events: none;
 }
 .chrome-edge-tick--top,
 .chrome-edge-tick--bottom {
   left: 50%;
-  width: 18px;
+  width: 14px;
   height: 2px;
   transform: translateX(-50%);
 }
@@ -879,7 +475,7 @@ html.overlay-root body {
 .chrome-edge-tick--right {
   top: 50%;
   width: 2px;
-  height: 18px;
+  height: 14px;
   transform: translateY(-50%);
 }
 .chrome-edge-tick--left { left: -1px; }
@@ -890,19 +486,20 @@ html.overlay-root body {
   align-items: center;
   gap: 0.35rem;
   padding: 0.2rem 0.4rem;
-  color: var(--chrome-dim, #8a919c);
-  border: 1px solid rgba(212, 216, 222, 0.28);
+  color: var(--chrome-dim);
+  border: 1px solid var(--chrome-line);
   background: rgba(0, 0, 0, 0.28);
+  border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .chrome-color-control input[type="color"] {
   width: 22px;
   height: 18px;
   padding: 0;
-  border: 1px solid rgba(212, 216, 222, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   background: transparent;
   cursor: pointer;
 }
@@ -914,176 +511,97 @@ html.overlay-root body {
 .chrome-color-swatch {
   width: 14px;
   height: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
   cursor: pointer;
   padding: 0;
-  clip-path: polygon(3px 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
 }
+
 .hud-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
-}
-
-.hud-toolbar-panel {
-  padding: 0.7rem 0.85rem 0.65rem;
-  border: 1px solid rgba(212, 216, 222, 0.18);
-  background:
-    linear-gradient(135deg, rgba(242, 244, 247, 0.04), transparent 45%),
-    rgba(8, 8, 10, 0.45);
-  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
-}
-
-.hud-toolbar-hint {
-  margin: 0.55rem 0 0;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  color: rgba(138, 145, 156, 0.75);
-  line-height: 1.45;
-}
-
-.hud-toolbar-hint strong {
-  color: var(--chrome-dim);
-  font-weight: 500;
-}
-
-.hud-brand-mark {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(212, 216, 222, 0.28);
-  background: rgba(8, 8, 10, 0.55);
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  gap: 0.4rem;
 }
 
 .hud-profile-switch {
   display: inline-flex;
-  border: 1px solid rgba(212, 216, 222, 0.28);
+  border: 1px solid var(--chrome-line);
   overflow: hidden;
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
-  background: rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
 }
 
 .hud-profile-tab {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.7rem;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 11px;
+  letter-spacing: 0.02em;
   color: var(--chrome-dim);
   background: transparent;
   border: 0;
-  border-right: 1px solid rgba(212, 216, 222, 0.14);
-  transition: color 0.18s ease, background 0.18s ease;
+  border-right: 1px solid var(--chrome-line);
+  transition: color 0.15s ease, background 0.15s ease;
 }
-
-.hud-profile-tab:last-child {
-  border-right: 0;
-}
-
+.hud-profile-tab:last-child { border-right: 0; }
 .hud-profile-tab:hover {
   color: var(--chrome-bright);
   background: rgba(255, 255, 255, 0.04);
 }
-
 .hud-profile-tab.is-active {
   color: var(--chrome-bright);
-  background: rgba(212, 216, 222, 0.14);
-}
-
-.hud-chip--quiet {
-  --accent: var(--chrome-dim);
-  color: var(--chrome-dim);
-  border-color: rgba(138, 145, 156, 0.35);
-  background: rgba(0, 0, 0, 0.25);
-}
-
-.hud-standby-mark {
-  width: 64px;
-  height: 64px;
-  display: grid;
-  place-items: center;
-  border: 1px solid rgba(212, 216, 222, 0.22);
-  background: rgba(8, 8, 10, 0.4);
-  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .hud-input {
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(212, 216, 222, 0.22);
-  color: var(--chrome-bright, #f2f4f7);
-  padding: 0.55rem 0.7rem;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--chrome-line);
+  color: var(--chrome-bright);
+  padding: 0.4rem 0.55rem;
   font-family: var(--font-body);
   font-size: 13px;
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  border-radius: 6px;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s;
 }
 .hud-input::placeholder {
-  color: var(--chrome-dim, #8a919c);
+  color: var(--chrome-dim);
   opacity: 0.7;
 }
-.hud-input:hover {
-  border-color: rgba(212, 216, 222, 0.4);
-}
-.hud-input:focus {
-  border-color: color-mix(in srgb, var(--chrome-silver, #d4d8de) 70%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chrome-silver, #d4d8de) 25%, transparent);
-}
+.hud-input:hover { border-color: rgba(255, 255, 255, 0.16); }
+.hud-input:focus { border-color: rgba(232, 184, 74, 0.45); }
 
 .hud-dropdown {
-  background: rgba(8, 8, 10, 0.98);
-  border: 1px solid rgba(212, 216, 222, 0.35);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
-  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
-  /* No backdrop-filter — keeps champ-select dropdown cheap */
+  background: rgba(16, 17, 20, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
-.hud-main-header {
-  position: relative;
-  min-height: 7.5rem;
-  padding: 0.85rem 0.15rem 1.1rem;
+.hud-champ-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
-
-/* Atmospheric splash — opacity + gradient mask only (no backdrop-filter / blur) */
-.hud-header-splash {
-  position: absolute;
-  inset: -8% -4% auto -4%;
-  height: 140%;
-  background-size: cover;
-  background-position: 60% 22%;
-  background-repeat: no-repeat;
-  opacity: 0.28;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.hud-header-splash-fade {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(7, 7, 8, 0.92) 0%, rgba(7, 7, 8, 0.55) 42%, rgba(7, 7, 8, 0.78) 100%),
-    linear-gradient(180deg, rgba(7, 7, 8, 0.15) 0%, rgba(7, 7, 8, 0.95) 92%);
+.hud-champ-icon--title { width: 16px; height: 16px; }
+.hud-champ-icon--xl {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
 }
 
 .hud-profile-portrait {
-  width: 56px;
-  height: 56px;
-  border: 1px solid rgba(212, 216, 222, 0.45);
-  box-shadow: 0 0 0 1px rgba(155, 28, 46, 0.35), 0 8px 20px rgba(0, 0, 0, 0.45);
-  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
   overflow: hidden;
   background: #0a0a0c;
 }
-
 .hud-profile-portrait img {
   width: 100%;
   height: 100%;
@@ -1091,175 +609,111 @@ html.overlay-root body {
   display: block;
 }
 
-.hud-champ-icon {
-  width: 18px;
-  height: 18px;
-  object-fit: cover;
-  border-radius: 2px;
-  border: 1px solid rgba(212, 216, 222, 0.28);
-  image-rendering: auto;
-}
-
-.hud-champ-icon--title {
-  width: 18px;
-  height: 18px;
-}
-
-.hud-champ-icon--xl {
-  width: 72px;
-  height: 72px;
-  border-color: rgba(212, 216, 222, 0.4);
-  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
-}
-
-.hud-league-mark {
-  width: 14px;
-  height: 14px;
-  object-fit: contain;
-  filter: none;
-}
-
-.hud-profile-tab .hud-champ-icon {
-  opacity: 0.85;
-}
-
-.hud-profile-tab:hover .hud-champ-icon,
-.hud-profile-tab.bg-chrome-silver\/20 .hud-champ-icon {
-  opacity: 1;
-}
-
 .hud-scale-control {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.45rem;
-  color: #9fb0bf;
-  border: 1px solid rgba(139, 156, 173, 0.28);
-  background: rgba(0, 0, 0, 0.2);
+  padding: 0.2rem 0.4rem;
+  color: var(--chrome-dim);
+  border: 1px solid var(--chrome-line);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 6px;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
 }
-
 .hud-scale-control input {
   width: 72px;
-  accent-color: var(--chrome-silver);
+  accent-color: var(--chrome-gold);
   cursor: pointer;
 }
 
 .hud-btn {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding: 0.35rem 0.65rem;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 0.3rem 0.55rem;
   color: var(--chrome-dim);
-  border: 1px solid rgba(212, 216, 222, 0.28);
-  background: rgba(0, 0, 0, 0.35);
-  clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
-  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  border: 1px solid var(--chrome-line);
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 6px;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
 }
 .hud-btn:hover {
   color: var(--chrome-bright);
-  border-color: rgba(242, 244, 247, 0.55);
-  background: rgba(242, 244, 247, 0.04);
-  box-shadow: 0 0 10px rgba(242, 244, 247, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
 }
 .hud-btn--active {
   color: var(--chrome-bright);
-  border-color: rgba(212, 216, 222, 0.6);
-  background: rgba(212, 216, 222, 0.08);
-  box-shadow: 0 0 12px rgba(242, 244, 247, 0.1);
+  border-color: rgba(232, 184, 74, 0.4);
+  background: rgba(232, 184, 74, 0.1);
+}
+.hud-btn--primary {
+  color: #0b0c0e;
+  border-color: transparent;
+  background: var(--chrome-gold);
+  font-weight: 600;
+}
+.hud-btn--primary:hover {
+  color: #0b0c0e;
+  background: #f0c86a;
 }
 
-@keyframes hud-rail-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.85; }
+.hud-module {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  font-size: 11px;
+  color: var(--chrome-dim);
+  border: 1px solid var(--chrome-line);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.hud-module.is-on {
+  color: var(--chrome-bright);
+  border-color: rgba(232, 184, 74, 0.35);
+  background: rgba(232, 184, 74, 0.08);
+}
+.hud-module input {
+  accent-color: var(--chrome-gold);
 }
 
-@keyframes hud-chevron-flicker {
-  0%, 92%, 100% { opacity: 1; }
-  94% { opacity: 0.35; }
-  96% { opacity: 1; }
+.hud-buy-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  object-fit: cover;
 }
-
-@keyframes hud-dot-breathe {
-  0%, 100% { opacity: 0.55; transform: scale(0.9); }
-  50% { opacity: 1; transform: scale(1.15); }
+.hud-buy-icon.is-next {
+  border-color: rgba(232, 184, 74, 0.65);
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(-20px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes glow {
-  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 157, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(0, 255, 157, 0.6); }
-}
-
-.animate-fade-in {
-  animation: fadeIn 0.5s ease-out;
-}
-
-.animate-slide-in {
-  animation: slideIn 0.4s ease-out;
-}
-
-.animate-glow {
-  animation: glow 2s ease-in-out infinite;
-}
+.animate-fade-in { animation: fadeIn 0.25s ease-out; }
+.animate-slide-in { animation: fadeIn 0.22s ease-out; }
 
 ::selection {
-  background-color: color-mix(in srgb, var(--chrome-silver, #d4d8de) 35%, transparent);
-  color: var(--chrome-bright, #f2f4f7);
+  background-color: rgba(232, 184, 74, 0.28);
+  color: var(--chrome-bright);
 }
 
-/* Force chrome theme even if stale Tailwind JIT still emits neon utilities */
-html:not(.overlay-root) .text-pyke-green,
-html:not(.overlay-root) .hover\:text-pyke-green:hover {
-  color: var(--chrome-silver, #d4d8de) !important;
-}
-html:not(.overlay-root) .border-pyke-green,
-html:not(.overlay-root) .hover\:border-pyke-green:hover,
-html:not(.overlay-root) .focus\:border-pyke-green:focus {
-  border-color: color-mix(in srgb, var(--chrome-silver, #d4d8de) 70%, transparent) !important;
-}
-html:not(.overlay-root) .bg-pyke-green,
-html:not(.overlay-root) .hover\:bg-pyke-green:hover {
-  background-color: var(--chrome-silver, #d4d8de) !important;
-  color: var(--chrome-ink, #070708) !important;
-}
-html:not(.overlay-root) .shadow-pyke-green\/20,
-html:not(.overlay-root) .shadow-pyke-green\/30,
-html:not(.overlay-root) .group-hover\:shadow-pyke-green\/20:hover {
-  --tw-shadow-color: rgba(212, 216, 222, 0.2) !important;
-}
-html:not(.overlay-root) .ring-pyke-green\/20 {
-  --tw-ring-color: rgba(212, 216, 222, 0.2) !important;
-}
-html:not(.overlay-root) .selection\:bg-pyke-green::selection {
-  background-color: rgba(212, 216, 222, 0.3) !important;
-}
-html:not(.overlay-root) .font-display {
-  font-family: 'Cinzel', 'Times New Roman', serif !important;
-}
+html:not(.overlay-root) .font-display,
 html:not(.overlay-root) .font-sans {
-  font-family: 'Syne', 'Segoe UI', sans-serif !important;
+  font-family: var(--font-body) !important;
 }
 html:not(.overlay-root) .font-mono {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
+  font-family: var(--font-mono) !important;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
   .animate-slide-in,
-  .hud-status-dot,
   .hud-btn,
   .hud-profile-tab,
   .hud-panel {

@@ -1,24 +1,16 @@
 import React from 'react';
 import type { WardStatus } from '../logic/visionLogic';
 
-/**
- * Standalone vision indicator — purpose + pink count + sweep jobs.
- * Compact still shows purpose (why), not just a place name.
- */
+/** Purpose lives in the tooltip — compact HUD only shows where. */
 export const WardIndicator: React.FC<{ status: WardStatus | null; compact?: boolean }> = ({
   status,
   compact,
 }) => {
   if (!status) return null;
 
-  const sweepLine =
-    status.sweepTargets && status.sweepTargets.length > 0
-      ? status.sweepTargets[0]
-      : null;
-
   return (
     <div
-      className={`hud-ward${status.due ? ' hud-ward--due' : ''}`}
+      className={`hud-ward${status.due ? ' hud-ward--due' : ''}${compact ? ' hud-ward--compact' : ''}`}
       title={`${status.why}\n${status.controlPlan}${
         status.sweepTargets?.length ? `\n${status.sweepTargets.join('\n')}` : ''
       }`}
@@ -39,9 +31,8 @@ export const WardIndicator: React.FC<{ status: WardStatus | null; compact?: bool
       </svg>
       <div className="hud-ward-copy min-w-0">
         <span className="hud-ward-where">{status.where}</span>
-        <span className="hud-ward-why">{sweepLine || status.why}</span>
       </div>
-      <span className="hud-ward-meta">{status.buyHint}</span>
+      {status.buyHint ? <span className="hud-ward-meta">{status.buyHint}</span> : null}
     </div>
   );
 };

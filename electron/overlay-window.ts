@@ -42,6 +42,31 @@ let gameWidth = 1920;
 let gameHeight = 1080;
 let calibration: OverlayCalibration = { ...DEFAULT_CALIBRATION, ability: { ...DEFAULT_CALIBRATION.ability }, minimap: { ...DEFAULT_CALIBRATION.minimap } };
 
+export type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'frames';
+export type HudModules = Record<HudModuleId, boolean>;
+
+const HUD_MODULE_IDS: HudModuleId[] = ['sums', 'gank', 'vision', 'buy', 'action', 'frames'];
+const DEFAULT_HUD_MODULES: HudModules = {
+    sums: true,
+    gank: true,
+    vision: true,
+    buy: true,
+    action: true,
+    frames: false,
+};
+
+let hudModules: HudModules = { ...DEFAULT_HUD_MODULES };
+let settingsLoaded = false;
+
+function normalizeHudModules(value: unknown): HudModules {
+    const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    const next: HudModules = { ...DEFAULT_HUD_MODULES };
+    for (const id of HUD_MODULE_IDS) {
+        if (typeof src[id] === 'boolean') next[id] = src[id];
+    }
+    return next;
+}
+
 function normalizeChromeColor(value: unknown): string | null {
     if (typeof value !== 'string') return null;
     const v = value.trim();
@@ -90,7 +115,13 @@ function settingsPath(): string {
     return path.join(app.getPath('userData'), 'overlay-settings.json');
 }
 
+function ensureSettingsLoaded(): void {
+    if (settingsLoaded) return;
+    loadSettings();
+}
+
 function loadSettings(): void {
+    settingsLoaded = true;
     // Prefer live League game.cfg (your actual Interface scales)
     const league = readLeagueHudScales();
     if (league) {
@@ -107,6 +138,7 @@ function loadSettings(): void {
             chromeColor?: unknown;
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
+            hudModules?: unknown;
         };
         // Only override with saved values if user explicitly tuned after import
         // (preferLeagueCfg false). Default: keep League cfg values.
@@ -134,21 +166,34 @@ function loadSettings(): void {
             Number.isFinite(settings.interactiveBounds.height)) {
             interactiveBounds = settings.interactiveBounds;
         }
+        hudModules = normalizeHudModules(settings.hudModules);
     } catch {
         // No saved settings yet.
     }
 }
 
-function saveSettings(): void {
+function persistSettings(preferLeagueCfg: boolean): void {
     try {
         fs.writeFileSync(
             settingsPath(),
-            JSON.stringify({ hudScale, mapScale, chromeColor, interactiveBounds, calibration, preferLeagueCfg: false }),
+            JSON.stringify({
+                hudScale,
+                mapScale,
+                chromeColor,
+                interactiveBounds,
+                calibration,
+                hudModules,
+                preferLeagueCfg,
+            }),
             'utf8'
         );
     } catch (error) {
         console.warn('[overlay] Failed to save settings:', error);
     }
+}
+
+function saveSettings(): void {
+    persistSettings(false);
 }
 
 /** Re-read League game.cfg and push scales to overlay + callers. */
@@ -168,11 +213,7 @@ export function syncScalesFromLeague(): {
         try {
             // Must include calibration/etc — this used to omit them and silently
             // wipe the user's saved nudge positions from disk on every game start.
-            fs.writeFileSync(
-                settingsPath(),
-                JSON.stringify({ hudScale, mapScale, chromeColor, interactiveBounds, calibration, preferLeagueCfg: true }),
-                'utf8'
-            );
+            persistSettings(true);
         } catch {
             // ignore
         }
@@ -458,7 +499,21 @@ export function toggleAlignMode(): boolean {
     return setAlignMode(!alignMode);
 }
 
+export function getHudModules(): HudModules {
+    ensureSettingsLoaded();
+    return { ...hudModules };
+}
+
+export function setHudModules(next: unknown): HudModules {
+    ensureSettingsLoaded();
+    hudModules = normalizeHudModules({ ...hudModules, ...(next && typeof next === 'object' ? next : {}) });
+    saveSettings();
+    broadcastOverlayMeta();
+    return { ...hudModules };
+}
+
 export function getHudScale(): number {
+    ensureSettingsLoaded();
     return hudScale;
 }
 
@@ -470,6 +525,7 @@ export function setHudScale(scale: number): number {
 }
 
 export function getMapScale(): number {
+    ensureSettingsLoaded();
     return mapScale;
 }
 
@@ -513,6 +569,7 @@ export function resetCalibration(): OverlayCalibration {
 }
 
 export function getChromeColor(): string {
+    ensureSettingsLoaded();
     return chromeColor;
 }
 
@@ -543,6 +600,7 @@ export function broadcastOverlayMeta(): void {
         gameWidth,
         gameHeight,
         alignMode,
+        hudModules,
     });
 }
 
