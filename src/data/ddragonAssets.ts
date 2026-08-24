@@ -26,6 +26,11 @@ export function championSquareUrl(championId: string, version = cachedVersion): 
   return `https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${championId}.png`;
 }
 
+/** Item square — overlay buy path and companion loadout. */
+export function itemIconUrl(itemId: string | number, version = cachedVersion): string {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/item/${itemId}.png`;
+}
+
 /**
  * Centered splash crop via loading screen art — atmospheric header only.
  * Browser HTTP cache handles repeat visits; CSS opacity, no filters.

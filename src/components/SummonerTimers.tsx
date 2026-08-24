@@ -1,13 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { OverlayBotSummoner } from '../overlay/overlayLogic';
 import { formatCd } from '../logic/summonerSpells';
-import { HudFrame } from './HudFrame';
-import { ChromeMark } from '../overlay/ChromeMark';
+import { championSquareUrl } from '../data/ddragonAssets';
 
 interface Props {
   lanes: OverlayBotSummoner[];
   accentColor?: string;
-  /** Compact strip for overlay / idle panel */
   compact?: boolean;
 }
 
@@ -31,11 +29,10 @@ function formatPrimaryClipboard(lanes: OverlayBotSummoner[], now: number): strin
   return `${label} ${primary.championName}: ${bits.join(' · ')}`;
 }
 
-export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact }) => {
+export const SummonerTimers: React.FC<Props> = ({ lanes, compact }) => {
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
-  // Tick only while a spell is on cooldown — idle mounts cost nothing
   const hasActiveCd = useMemo(
     () =>
       lanes.some((lane) =>
@@ -70,9 +67,7 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
   if (!liveLanes.length) return null;
 
   const midFocus = isMidFocus(liveLanes);
-  const copyLabel = midFocus ? 'Copy mid sums' : 'Copy ADC sums';
-  const copiedLabel = midFocus ? 'Copied mid sums' : 'Copied ADC sums';
-  const heading = midFocus ? 'Enemy Mid Sums' : 'Enemy Bot Sums';
+  const copyLabel = midFocus ? 'Copy mid' : 'Copy ADC';
 
   const handleCopy = async () => {
     const text = formatPrimaryClipboard(liveLanes, now);
@@ -95,7 +90,6 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
       void window.electronAPI?.markSummonerSpell?.(role, spellName, { clear: true });
       return;
     }
-    // Click toggles the same way as Page Up / Page Down
     if (window.electronAPI?.toggleSummonerSpell) {
       void window.electronAPI.toggleSummonerSpell(role, spellName);
     } else {
@@ -103,74 +97,63 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
     }
   };
 
-  const body = (
-    <div className={compact ? 'space-y-1.5' : 'space-y-3'}>
+  return (
+    <div className={compact ? 'space-y-1' : 'space-y-2'}>
       {liveLanes.map((lane) => (
-        <div key={lane.role} className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`font-mono uppercase tracking-wider text-chrome-dim ${compact ? 'text-[9px]' : 'text-[10px]'} w-14 shrink-0`}
-            >
-              {lane.role}
-            </span>
-            <span className={`text-chrome-bright truncate ${compact ? 'text-[11px]' : 'text-sm'} min-w-[4rem]`}>
-              {lane.championName}
-            </span>
-            <div className="flex flex-wrap gap-1">
-              {lane.spells.map((sp) => {
-                const ready = sp.ready || sp.remaining <= 0;
-                return (
-                  <button
-                    key={`${lane.role}-${sp.short}`}
-                    type="button"
-                    title={
-                      ready
-                        ? `Click / hotkey: start ${sp.name} timer`
-                        : `${sp.name} ${formatCd(sp.remaining)}${sp.source ? ` (${sp.source})` : ''} · click again or Page key to reset`
-                    }
-                    onClick={() => markSpell(lane.role, sp.name)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      markSpell(lane.role, sp.name, true);
-                    }}
-                    className={`hud-chip !py-0.5 ${compact ? '!text-[9px]' : '!text-[10px]'} cursor-pointer hover:opacity-100 ${
-                      ready ? 'hud-accent-green !text-chrome-bright' : '!text-chrome-dim opacity-80'
-                    }`}
-                  >
-                    {sp.short} {ready ? 'UP' : formatCd(sp.remaining)}
-                  </button>
-                );
-              })}
-            </div>
+        <div key={lane.role} className="flex items-center gap-1.5 min-w-0">
+          <img
+            src={championSquareUrl(lane.championName.replace(/[^a-zA-Z]/g, '') || lane.championName)}
+            alt=""
+            width={compact ? 18 : 22}
+            height={compact ? 18 : 22}
+            className="hud-champ-icon shrink-0"
+            decoding="async"
+            draggable={false}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.visibility = 'hidden';
+            }}
+          />
+          <span className={`font-mono text-chrome-dim shrink-0 ${compact ? 'text-[8px] w-7' : 'text-[10px] w-10'}`}>
+            {lane.role === 'Support' ? 'SUP' : lane.role === 'Bot' ? 'ADC' : 'MID'}
+          </span>
+          <div className="flex flex-wrap gap-0.5 min-w-0">
+            {lane.spells.map((sp) => {
+              const ready = sp.ready || sp.remaining <= 0;
+              return (
+                <button
+                  key={`${lane.role}-${sp.short}`}
+                  type="button"
+                  title={
+                    ready
+                      ? `Start ${sp.name} timer`
+                      : `${sp.name} ${formatCd(sp.remaining)} · click to reset`
+                  }
+                  onClick={() => markSpell(lane.role, sp.name)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    markSpell(lane.role, sp.name, true);
+                  }}
+                  className={`hud-chip !py-0 ${compact ? '!text-[9px]' : '!text-[10px]'} cursor-pointer ${
+                    ready ? 'hud-accent-green' : '!text-chrome-dim'
+                  }`}
+                >
+                  {sp.short} {ready ? 'UP' : formatCd(sp.remaining)}
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}
-      <div className="flex flex-wrap items-center gap-2">
+      {!compact && (
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className={`hud-chip !py-0.5 ${compact ? '!text-[9px]' : '!text-[10px]'} cursor-pointer hover:opacity-100`}
+          className="hud-btn"
           title={midFocus ? 'Copy mid laner summoner timers' : 'Copy ADC summoner timers'}
         >
-          {copied ? copiedLabel : copyLabel}
+          {copied ? 'Copied' : copyLabel}
         </button>
-        {!compact && (
-          <p className="text-[9px] font-mono text-chrome-dim/70 tracking-wide">
-            PgUp/Num9 ADC Flash · PgDn/Num3 Support Flash · click chip to toggle · Flash auto on first death only
-          </p>
-        )}
-      </div>
+      )}
     </div>
-  );
-
-  if (compact) return <div className="border-t border-white/10 pt-1.5">{body}</div>;
-
-  return (
-    <HudFrame accent="cyan" label="Sums" className="p-5">
-      <h2 className="hud-heading text-xl text-chrome-bright mb-4">
-        <ChromeMark size={14} style={{ color: accentColor }} /> {heading}
-      </h2>
-      {body}
-    </HudFrame>
   );
 };

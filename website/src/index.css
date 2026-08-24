@@ -3,11 +3,12 @@
 @tailwind utilities;
 
 :root {
-  --chrome-ink: #070708;
+  --chrome-ink: #0b0c0e;
   --chrome-silver: #d4d8de;
   --chrome-bright: #f2f4f7;
-  --chrome-dim: #8a919c;
-  --chrome-blood: #9b1c2e;
+  --chrome-dim: #8b9098;
+  --chrome-blood: #e85d4c;
+  --chrome-gold: #e8b84a;
   color-scheme: dark;
 }
 
@@ -18,7 +19,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  font-family: Syne, 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   color: var(--chrome-silver);
   background: var(--chrome-ink);
   overflow-x: hidden;
@@ -37,9 +38,8 @@ body {
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(1100px 560px at 12% -8%, rgba(242, 244, 247, 0.07), transparent 55%),
-    radial-gradient(900px 480px at 92% 8%, rgba(155, 28, 46, 0.14), transparent 52%),
-    linear-gradient(180deg, #0e0e12 0%, #070708 48%, #050506 100%);
+    radial-gradient(900px 420px at 12% -8%, rgba(232, 184, 74, 0.06), transparent 55%),
+    linear-gradient(180deg, #121316 0%, #0b0c0e 48%, #090a0c 100%);
 }
 
 .site-atmosphere::before {
@@ -69,7 +69,7 @@ body {
 }
 
 .clip-panel {
-  clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+  border-radius: 12px;
 }
 
 .chrome-rule {
@@ -95,11 +95,11 @@ body {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   text-decoration: none;
-  color: #070708;
+  color: #0b0c0e;
   background: linear-gradient(180deg, #f2f4f7 0%, #c8ced6 100%);
   border: 1px solid rgba(242, 244, 247, 0.65);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
-  transition: transform 0.25s ease, filter 0.25s ease, background 0.25s ease;
+  border-radius: 8px;
+  transition: transform 0.2s ease, filter 0.2s ease;
 }
 
 .btn-chrome:hover {
@@ -127,8 +127,8 @@ body {
   color: var(--chrome-silver);
   background: transparent;
   border: 1px solid rgba(212, 216, 222, 0.35);
-  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
-  transition: border-color 0.25s ease, color 0.25s ease, background 0.25s ease;
+  border-radius: 8px;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
 }
 
 .btn-ghost:hover {

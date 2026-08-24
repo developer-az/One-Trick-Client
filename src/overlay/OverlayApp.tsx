@@ -19,11 +19,11 @@ import {
   type OverlayState,
 } from './overlayLogic';
 import { SummonerTimers } from '../components/SummonerTimers';
-import { ChromeMark } from './ChromeMark';
 import { ChromeGameHud } from './ChromeGameHud';
 import { WardIndicator } from './WardIndicator';
 import { GankSquare } from './GankSquare';
-import { championSquareUrl } from '../data/ddragonAssets';
+import { itemIconUrl } from '../data/ddragonAssets';
+import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
 
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
@@ -66,6 +66,7 @@ export const OverlayApp: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [gameWidth, setGameWidth] = useState(1920);
   const [gameHeight, setGameHeight] = useState(1080);
+  const [hudModules, setHudModules] = useState<HudModules>(DEFAULT_HUD_MODULES);
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
@@ -73,7 +74,6 @@ export const OverlayApp: React.FC = () => {
   );
   const profile = useMemo(() => getProfile(profileId), [profileId]);
 
-  // Load champion catalog for profile logic
   useEffect(() => {
     fetch('https://ddragon.leagueoflegends.com/api/versions.json')
       .then((res) => res.json())
@@ -102,13 +102,34 @@ export const OverlayApp: React.FC = () => {
       .catch((err) => console.error('Overlay champion load failed:', err));
   }, []);
 
-  // Subscribe to main-process overlay pushes
   useEffect(() => {
     if (!window.electronAPI?.onOverlayUpdate) return;
 
+    const applyMeta = (payload: unknown) => {
+      const meta = payload as {
+        clickThrough?: boolean;
+        alignMode?: boolean;
+        hudScale?: number;
+        mapScale?: number;
+        chromeColor?: string;
+        calibration?: OverlayCalibration;
+        gameWidth?: number;
+        gameHeight?: number;
+        hudModules?: unknown;
+      };
+      if (typeof meta.clickThrough === 'boolean') setClickThrough(meta.clickThrough);
+      if (typeof meta.alignMode === 'boolean') setAlignMode(meta.alignMode);
+      if (typeof meta.hudScale === 'number') setHudScale(meta.hudScale);
+      if (typeof meta.mapScale === 'number') setMapScale(meta.mapScale);
+      if (typeof meta.chromeColor === 'string') setChromeColor(meta.chromeColor);
+      if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
+      if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
+      if (meta.calibration) setCalibration(meta.calibration);
+      if (meta.hudModules) setHudModules(normalizeHudModules(meta.hudModules));
+    };
+
     const unsubUpdate = window.electronAPI.onOverlayUpdate((payload) => {
       const next = payload as OverlayState;
-      // Guard: never let an empty mid-match blip wipe living HUD state
       setState((prev) => {
         if (
           prev.inGame &&
@@ -127,60 +148,11 @@ export const OverlayApp: React.FC = () => {
       }
     });
 
-    const unsubMeta = window.electronAPI.onOverlayMeta?.((payload) => {
-      const meta = payload as {
-        clickThrough?: boolean;
-        alignMode?: boolean;
-        hudScale?: number;
-        mapScale?: number;
-        chromeColor?: string;
-        calibration?: OverlayCalibration;
-        gameWidth?: number;
-        gameHeight?: number;
-      };
-      if (typeof meta.clickThrough === 'boolean') {
-        setClickThrough(meta.clickThrough);
-      }
-      if (typeof meta.alignMode === 'boolean') {
-        setAlignMode(meta.alignMode);
-      }
-      if (typeof meta.hudScale === 'number') {
-        setHudScale(meta.hudScale);
-      }
-      if (typeof meta.mapScale === 'number') {
-        setMapScale(meta.mapScale);
-      }
-      if (typeof meta.chromeColor === 'string') {
-        setChromeColor(meta.chromeColor);
-      }
-      if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
-      if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
-      if (meta.calibration) {
-        setCalibration(meta.calibration);
-      }
-    });
+    const unsubMeta = window.electronAPI.onOverlayMeta?.((payload) => applyMeta(payload));
 
     window.electronAPI.getOverlayStatus?.().then((res) => {
-      if (res?.success && typeof res.clickThrough === 'boolean') {
-        setClickThrough(res.clickThrough);
-      }
-      if (res?.success && typeof res.alignMode === 'boolean') {
-        setAlignMode(res.alignMode);
-      }
-      if (res?.success && typeof res.hudScale === 'number') {
-        setHudScale(res.hudScale);
-      }
-      if (res?.success && typeof res.mapScale === 'number') {
-        setMapScale(res.mapScale);
-      }
-      if (res?.success && typeof res.chromeColor === 'string') {
-        setChromeColor(res.chromeColor);
-      }
-      if (res?.success && typeof res.gameWidth === 'number') setGameWidth(res.gameWidth);
-      if (res?.success && typeof res.gameHeight === 'number') setGameHeight(res.gameHeight);
-      if (res?.success && res.calibration) {
-        setCalibration(res.calibration);
-      }
+      if (!res?.success) return;
+      applyMeta(res);
     });
 
     return () => {
@@ -189,8 +161,6 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
-  // Payloads arrive with fresh array identities every push; key on content so the
-  // (expensive) build/rune/matchup math only re-runs when something real changed.
   const enemyKey =
     state.enemies && state.enemies.length > 0
       ? state.enemies.map((e) => e.championName).join('|')
@@ -237,8 +207,6 @@ export const OverlayApp: React.FC = () => {
   const allyPartner = profileId === 'yone-mid' ? allyChampions.jungle : allyChampions.mid;
   const adcForProfile = profileId === 'yone-mid' ? null : allyChampions.adc;
 
-  // Behind / even / ahead — only Pantheon changes recommendations on it, but the
-  // read itself is cheap and drives cues for every profile.
   const situationKey = `${state.localPlayer?.level ?? 0}:${state.localPlayer?.scores?.kills ?? 0}:${
     state.localPlayer?.scores?.deaths ?? 0
   }:${state.localPlayer?.scores?.assists ?? 0}:${Math.floor((state.gameTime ?? 0) / 60)}`;
@@ -269,8 +237,6 @@ export const OverlayApp: React.FC = () => {
     [state, analysis, build, profileId, situation]
   );
 
-  // Cue TTLs — expire then allow re-show (sticky ids must not die forever).
-  // Prefer gameTime-driven expiry so a 1Hz wall clock isn't required.
   const cueFirstSeen = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     if (!state.inGame) cueFirstSeen.current.clear();
@@ -292,23 +258,14 @@ export const OverlayApp: React.FC = () => {
         alive.push(cue);
         continue;
       }
-      // Expired — clear so the next matching id can reappear with a fresh TTL
       seen.delete(cue.id);
     }
-    // Keep the rail populated: take next non-expired candidates after sticky expiry
-    return alive.slice(0, 3);
+    return alive.slice(0, 1);
   }, [rawCues, state.gameTime]);
 
   const wardStatus = useMemo(() => getWardStatus(state, profileId), [state, profileId]);
   const gankStatus = useMemo(() => getGankStatus(state, profileId), [state, profileId]);
-
-  // Items still to buy — anything already in the inventory (by item ID) drops off.
-  const itemsLeft = useMemo(() => remainingBuildItems(state, build).slice(0, 3), [state, build]);
-
-  const hotkeyHint =
-    profileId === 'yone-mid'
-      ? 'PgUp/Num9 Mid Flash · PgDn/Num3 Ignite/TP'
-      : 'PgUp/Num9 ADC Flash · PgDn/Num3 Supp Flash';
+  const itemsLeft = useMemo(() => remainingBuildItems(state, build).slice(0, 2), [state, build]);
 
   const handleHide = () => {
     void window.electronAPI?.toggleOverlay?.().catch((error) => {
@@ -355,19 +312,42 @@ export const OverlayApp: React.FC = () => {
   };
 
   if (!state.inGame) {
-    return (
-      <div className="w-screen h-screen pointer-events-none bg-transparent">
-        <div className="hud-overlay-controls absolute top-4 right-4 text-[10px] pointer-events-auto">
-          <ChromeMark className="hud-chrome-mark" size={12} />
-          <span className="tracking-[0.2em] uppercase">Waiting for match</span>
-        </div>
-      </div>
-    );
+    return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
 
   const profileMatchesLocal =
     !state.localPlayer?.championName ||
     state.localPlayer.championName.toLowerCase() === profile.championId.toLowerCase();
+
+  const showFrames = alignMode || (hudModules.frames && !compactPanel);
+  const showSums = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
+  const showGank = hudModules.gank && !!gankStatus;
+  const showVision = hudModules.vision && !!wardStatus;
+  const showAction = hudModules.action && cues.length > 0;
+  const showBuy = hudModules.buy && itemsLeft.length > 0;
+  const rightHasContent = showGank || showVision || showAction || showBuy || !profileMatchesLocal;
+
+  const buyRow = showBuy ? (
+    <div className="flex gap-0.5 items-center">
+      {itemsLeft.map((item, index) => (
+        <img
+          key={`buy-${item.id}`}
+          src={itemIconUrl(item.id)}
+          alt={item.name}
+          title={item.name}
+          className={`hud-buy-icon${index === 0 ? ' is-next' : ''}`}
+          decoding="async"
+          draggable={false}
+        />
+      ))}
+    </div>
+  ) : null;
+
+  const actionLine = showAction ? (
+    <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency}`}>
+      {cues[0].label}
+    </div>
+  ) : null;
 
   return (
     <div
@@ -376,11 +356,10 @@ export const OverlayApp: React.FC = () => {
       }`}
       style={{ ['--overlay-scale' as string]: `${0.75 + hudScale / 200}` }}
     >
-      {/* HUD frames: fullscreen pass-through or align mode only — never on the compact panel */}
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}
-        enabled={!compactPanel}
+        enabled={showFrames}
         chromeColor={chromeColor}
         calibration={calibration}
         showGuides={alignMode}
@@ -390,147 +369,54 @@ export const OverlayApp: React.FC = () => {
 
       {alignMode && (
       <div className="hud-overlay-controls absolute top-3 left-1/2 -translate-x-1/2 pointer-events-auto z-10">
-        <ChromeMark className="hud-chrome-mark" size={11} />
-        <button
-          type="button"
-          onClick={() => handleAlignMode(false)}
-          className="hud-btn"
-          title="Leave fullscreen guides — back to movable panel"
-        >
-          Done aligning
+        <button type="button" onClick={() => handleAlignMode(false)} className="hud-btn">
+          Done
         </button>
-        <button
-          type="button"
-          onClick={handleToggleClicks}
-          className="hud-btn"
-          title="Lock overlay and pass clicks to League (Ctrl+Shift+U)"
-        >
-          Lock overlay
+        <button type="button" onClick={handleToggleClicks} className="hud-btn">
+          Lock
         </button>
         <NudgeGroup label="Ability" onNudge={(field, delta) => nudge('ability', field, delta)} />
         <NudgeGroup label="Map" onNudge={(field, delta) => nudge('minimap', field, delta)} />
-        <button type="button" onClick={handleResetCalibration} className="hud-nudge-btn" title="Reset alignment marks to default">
-          Reset fit
-        </button>
+        <button type="button" onClick={handleResetCalibration} className="hud-nudge-btn">Reset</button>
         <button
           type="button"
           className="hud-btn"
-          title="Re-read HUD/Minimap scales from League game.cfg"
           onClick={() => void window.electronAPI?.syncLeagueScales?.()}
         >
-          Sync LoL
+          Sync
         </button>
-        <span className="px-1 text-[8px] tracking-wider opacity-50">
-          Match filled boxes to your League HUD / minimap
-        </span>
       </div>
       )}
 
-      {/* Dual-rail HUD when locked: sums left, cues/buy right — uses both sides of the screen */}
       {!compactPanel && !collapsed && (
         <>
-          <div className={`hud-overlay-scale absolute top-14 left-3 w-[220px] ${collapsed ? 'opacity-70' : 'opacity-100'}`}>
+          {showSums && (
+          <div className="hud-overlay-scale hud-overlay-scale--left absolute top-14 left-3 w-[200px]">
             <div className="hud-overlay-panel overflow-hidden">
-              <span className="hud-corner hud-corner-tl" aria-hidden />
-              <span className="hud-corner hud-corner-br" aria-hidden />
-              <span className="hud-rail hud-rail-top" aria-hidden />
-              <div className="hud-chrome-header !py-1 !px-2">
-                <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
-                <div className="hud-chrome-meta !text-[8px]">
-                  {typeof state.gameTime === 'number' && state.gameTime > 0
-                    ? formatGameTime(state.gameTime)
-                    : 'Live'}
-                </div>
-              </div>
-              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
-                {state.enemyBotSummoners && state.enemyBotSummoners.length > 0 ? (
-                  <SummonerTimers lanes={state.enemyBotSummoners} compact />
-                ) : (
-                  <p className="text-[10px] text-[#6b7280] font-mono tracking-wide">
-                    Waiting for bot / mid sums…
-                  </p>
-                )}
-                <p className="text-[8px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
-                  {hotkeyHint}
-                </p>
+              <div className="relative z-10 px-1.5 py-1.5">
+                <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
               </div>
             </div>
           </div>
+          )}
 
-          <div className={`hud-overlay-scale absolute top-14 right-3 w-[220px] ${collapsed ? 'opacity-70' : 'opacity-100'}`}>
+          {rightHasContent && (
+          <div className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 w-[200px]">
             <div className="hud-overlay-panel overflow-hidden">
-              <span className="hud-corner hud-corner-tl" aria-hidden />
-              <span className="hud-corner hud-corner-br" aria-hidden />
-              <span className="hud-rail hud-rail-top" aria-hidden />
-              <div className="hud-chrome-header !py-1 !px-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <img
-                    src={championSquareUrl(profile.championId)}
-                    alt=""
-                    width={16}
-                    height={16}
-                    className="hud-champ-icon shrink-0"
-                    decoding="async"
-                    draggable={false}
-                  />
-                  <div className="min-w-0">
-                    <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
-                    <div className="hud-chrome-meta !text-[8px]">
-                      {profile.shortLabel}
-                      {state.localPlayer ? ` · ${state.localPlayer.level}` : ''}
-                    </div>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setCollapsed(true)} className="hud-btn" title="Collapse rails">
-                  –
-                </button>
-              </div>
-              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
+              <div className="relative z-10 px-1.5 py-1.5 space-y-1">
                 {!profileMatchesLocal ? (
-                  <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
-                    Switch profile → {state.localPlayer?.championName || '?'}
+                  <div className="hud-chrome-cue hud-chrome-cue--warn">
+                    {state.localPlayer?.championName || 'Profile'}
                   </div>
                 ) : null}
-                <GankSquare threat={gankStatus} compact />
-                <WardIndicator status={wardStatus} compact />
-                {cues.map((cue) => (
-                  <div
-                    key={cue.id}
-                    className={`hud-chrome-cue hud-chrome-cue--${cue.urgency} !py-1 !px-1.5`}
-                  >
-                    <div className="font-semibold uppercase tracking-[0.1em] text-[8px] opacity-90">
-                      {cue.label}
-                    </div>
-                    <div className="mt-0.5 opacity-85 text-[10px] leading-snug">{cue.detail}</div>
-                  </div>
-                ))}
-                {itemsLeft.length > 0 && (
-                  <div className="flex flex-wrap gap-0.5 items-center">
-                    {itemsLeft.map((item, index) => (
-                      <span
-                        key={`left-${item.id}`}
-                        className={`hud-chip !text-[9px] !py-0${index === 0 ? ' hud-accent-blood' : ''}`}
-                        title={item.reason}
-                      >
-                        {index === 0 ? '▸ ' : ''}
-                        {item.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {analysis?.preyFocus && !cues.some((c) => c.id === 'prey-focus') && (
-                  <div className="text-[10px] text-[#e4e6ea] leading-snug opacity-90">
-                    {analysis.preyFocus}
-                  </div>
-                )}
-                {!build && (
-                  <p className="text-[10px] text-[#6b7280] font-mono tracking-wide">
-                    Waiting for enemy data…
-                  </p>
-                )}
+                {showGank ? <GankSquare threat={gankStatus} compact /> : null}
+                {showVision ? <WardIndicator status={wardStatus} compact /> : null}
+                {actionLine}
+                {buyRow}
               </div>
             </div>
           </div>
+          )}
         </>
       )}
 
@@ -538,58 +424,32 @@ export const OverlayApp: React.FC = () => {
         <button
           type="button"
           onClick={() => setCollapsed(false)}
-          className="hud-overlay-scale absolute top-14 right-3 hud-overlay-panel !px-2 !py-1 hud-btn"
-          title="Expand dual rails"
+          className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 hud-overlay-panel !px-2 !py-1 hud-btn"
+          title="Expand HUD"
         >
-          One Trick +
+          +
         </button>
       )}
 
-      {/* Unlocked compact panel — single movable surface */}
       {compactPanel && (
-      <div className={`hud-overlay-scale absolute inset-1.5 ${collapsed ? 'opacity-70' : 'opacity-100'}`}>
+      <div className="hud-overlay-scale hud-overlay-scale--right absolute inset-1.5">
         <div className="hud-overlay-panel h-full overflow-hidden">
-          <span className="hud-corner hud-corner-tl" aria-hidden />
-          <span className="hud-corner hud-corner-br" aria-hidden />
-          <span className="hud-rail hud-rail-top" aria-hidden />
-
           <div
-            className="hud-chrome-header !py-1 !px-2"
+            className="hud-chrome-header"
             style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
           >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <img
-                src={championSquareUrl(profile.championId)}
-                alt=""
-                width={16}
-                height={16}
-                className="hud-champ-icon shrink-0"
-                decoding="async"
-                draggable={false}
-              />
-              <div className="min-w-0">
-                <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
-                <div className="hud-chrome-meta !text-[8px]">
-                  {profile.shortLabel}
-                  {typeof state.gameTime === 'number' && state.gameTime > 0
-                    ? ` · ${formatGameTime(state.gameTime)}`
-                    : ''}
-                </div>
-              </div>
+            <div className="hud-chrome-meta">
+              {typeof state.gameTime === 'number' && state.gameTime > 0
+                ? formatGameTime(state.gameTime)
+                : 'HUD'}
             </div>
             <div
               className="flex gap-0.5 justify-end shrink-0"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
-              <button type="button" onClick={() => handleAlignMode(true)} className="hud-btn" title="Align HUD">
-                Align
-              </button>
-              <button type="button" onClick={handleToggleClicks} className="hud-btn" title="Lock">
-                Lock
-              </button>
-              <button type="button" onClick={handleHide} className="hud-btn" title="Hide">
-                Hide
-              </button>
+              <button type="button" onClick={() => handleAlignMode(true)} className="hud-btn">Align</button>
+              <button type="button" onClick={handleToggleClicks} className="hud-btn">Lock</button>
+              <button type="button" onClick={handleHide} className="hud-btn">Hide</button>
               <button type="button" onClick={() => setCollapsed((c) => !c)} className="hud-btn">
                 {collapsed ? '+' : '–'}
               </button>
@@ -597,42 +457,17 @@ export const OverlayApp: React.FC = () => {
           </div>
 
           {!collapsed && (
-            <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
+            <div className="relative z-10 px-1.5 py-1.5 space-y-1 overflow-hidden">
               {!profileMatchesLocal ? (
-                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
-                  Switch profile → {state.localPlayer?.championName || '?'}
+                <div className="hud-chrome-cue hud-chrome-cue--warn">
+                  {state.localPlayer?.championName || 'Profile'}
                 </div>
               ) : null}
-              <GankSquare threat={gankStatus} compact />
-              <WardIndicator status={wardStatus} compact />
-              {cues.slice(0, 3).map((cue) => (
-                <div
-                  key={cue.id}
-                  className={`hud-chrome-cue hud-chrome-cue--${cue.urgency} !py-1 !px-1.5`}
-                >
-                  <div className="font-semibold uppercase tracking-[0.1em] text-[8px] opacity-90">
-                    {cue.label}
-                  </div>
-                  <div className="mt-0.5 opacity-85 text-[10px] leading-snug">{cue.detail}</div>
-                </div>
-              ))}
-              {state.enemyBotSummoners && state.enemyBotSummoners.length > 0 && (
-                <SummonerTimers lanes={state.enemyBotSummoners} compact />
-              )}
-              {itemsLeft.length > 0 && (
-                <div className="flex flex-wrap gap-0.5 items-center">
-                  {itemsLeft.map((item, index) => (
-                    <span
-                      key={`left-${item.id}`}
-                      className={`hud-chip !text-[9px] !py-0${index === 0 ? ' hud-accent-blood' : ''}`}
-                      title={item.reason}
-                    >
-                      {index === 0 ? '▸ ' : ''}
-                      {item.name}
-                    </span>
-                  ))}
-                </div>
-              )}
+              {showGank ? <GankSquare threat={gankStatus} compact /> : null}
+              {showVision ? <WardIndicator status={wardStatus} compact /> : null}
+              {actionLine}
+              {showSums ? <SummonerTimers lanes={state.enemyBotSummoners || []} compact /> : null}
+              {buyRow}
             </div>
           )}
         </div>

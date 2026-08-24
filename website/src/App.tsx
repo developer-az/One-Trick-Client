@@ -11,30 +11,30 @@ import {
 
 const features = [
   {
-    kicker: '01 — Matchup',
-    title: 'Doctrine on the load screen.',
-    body: 'Enemy roles lock in and One Trick answers with items, runes, and exact how-to-play lines for the matchup — so you leave the companion UI and play the game.',
-  },
-  {
-    kicker: '02 — Export',
+    kicker: '01 — Export',
     title: 'One click into the League Client.',
-    body: 'Runes land as One Trick. Item sets follow your profile. Stay in champ select. Stay in the fight for tempo.',
+    body: 'Champ select fills the draft. Items and runes land in-client. You stay in the lobby — not in a second window of homework.',
   },
   {
-    kicker: '03 — Overlay',
-    title: 'Chrome that stays in the fight.',
-    body: 'Dual-rail HUD: enemy sums, purpose-first wards, gank square from jungler pathing, pro tips. PageUp / PageDown toggle Flash while League has focus. Lock click-through — it does not steal the game.',
+    kicker: '02 — Timers',
+    title: 'Enemy sums, gold when they are up.',
+    body: 'Flash and combat spells as numbers and portraits. PageUp / PageDown toggle while League has focus. Click-through so it never steals the game.',
+  },
+  {
+    kicker: '03 — HUD modules',
+    title: 'A client overlay, not a coach.',
+    body: 'Toggle sums, gank square, vision, buy icons, and a single time-critical line. No rotating tips. No lecture mid-fight.',
   },
 ]
 
 const profiles = [
   {
     name: 'Pyke Support',
-    line: 'Primary — bot lane tempo, all-in windows, roam-aware scoring.',
+    line: 'Primary — bot tempo, all-in windows, roam-aware scoring.',
   },
   {
     name: 'Pantheon Support',
-    line: 'Off-pick when Pyke is banned — still a One Trick lane plan.',
+    line: 'Off-pick when Pyke is banned — same client, same HUD.',
   },
   {
     name: 'Yone Mid',
@@ -43,9 +43,9 @@ const profiles = [
 ]
 
 const steps = [
-  { n: '01', title: 'Install', body: 'Grab One.Trick.Setup from the latest full release and launch with League open.' },
-  { n: '02', title: 'Lock in', body: 'Champ select fills enemies. Read the matchup doctrine, then export.' },
-  { n: '03', title: 'Play', body: 'Overlay stays up: Flash toggles, gank square, vision jobs. Borderless mode.' },
+  { n: '01', title: 'Install', body: 'Grab One.Trick.Setup from the latest release and launch with League open.' },
+  { n: '02', title: 'Lock in', body: 'Draft fills. Export runes and items. Leave the window.' },
+  { n: '03', title: 'Play', body: 'HUD widgets stay up: timers, gank square, vision, next buy. Borderless mode.' },
 ]
 
 const base = import.meta.env.BASE_URL
@@ -87,7 +87,7 @@ export default function App() {
         <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
           <a href="#top" className="flex items-center gap-2.5 text-chrome-bright no-underline">
             <ChromeMark size={22} />
-            <span className="font-display text-lg tracking-[0.08em]">One Trick</span>
+            <span className="font-display text-lg tracking-tight">One Trick</span>
           </a>
           <nav className="hidden items-center gap-7 font-mono text-[11px] uppercase tracking-[0.18em] text-chrome-dim sm:flex">
             <a href="#features" className="hover:text-chrome-bright">
@@ -109,18 +109,18 @@ export default function App() {
           {/* Hero — brand + real app screenshot as one composition */}
           <section className="relative mx-auto w-full max-w-6xl px-5 pb-16 pt-4 sm:px-8 sm:pb-24">
             <div className="max-w-2xl">
-              <p className="animate-fade-up font-mono text-[11px] uppercase tracking-[0.28em] text-chrome-dim">
+              <p className="animate-fade-up font-mono text-[11px] uppercase tracking-[0.18em] text-chrome-dim">
                 Windows · League of Legends
                 {release?.prerelease ? ' · Public beta' : ''}
               </p>
-              <h1 className="animate-fade-up mt-4 font-display text-[clamp(3.2rem,9vw,5.8rem)] leading-[0.92] tracking-[0.02em] text-chrome-bright">
+              <h1 className="animate-fade-up mt-4 font-display text-[clamp(3.2rem,9vw,5.8rem)] leading-[0.92] tracking-tight text-chrome-bright">
                 One Trick
               </h1>
               <p
                 className="animate-fade-up mt-5 max-w-md text-lg leading-relaxed text-chrome-silver/85 sm:text-xl"
                 style={{ animationDelay: '120ms' }}
               >
-                Matchup doctrine, loadout export, and a live overlay for Pyke, Pantheon, and Yone — built for the minutes a guide can’t sit next to you.
+                Overlay client for Pyke, Pantheon, and Yone — export in champ select, then read icons and numbers in game.
               </p>
               <div className="animate-fade-up mt-8" style={{ animationDelay: '220ms' }}>
                 <DownloadButtons release={release} />
@@ -148,16 +148,16 @@ export default function App() {
           <section className="mx-auto w-full max-w-6xl px-5 py-20 sm:px-8 sm:py-28">
             <div className="grid items-center gap-12 lg:grid-cols-[0.95fr_1.05fr] lg:gap-14">
               <Reveal>
-                <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-chrome-blood">
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-chrome-gold">
                   Why it exists
                 </p>
-                <h2 className="mt-4 max-w-xl font-display text-3xl leading-tight tracking-wide text-chrome-bright sm:text-4xl">
-                  Built for the minutes where a README can’t sit next to you.
+                <h2 className="mt-4 max-w-xl font-display text-3xl leading-tight tracking-tight text-chrome-bright sm:text-4xl">
+                  Built to sit next to League — not on top of it.
                 </h2>
                 <p className="mt-5 max-w-lg text-base leading-relaxed text-chrome-dim sm:text-lg">
-                  One Trick watches champ select, shapes a loadout for the matchup, pushes it into the client,
-                  and keeps a dual-rail chrome HUD alive while you play — gank timing, vision jobs, summoner
-                  toggles. Pyke Support first; Pantheon and Yone when the draft asks.
+                  One Trick fills champ select, pushes a loadout into the client, and keeps a click-through HUD alive
+                  while you play: summoner timers, gank square, vision, next buy. Pyke Support first; Pantheon and Yone
+                  when the draft asks.
                 </p>
               </Reveal>
               <Reveal delayMs={80}>

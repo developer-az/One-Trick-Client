@@ -5,18 +5,19 @@ export default {
     extend: {
       colors: {
         chrome: {
-          ink: '#070708',
-          panel: '#0e0e12',
+          ink: '#0b0c0e',
+          panel: '#141518',
           silver: '#d4d8de',
           bright: '#f2f4f7',
-          dim: '#8a919c',
-          blood: '#9b1c2e',
-          line: 'rgba(212, 216, 222, 0.55)',
+          dim: '#8b9098',
+          blood: '#e85d4c',
+          gold: '#e8b84a',
+          line: 'rgba(255, 255, 255, 0.08)',
         },
       },
       fontFamily: {
-        display: ['Cinzel', 'Times New Roman', 'serif'],
-        sans: ['Syne', 'Segoe UI', 'sans-serif'],
+        display: ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
+        sans: ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
         mono: ['IBM Plex Mono', 'ui-monospace', 'monospace'],
       },
       keyframes: {

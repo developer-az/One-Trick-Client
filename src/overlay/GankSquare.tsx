@@ -3,7 +3,7 @@ import type { JungleThreat } from '../logic/jungleLogic';
 
 /**
  * Colored gank-probability square:
- * - red: brief high window (expect the gank now)
+ * - red: brief high window
  * - yellow: fog / low-vision risk
  * - dim: farming / tracked
  */
@@ -24,11 +24,6 @@ export const GankSquare: React.FC<{ threat: JungleThreat | null; compact?: boole
       <span className="hud-gank-sq" aria-hidden />
       <div className="hud-gank-copy min-w-0">
         <div className="hud-gank-label">{threat.squareReason}</div>
-        {!compact && (
-          <div className="hud-gank-meta">
-            {threat.junglerName} · {threat.probability}%
-          </div>
-        )}
       </div>
     </div>
   );

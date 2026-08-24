@@ -153,64 +153,45 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
 
   const profileId = ctx.profileId || resolveProfileId(state);
   if (profileId === 'yone-mid') {
-    return finalizeCues(buildYoneCues(state, ctx), state, profileId, ctx.analysis);
+    return finalizeCues(buildYoneCues(state, ctx), state, profileId);
   }
   if (profileId === 'pantheon-support') {
-    return finalizeCues(buildPantheonCues(state, ctx), state, profileId, ctx.analysis);
+    return finalizeCues(buildPantheonCues(state, ctx), state, profileId);
   }
-  return finalizeCues(buildPykeCues(state, ctx), state, profileId, ctx.analysis);
+  return finalizeCues(buildPykeCues(state, ctx), state, profileId);
 }
 
-/** Merge shared jg/threat/cannon cues and keep the highest-urgency few. */
+/** Coach / essay cues — kept in champ-select drawers, never on the live HUD. */
+const COACH_CUE_ID = /^(matchup-doctrine|pro-tip-|jg-threat-|prey-focus|buy-|yone-jg-sync|yone-early|yone-e-trades|yone-side|yone-boots|pan-behind|pan-ahead|early-window|xp-hold)/;
+
+export function isCoachCueId(id: string): boolean {
+  return COACH_CUE_ID.test(id);
+}
+
+function compactCueLabel(label: string): string {
+  const t = label.replace(/\s+/g, ' ').trim();
+  return t.length <= 18 ? t : `${t.slice(0, 16).trimEnd()}`;
+}
+
+function actionCue(
+  id: string,
+  label: string,
+  urgency: OverlayCue['urgency'],
+  maxAgeSec?: number
+): OverlayCue {
+  return { id, label: compactCueLabel(label), detail: '', urgency, maxAgeSec };
+}
+
+/** Time-critical HUD lines only — gank square / buy icons / doctrine live elsewhere. */
 function finalizeCues(
   base: OverlayCue[],
   state: OverlayState,
-  profileId: ProfileId,
-  analysis?: MatchupAnalysis | null
+  profileId: ProfileId
 ): OverlayCue[] {
   const gameTime = state.gameTime ?? 0;
-  const minutes = gameTime / 60;
-  const focusLane = profileId === 'yone-mid' ? 'mid' : 'bot';
-  const jg = assessJungleThreat(gameTime, state.enemies || [], focusLane);
   const shared: OverlayCue[] = [];
 
-  // Loading / first ~90s — exact matchup doctrine (pro lines, no basics)
-  if (minutes < 1.6 && analysis?.loadingDoctrine?.length) {
-    shared.push({
-      id: 'matchup-doctrine',
-      label: analysis.loadingDoctrine[0] || analysis.title,
-      detail: analysis.loadingDoctrine.slice(1, 3).join(' · ').slice(0, 160),
-      urgency: 'warn',
-      maxAgeSec: 70,
-    });
-  } else if (minutes >= 1.6 && analysis?.tips?.length) {
-    // Rotate one pro tip every game-minute — id changes so TTL cannot bury the rail
-    const tipIdx = Math.floor(minutes) % analysis.tips.length;
-    const tip = analysis.tips[tipIdx];
-    if (tip && tip.length > 24) {
-      shared.push({
-        id: `pro-tip-${Math.floor(minutes)}-${tipIdx}`,
-        label: 'Pro read',
-        detail: tip.slice(0, 140),
-        urgency: 'info',
-        maxAgeSec: 55,
-      });
-    }
-  }
-
-  if (jg && (jg.gankRisk === 'high' || jg.gankRisk === 'medium')) {
-    // Id includes minute + risk so a sticky yellow/red line can refresh after TTL
-    shared.push({
-      id: `jg-threat-${jg.gankRisk}-${Math.floor(minutes)}`,
-      label: jg.label,
-      detail: jg.detail,
-      urgency: jg.gankRisk === 'high' ? 'spike' : 'warn',
-      maxAgeSec: jg.gankRisk === 'high' ? 22 : 35,
-    });
-  }
-
-  // Named enemy threats (Naafiri) — these outrank generic clock advice once they
-  // actually have their ultimate online.
+  // Named enemy threats (Naafiri) — short name once ult is online.
   const threats = activeThreatsByName((state.enemies || []).map((e) => e.championName));
   for (const threat of threats) {
     const enemy = (state.enemies || []).find(
@@ -218,25 +199,20 @@ function finalizeCues(
     );
     if (enemy?.isDead) continue;
     const online = (enemy?.level ?? 1) >= 6;
-    shared.push({
-      id: `threat-${threat.id}`,
-      label: threat.cue.label,
-      detail: threat.cue.detail,
-      urgency: online ? 'spike' : 'warn',
-    });
+    shared.push(actionCue(`threat-${threat.id}`, threat.cue.label, online ? 'spike' : 'warn'));
   }
 
-  // Cannon shove — short-lived roam timer only
   if (profileId === 'pyke-support' || profileId === 'pantheon-support') {
     const cannon = nextCannon(gameTime);
     if (cannon?.isActionWindow && (cannon.eta == null || cannon.eta <= 20)) {
-      shared.push({
-        id: 'cannon-shove',
-        label: cannon.eta > 0 ? `Cannon ${formatCannonEta(cannon.eta)}` : 'Cannon wave',
-        detail: 'Crash → leave. Skip non-cannon roams.',
-        urgency: 'spike',
-        maxAgeSec: 18,
-      });
+      shared.push(
+        actionCue(
+          'cannon-shove',
+          cannon.eta > 0 ? `Cannon ${formatCannonEta(cannon.eta)}` : 'Cannon now',
+          'spike',
+          18
+        )
+      );
     }
   }
 
@@ -244,23 +220,24 @@ function finalizeCues(
   const seen = new Set<string>();
   return [...base, ...shared]
     .filter((cue) => {
+      if (isCoachCueId(cue.id)) return false;
       if (seen.has(cue.id)) return false;
       seen.add(cue.id);
       return true;
     })
     .sort((a, b) => priority[a.urgency] - priority[b.urgency])
-    // Extra candidates so OverlayApp TTL can refill after sticky lines expire
-    .slice(0, 6)
+    .slice(0, 4)
     .map((cue) => ({
       ...cue,
-      // Default TTL: roam/tempo info dies fast; spikes get a bit longer
+      label: compactCueLabel(cue.label),
+      detail: '',
       maxAgeSec:
         cue.maxAgeSec ??
-        (cue.id.includes('roam') || cue.id.includes('cannon')
-          ? 22
+        (cue.id.includes('roam') || cue.id.includes('cannon') || cue.id === 'flash-up'
+          ? 16
           : cue.urgency === 'info'
-            ? 18
-            : 35),
+            ? 14
+            : 28),
     }));
 }
 
@@ -308,7 +285,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
   if (level === 1) {
     cues.push({
       id: 'pan-lvl2',
-      label: 'Race to 2',
+      label: 'L2 race',
       detail: 'Q poke → Q+W at 2 is your biggest spike.',
       urgency: 'spike',
       maxAgeSec: 40,
@@ -345,7 +322,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
   if (!hasOracle && minutes >= 8.5 && minutes <= 11) {
     cues.push({
       id: 'swap-oracle',
-      label: 'Swap sweeper',
+      label: 'Sweeper',
       detail: 'Oracle Lens — clear before you W in.',
       urgency: 'spike',
       maxAgeSec: 30,
@@ -367,7 +344,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
   if (flashDown.length > 0 && !behind) {
     cues.push({
       id: 'sum-flash',
-      label: 'Flash down',
+      label: `Flash ${formatCd(flashDown[0].remaining)}`,
       detail: `Enemy bot Flash ~${formatCd(flashDown[0].remaining)} — W is unavoidable in that window.`,
       urgency: 'spike',
     });
@@ -455,7 +432,7 @@ function buildYoneCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   if (level >= 6 && flashDown.length > 0) {
     cues.push({
       id: 'sum-flash',
-      label: 'Flash down',
+      label: `Flash ${formatCd(flashDown[0].remaining)}`,
       detail: `Enemy bot Flash ~${formatCd(flashDown[0].remaining)} — look for R picks.`,
       urgency: 'spike',
     });
@@ -507,7 +484,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   if (level === 1) {
     cues.push({
       id: 'lvl2',
-      label: 'Level 2 spike',
+      label: 'L2 race',
       detail: hardLane
         ? 'Contest XP — all-in only if their key spell is down.'
         : 'Contest XP — Q+E window opens at 2.',
@@ -569,7 +546,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   if (!hasOracle && minutes >= 8.5 && minutes <= 11) {
     cues.push({
       id: 'swap-oracle',
-      label: 'Swap sweeper',
+      label: 'Sweeper',
       detail: 'Oracle Lens now — clear before the next fight.',
       urgency: 'spike',
       maxAgeSec: 30,
@@ -607,7 +584,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   if (level >= 6 && flashDown.length > 0 && flashDown[0].remaining < 90) {
     cues.push({
       id: 'sum-flash',
-      label: 'Flash down',
+      label: `Flash ${formatCd(flashDown[0].remaining)}`,
       detail: `~${formatCd(flashDown[0].remaining)} — free R angles.`,
       urgency: 'spike',
       maxAgeSec: 25,

@@ -13,6 +13,9 @@ declare global {
         minimap: FrameCalibration;
     }
 
+    type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'frames';
+    type HudModules = Record<HudModuleId, boolean>;
+
     interface Window {
         electronAPI?: {
             connectLCU: () => Promise<{ success: boolean; credentials?: { port: string; token: string; protocol: string }; error?: string }>;
@@ -56,6 +59,7 @@ declare global {
             setOverlayHudScale: (scale: number) => Promise<{ success: boolean; hudScale: number }>;
             setOverlayMapScale: (scale: number) => Promise<{ success: boolean; mapScale: number }>;
             setOverlayChromeColor: (color: string) => Promise<{ success: boolean; chromeColor: string }>;
+            setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
             syncLeagueScales: () => Promise<{ success: boolean; hudScale: number; mapScale: number; source?: string }>;
             adjustOverlayCalibration: (target: 'ability' | 'minimap', field: 'dx' | 'dy' | 'dw' | 'dh', delta: number) => Promise<{ success: boolean; calibration: OverlayCalibration }>;
             resetOverlayCalibration: () => Promise<{ success: boolean; calibration: OverlayCalibration }>;
@@ -68,6 +72,7 @@ declare global {
                 hudScale: number;
                 mapScale?: number;
                 chromeColor?: string;
+                hudModules?: HudModules;
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;

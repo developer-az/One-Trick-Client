@@ -27,6 +27,8 @@ import {
     setMapScale,
     getChromeColor,
     setChromeColor,
+    getHudModules,
+    setHudModules,
     syncScalesFromLeague,
     getCalibration,
     adjustCalibration,
@@ -65,10 +67,10 @@ function resolveAppIcon(): string {
 
 function createWindow() {
     win = new BrowserWindow({
-        width: 1240,
-        height: 860,
-        minWidth: 880,
-        minHeight: 640,
+        width: 980,
+        height: 640,
+        minWidth: 760,
+        minHeight: 520,
         icon: resolveAppIcon(),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -78,12 +80,12 @@ function createWindow() {
             // it does not compete with League for CPU while a match is running.
             backgroundThrottling: true,
         },
-        backgroundColor: '#070708',
+        backgroundColor: '#0b0c0e',
         frame: false,
         transparent: false,
         titleBarStyle: 'hidden',
         titleBarOverlay: {
-            color: '#070708',
+            color: '#101114',
             symbolColor: '#d4d8de',
             height: 40
         }
@@ -450,6 +452,10 @@ app.whenReady().then(() => {
         return { success: true, chromeColor: setChromeColor(color) };
     });
 
+    ipcMain.handle('overlay-set-hud-modules', async (_event, modules: unknown) => {
+        return { success: true, hudModules: setHudModules(modules) };
+    });
+
     ipcMain.handle('overlay-sync-league-scales', async () => {
         const res = syncScalesFromLeague();
         return { success: true, ...res };
@@ -479,6 +485,7 @@ app.whenReady().then(() => {
             hudScale: getHudScale(),
             mapScale: getMapScale(),
             chromeColor: getChromeColor(),
+            hudModules: getHudModules(),
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,
