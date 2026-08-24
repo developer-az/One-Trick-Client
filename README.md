@@ -4,13 +4,13 @@
 
 **Windows League overlay client for Pyke Support, Pantheon Support, and Yone Mid — loadout export and a live HUD**
 
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.0.2)
+[![Version](https://img.shields.io/badge/version-1.1.0--beta.1-orange.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0-beta.1)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.2-blue)](https://react.dev/)
 [![Electron](https://img.shields.io/badge/Electron-39-blue)](https://www.electronjs.org/)
 
-[Download v1.0.2](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.0.2) · [Site](https://developer-az.github.io/One-Trick-Client/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
+[Download v1.1.0-beta.1](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0-beta.1) · [Site](https://developer-az.github.io/One-Trick-Client/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
 
 </div>
 
@@ -64,8 +64,8 @@ Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 
 ### From a release (recommended)
 
-1. Open [**v1.0.2**](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.0.2)
-2. Download **`One.Trick.Setup.1.0.2.exe`**
+1. Open [**v1.1.0-beta.1**](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0-beta.1) (prerelease)
+2. Download **`One.Trick.Setup.1.1.0-beta.1.exe`**
 3. Launch with the League Client open (or start League afterward — it reconnects)
 
 ### From source

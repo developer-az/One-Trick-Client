@@ -71,24 +71,26 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'beta') }}
           name: One Trick ${{ github.ref_name }}
           body: |
-            **One Trick ${{ github.ref_name }}** — production release.
+            **One Trick ${{ github.ref_name }}** — public beta for client testing.
+
+            The site download still points at the last full release until this is promoted.
 
             ### Install
             - Download the Windows `.exe` from Assets below
             - Use **Borderless** display mode in League
-            - Open the League client, connect in One Trick, hit **Sync LoL**, then unlock the overlay (Ctrl+Shift+U) → **Align HUD**
+            - Open the League client, connect in One Trick, then export in champ select
+            - Overlay HUD modules: Sums, Gank, Vision, Buy, Action (Frames off by default)
+            - Settings → **Sync LoL** if you enable Frames and need HUD/minimap alignment
 
             ### In-game
             - **PageUp** / **Numpad 9** — toggle primary Flash (ADC or Mid)
             - **PageDown** / **Numpad 3** — Support Flash, or Mid Ignite/TP
             - Works while League has focus (low-level keyboard hook). If League is Run as Administrator, run One Trick elevated too.
             - Ctrl+Shift+U unlock/lock · Ctrl+Shift+H hide
-            - Main window parks during matches on purpose — live HUD is the overlay
 
             ### Highlights
-            - Fix mid-match mouse hitch: no ignore-mouse re-arm / `forward` when locked
-            - LCU reconnect prefers lockfile; long backoff mid-match (avoids PowerShell freezes)
-            - Fewer overlay IPC/React rebuilds (10s fingerprint buckets)
-            - Mid-match HUD holds through Live Client blips; PageUp/PageDown rebind
-            - Smite jungle tracking + lower overlay DWM churn
+            - Quiet overlay client HUD — icons and numbers, not rotating coach tips
+            - Compact companion: draft strip, loadout + Export, matchup notes collapsed
+            - Toggleable HUD modules (Frames optional)
+            - Overlay cue policy: one time-critical line (cannon / L2 / R / named threat)
           generateReleaseNotes: true
