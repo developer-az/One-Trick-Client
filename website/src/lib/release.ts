@@ -45,9 +45,29 @@ function toInfo(data: GhRelease, asset: GhAsset): ReleaseInfo {
   }
 }
 
+function parseReleaseVersion(tag: string): number[] {
+  const core = tag.replace(/^v/i, '').split('-')[0]
+  const parts = core.split('.').map((n) => Number.parseInt(n, 10))
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0]
+}
+
+function newerThan(a: string, b: string): boolean {
+  const left = parseReleaseVersion(a)
+  const right = parseReleaseVersion(b)
+  for (let i = 0; i < 3; i += 1) {
+    if (left[i] !== right[i]) return left[i] > right[i]
+  }
+  return false
+}
+
+function isOneTrickAsset(name: string): boolean {
+  return /one\.trick/i.test(name)
+}
+
 /**
- * Prefer the newest full (non-prerelease) Windows build.
- * Falls back to the newest published release with an .exe if no stable build exists.
+ * Prefer the newest One Trick full Windows build.
+ * Historical Pyke Dominator tags (1.2 / 1.3) and empty 2025 tags are ignored.
+ * Falls back to the newest published prerelease with an .exe if no stable build exists.
  */
 export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
   try {
@@ -58,16 +78,22 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
     const list = (await res.json()) as GhRelease[]
     if (!Array.isArray(list)) return null
 
-    let fallback: ReleaseInfo | null = null
+    let bestFull: ReleaseInfo | null = null
+    let bestPre: ReleaseInfo | null = null
     for (const data of list) {
       if (data.draft) continue
       const asset = pickExe(data.assets || [])
       if (!asset) continue
       const info = toInfo(data, asset)
-      if (!info.prerelease) return info
-      if (!fallback) fallback = info
+      const oneTrick = isOneTrickAsset(asset.name)
+      if (!oneTrick) continue
+      if (info.prerelease) {
+        if (!bestPre || newerThan(info.tag, bestPre.tag)) bestPre = info
+        continue
+      }
+      if (!bestFull || newerThan(info.tag, bestFull.tag)) bestFull = info
     }
-    return fallback
+    return bestFull || bestPre
   } catch {
     return null
   }

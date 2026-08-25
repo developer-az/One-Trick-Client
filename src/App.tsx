@@ -732,7 +732,7 @@ const App: React.FC = () => {
                   <span className="font-mono text-[10px] tracking-[0.28em] uppercase text-chrome-dim">
                     Windows · League of Legends
                   </span>
-                  <span className="hud-chip hud-chip--quiet !py-0.5 !text-[8px]">v1.1.0-beta.1</span>
+                  <span className="hud-chip hud-chip--quiet !py-0.5 !text-[8px]">v1.1.0</span>
                 </div>
                 <h1 className="hud-brand text-3xl md:text-5xl truncate leading-none">One Trick</h1>
                 <p className="mt-2 font-mono text-[10px] tracking-[0.22em] uppercase text-chrome-dim/90">

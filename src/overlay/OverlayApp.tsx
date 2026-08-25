@@ -344,14 +344,14 @@ export const OverlayApp: React.FC = () => {
     state.localPlayer.championName.toLowerCase() === profile.championId.toLowerCase();
 
   const showFrames = alignMode || (hudModules.frames && !compactPanel);
-  const showSumsRail = hudModules.sums;
-  const showSums = showSumsRail && (state.enemyBotSummoners?.length ?? 0) > 0;
+  const showSumsRail = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
+  const showSums = showSumsRail;
   const showGank = hudModules.gank && !!gankStatus;
   const showVision = hudModules.vision && !!wardStatus;
   const showAction = hudModules.action && cues.length > 0;
   const showBuy = hudModules.buy && itemsLeft.length > 0;
   const showRightRail =
-    hudModules.gank || hudModules.vision || hudModules.action || hudModules.buy || !profileMatchesLocal;
+    showGank || showVision || showAction || showBuy || !profileMatchesLocal;
 
   const buyRow = showBuy ? (
     <div className="flex flex-wrap gap-0.5 items-center">
@@ -444,13 +444,7 @@ export const OverlayApp: React.FC = () => {
                 </div>
               </div>
               <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
-                {showSums ? (
-                  <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
-                ) : (
-                  <p className="text-[10px] text-[#6b7280] font-mono tracking-wide">
-                    Waiting for bot / mid sums…
-                  </p>
-                )}
+                <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
                 <p className="text-[8px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
                   {hotkeyHint}
                 </p>

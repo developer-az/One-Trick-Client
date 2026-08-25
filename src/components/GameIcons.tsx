@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   getDdragonVersion,
-  itemIconFallbackUrl,
-  itemIconUrl,
+  itemIconSources,
   subscribeDdragonVersion,
 } from '../data/ddragonAssets';
 import { championAssetSources } from '../data/championCatalog';
@@ -100,11 +99,7 @@ export const ItemIcon: React.FC<{
   size?: number;
 }> = ({ itemId, className, alt, title, size }) => {
   const version = useDdragonVersion();
-  const sources = useMemo(() => {
-    const live = itemIconUrl(itemId, version);
-    const fallback = itemIconFallbackUrl(itemId);
-    return live === fallback ? [live] : [live, fallback];
-  }, [itemId, version]);
+  const sources = useMemo(() => itemIconSources(itemId, version), [itemId, version]);
 
   return (
     <FallbackImg

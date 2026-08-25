@@ -5,7 +5,7 @@ const reactRefresh = require('eslint-plugin-react-refresh');
 const tseslint = require('typescript-eslint');
 
 module.exports = tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'dist-electron', 'release', 'website/dist'] },
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

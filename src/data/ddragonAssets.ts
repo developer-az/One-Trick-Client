@@ -7,17 +7,30 @@
  * first paint used to stick on a stale patch and 404 until a full remount.
  */
 
-const FALLBACK_VERSION = '15.1.1';
+const LEGACY_FALLBACK = '15.1.1';
+const PINNED_RECENT = ['16.16.1', '16.15.1', LEGACY_FALLBACK];
 
-let cachedVersion = FALLBACK_VERSION;
+let cachedVersion = PINNED_RECENT[0];
+let recentVersions = [...PINNED_RECENT];
 const listeners = new Set<() => void>();
+
+function uniqueVersions(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const version of list) {
+    if (!version || seen.has(version)) continue;
+    seen.add(version);
+    out.push(version);
+  }
+  return out;
+}
 
 export function getDdragonVersion(): string {
   return cachedVersion;
 }
 
 export function getDdragonFallbackVersion(): string {
-  return FALLBACK_VERSION;
+  return LEGACY_FALLBACK;
 }
 
 export function subscribeDdragonVersion(listener: () => void): () => void {
@@ -35,12 +48,16 @@ export async function warmDdragonVersion(): Promise<string> {
   try {
     const res = await fetch('https://ddragon.leagueoflegends.com/api/versions.json');
     const versions = (await res.json()) as string[];
-    if (versions[0] && versions[0] !== cachedVersion) {
-      cachedVersion = versions[0];
-      notifyVersion();
+    const latest = versions[0];
+    if (latest) {
+      const nextRecent = uniqueVersions([...versions.slice(0, 5), LEGACY_FALLBACK]);
+      const changed = latest !== cachedVersion || nextRecent.join() !== recentVersions.join();
+      cachedVersion = latest;
+      recentVersions = nextRecent;
+      if (changed) notifyVersion();
     }
   } catch {
-    // keep fallback
+    // keep pinned recent list
   }
   return cachedVersion;
 }
@@ -66,7 +83,14 @@ export function itemIconUrl(itemId: string | number, version = cachedVersion): s
 }
 
 export function itemIconFallbackUrl(itemId: string | number): string {
-  return `https://ddragon.leagueoflegends.com/cdn/${FALLBACK_VERSION}/img/item/${itemId}.png`;
+  return `https://ddragon.leagueoflegends.com/cdn/${LEGACY_FALLBACK}/img/item/${itemId}.png`;
+}
+
+/** Live patch first, then recent patches so a miss still paints. */
+export function itemIconSources(itemId: string | number, version = cachedVersion): string[] {
+  return uniqueVersions([version, cachedVersion, ...recentVersions, LEGACY_FALLBACK]).map((entry) =>
+    itemIconUrl(itemId, entry)
+  );
 }
 
 /**
