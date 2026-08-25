@@ -67,10 +67,10 @@ function resolveAppIcon(): string {
 
 function createWindow() {
     win = new BrowserWindow({
-        width: 980,
-        height: 640,
-        minWidth: 760,
-        minHeight: 520,
+        width: 1240,
+        height: 860,
+        minWidth: 880,
+        minHeight: 640,
         icon: resolveAppIcon(),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -80,12 +80,12 @@ function createWindow() {
             // it does not compete with League for CPU while a match is running.
             backgroundThrottling: true,
         },
-        backgroundColor: '#0b0c0e',
+        backgroundColor: '#070708',
         frame: false,
         transparent: false,
         titleBarStyle: 'hidden',
         titleBarOverlay: {
-            color: '#101114',
+            color: '#070708',
             symbolColor: '#d4d8de',
             height: 40
         }

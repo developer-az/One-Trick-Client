@@ -28,6 +28,12 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      - name: Overlay cue policy
+        run: npm run verify:cues
+
+      - name: Champion icon catalog
+        run: npm run verify:icons
+
       - name: Build TypeScript
         run: npm run electron:build
 

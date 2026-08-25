@@ -1,7 +1,7 @@
 {
   "name": "pyke-dominator",
   "private": true,
-  "version": "1.1.0-beta.1",
+  "version": "1.1.0",
   "description": "One Trick — League companion for Pyke / Pantheon Support + Yone Mid. LCU export and in-game overlay.",
   "author": "Az040",
   "repository": {
@@ -44,6 +44,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "verify:cues": "npx --yes tsx verify_overlay_cues.ts",
+    "verify:icons": "npx --yes tsx verify_champion_icons.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
     "electron:build": "tsc -p tsconfig.electron.json",
