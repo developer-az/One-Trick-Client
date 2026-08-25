@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Champion } from '../logic/pykeLogic';
-import { championSquareUrl } from '../data/ddragonAssets';
+import { ChampionIcon } from './GameIcons';
 
 interface Props {
     champions: Champion[];
@@ -139,14 +139,12 @@ export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, 
                             {/* Input Field */}
                             <div className="relative">
                                 {selectedChampion && (
-                                    <img
-                                        src={championSquareUrl(selectedChampion.id)}
-                                        alt=""
-                                        width={22}
-                                        height={22}
+                                    <ChampionIcon
+                                        championId={selectedChampion.id}
+                                        championName={selectedChampion.name}
+                                        championKey={selectedChampion.key}
+                                        size={22}
                                         className="hud-champ-icon absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"
-                                        decoding="async"
-                                        draggable={false}
                                     />
                                 )}
                                 <input
@@ -207,15 +205,12 @@ export const ChampionSelect: React.FC<Props> = ({ champions, onSelectionChange, 
                                                         className="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors flex items-center gap-2"
                                                         onClick={() => selectChampion(role, champion)}
                                                     >
-                                                        <img
-                                                            src={championSquareUrl(champion.id)}
-                                                            alt=""
-                                                            width={22}
-                                                            height={22}
+                                                        <ChampionIcon
+                                                            championId={champion.id}
+                                                            championName={champion.name}
+                                                            championKey={champion.key}
+                                                            size={22}
                                                             className="hud-champ-icon shrink-0"
-                                                            loading="lazy"
-                                                            decoding="async"
-                                                            draggable={false}
                                                         />
                                                         <span className="text-chrome-bright text-sm">{champion.name}</span>
                                                         <span className="text-[10px] text-chrome-dim ml-auto font-mono tracking-wider uppercase">

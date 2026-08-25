@@ -7,25 +7,25 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Chrome Hearts silver (legacy pyke-green keys remapped for existing classNames)
         'pyke-green': '#d4d8de',
-        'pyke-green-dim': '#8b9098',
-        'pyke-dark': '#0b0c0e',
-        'pyke-dark-light': '#141518',
+        'pyke-green-dim': '#8a919c',
+        'pyke-dark': '#070708',
+        'pyke-dark-light': '#121214',
         'pyke-accent': '#1c1c20',
-        'blood-red': '#e85d4c',
-        'gold': '#e8b84a',
-        'gold-dim': '#b4923a',
+        'blood-red': '#9b1c2e',
+        'gold': '#e8eaee',
+        'gold-dim': '#9aa1ab',
         'neon-blue': '#aeb4be',
         'chrome-silver': '#d4d8de',
         'chrome-bright': '#f2f4f7',
-        'chrome-dim': '#8b9098',
-        'chrome-ink': '#0b0c0e',
-        'chrome-blood': '#e85d4c',
-        'chrome-gold': '#e8b84a',
+        'chrome-dim': '#8a919c',
+        'chrome-ink': '#070708',
+        'chrome-blood': '#9b1c2e',
       },
       fontFamily: {
-        'display': ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
-        'sans': ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
+        'display': ['Cinzel', 'Times New Roman', 'serif'],
+        'sans': ['Syne', 'Segoe UI', 'sans-serif'],
         'mono': ['IBM Plex Mono', 'ui-monospace', 'monospace'],
       }
     },
