@@ -19,14 +19,34 @@ import {
   type OverlayState,
 } from './overlayLogic';
 import { SummonerTimers } from '../components/SummonerTimers';
+import { ChampionIcon, ItemIcon } from '../components/GameIcons';
 import { ChromeGameHud } from './ChromeGameHud';
+import { ChromeMark } from './ChromeMark';
 import { WardIndicator } from './WardIndicator';
 import { GankSquare } from './GankSquare';
-import { itemIconUrl } from '../data/ddragonAssets';
+import { warmDdragonVersion } from '../data/ddragonAssets';
+import { ingestChampionCatalog } from '../data/championCatalog';
 import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
 
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
+}
+
+function OverlayChromePanel({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`hud-overlay-panel overflow-hidden ${className}`}>
+      <span className="hud-corner hud-corner-tl" aria-hidden />
+      <span className="hud-corner hud-corner-br" aria-hidden />
+      <span className="hud-rail hud-rail-top" aria-hidden />
+      {children}
+    </div>
+  );
 }
 
 function emptyCalibration(): FrameCalibration {
@@ -75,12 +95,10 @@ export const OverlayApp: React.FC = () => {
   const profile = useMemo(() => getProfile(profileId), [profileId]);
 
   useEffect(() => {
-    fetch('https://ddragon.leagueoflegends.com/api/versions.json')
-      .then((res) => res.json())
-      .then((versions) => {
-        const latest = versions[0] || '15.1.1';
-        return fetch(`https://ddragon.leagueoflegends.com/cdn/${latest}/data/en_US/champion.json`);
-      })
+    void warmDdragonVersion()
+      .then((latest) =>
+        fetch(`https://ddragon.leagueoflegends.com/cdn/${latest}/data/en_US/champion.json`)
+      )
       .catch(() => fetch('https://ddragon.leagueoflegends.com/cdn/15.1.1/data/en_US/champion.json'))
       .then((res) => res.json())
       .then((data) => {
@@ -97,6 +115,7 @@ export const OverlayApp: React.FC = () => {
           tags: c.tags,
           damageType: damageTypeFromTags(c.tags),
         }));
+        ingestChampionCatalog(list);
         setChampions(list);
       })
       .catch((err) => console.error('Overlay champion load failed:', err));
@@ -311,6 +330,11 @@ export const OverlayApp: React.FC = () => {
       .catch(() => {});
   };
 
+  const hotkeyHint =
+    profileId === 'yone-mid'
+      ? 'PgUp/Num9 Mid Flash · PgDn/Num3 Ignite/TP'
+      : 'PgUp/Num9 ADC Flash · PgDn/Num3 Supp Flash';
+
   if (!state.inGame) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
@@ -320,31 +344,32 @@ export const OverlayApp: React.FC = () => {
     state.localPlayer.championName.toLowerCase() === profile.championId.toLowerCase();
 
   const showFrames = alignMode || (hudModules.frames && !compactPanel);
-  const showSums = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
+  const showSumsRail = hudModules.sums;
+  const showSums = showSumsRail && (state.enemyBotSummoners?.length ?? 0) > 0;
   const showGank = hudModules.gank && !!gankStatus;
   const showVision = hudModules.vision && !!wardStatus;
   const showAction = hudModules.action && cues.length > 0;
   const showBuy = hudModules.buy && itemsLeft.length > 0;
-  const rightHasContent = showGank || showVision || showAction || showBuy || !profileMatchesLocal;
+  const showRightRail =
+    hudModules.gank || hudModules.vision || hudModules.action || hudModules.buy || !profileMatchesLocal;
 
   const buyRow = showBuy ? (
-    <div className="flex gap-0.5 items-center">
+    <div className="flex flex-wrap gap-0.5 items-center">
       {itemsLeft.map((item, index) => (
-        <img
+        <ItemIcon
           key={`buy-${item.id}`}
-          src={itemIconUrl(item.id)}
+          itemId={item.id}
           alt={item.name}
           title={item.name}
+          size={22}
           className={`hud-buy-icon${index === 0 ? ' is-next' : ''}`}
-          decoding="async"
-          draggable={false}
         />
       ))}
     </div>
   ) : null;
 
   const actionLine = showAction ? (
-    <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency}`}>
+    <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
       {cues[0].label}
     </div>
   ) : null;
@@ -369,44 +394,98 @@ export const OverlayApp: React.FC = () => {
 
       {alignMode && (
       <div className="hud-overlay-controls absolute top-3 left-1/2 -translate-x-1/2 pointer-events-auto z-10">
-        <button type="button" onClick={() => handleAlignMode(false)} className="hud-btn">
-          Done
+        <ChromeMark className="hud-chrome-mark" size={11} />
+        <button
+          type="button"
+          onClick={() => handleAlignMode(false)}
+          className="hud-btn"
+          title="Leave fullscreen guides — back to movable panel"
+        >
+          Done aligning
         </button>
-        <button type="button" onClick={handleToggleClicks} className="hud-btn">
-          Lock
+        <button
+          type="button"
+          onClick={handleToggleClicks}
+          className="hud-btn"
+          title="Lock overlay and pass clicks to League (Ctrl+Shift+U)"
+        >
+          Lock overlay
         </button>
         <NudgeGroup label="Ability" onNudge={(field, delta) => nudge('ability', field, delta)} />
         <NudgeGroup label="Map" onNudge={(field, delta) => nudge('minimap', field, delta)} />
-        <button type="button" onClick={handleResetCalibration} className="hud-nudge-btn">Reset</button>
+        <button type="button" onClick={handleResetCalibration} className="hud-nudge-btn" title="Reset alignment marks to default">
+          Reset fit
+        </button>
         <button
           type="button"
           className="hud-btn"
+          title="Re-read HUD/Minimap scales from League game.cfg"
           onClick={() => void window.electronAPI?.syncLeagueScales?.()}
         >
-          Sync
+          Sync LoL
         </button>
+        <span className="px-1 text-[8px] tracking-wider opacity-50">
+          Match filled boxes to your League HUD / minimap
+        </span>
       </div>
       )}
 
       {!compactPanel && !collapsed && (
         <>
-          {showSums && (
-          <div className="hud-overlay-scale hud-overlay-scale--left absolute top-14 left-3 w-[200px]">
-            <div className="hud-overlay-panel overflow-hidden">
-              <div className="relative z-10 px-1.5 py-1.5">
-                <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
+          {showSumsRail && (
+          <div className="hud-overlay-scale hud-overlay-scale--left absolute top-14 left-3 w-[220px]">
+            <OverlayChromePanel>
+              <div className="hud-chrome-header !py-1 !px-2">
+                <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
+                <div className="hud-chrome-meta !text-[8px]">
+                  {typeof state.gameTime === 'number' && state.gameTime > 0
+                    ? formatGameTime(state.gameTime)
+                    : 'Live'}
+                </div>
               </div>
-            </div>
+              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
+                {showSums ? (
+                  <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
+                ) : (
+                  <p className="text-[10px] text-[#6b7280] font-mono tracking-wide">
+                    Waiting for bot / mid sums…
+                  </p>
+                )}
+                <p className="text-[8px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
+                  {hotkeyHint}
+                </p>
+              </div>
+            </OverlayChromePanel>
           </div>
           )}
 
-          {rightHasContent && (
-          <div className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 w-[200px]">
-            <div className="hud-overlay-panel overflow-hidden">
-              <div className="relative z-10 px-1.5 py-1.5 space-y-1">
+          {showRightRail && (
+          <div className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 w-[220px]">
+            <OverlayChromePanel>
+              <div className="hud-chrome-header !py-1 !px-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <ChampionIcon
+                    championId={profile.championId}
+                    championName={state.localPlayer?.championName}
+                    size={16}
+                    className="hud-champ-icon shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
+                    <div className="hud-chrome-meta !text-[8px]">
+                      {profile.shortLabel}
+                      {state.localPlayer ? ` · ${state.localPlayer.level}` : ''}
+                    </div>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setCollapsed(true)} className="hud-btn" title="Collapse rails">
+                  –
+                </button>
+              </div>
+              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
                 {!profileMatchesLocal ? (
-                  <div className="hud-chrome-cue hud-chrome-cue--warn">
-                    {state.localPlayer?.championName || 'Profile'}
+                  <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
+                    Switch profile → {state.localPlayer?.championName || '?'}
                   </div>
                 ) : null}
                 {showGank ? <GankSquare threat={gankStatus} compact /> : null}
@@ -414,7 +493,7 @@ export const OverlayApp: React.FC = () => {
                 {actionLine}
                 {buyRow}
               </div>
-            </div>
+            </OverlayChromePanel>
           </div>
           )}
         </>
@@ -425,31 +504,49 @@ export const OverlayApp: React.FC = () => {
           type="button"
           onClick={() => setCollapsed(false)}
           className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 hud-overlay-panel !px-2 !py-1 hud-btn"
-          title="Expand HUD"
+          title="Expand dual rails"
         >
-          +
+          One Trick +
         </button>
       )}
 
       {compactPanel && (
       <div className="hud-overlay-scale hud-overlay-scale--right absolute inset-1.5">
-        <div className="hud-overlay-panel h-full overflow-hidden">
+        <OverlayChromePanel className="h-full">
           <div
-            className="hud-chrome-header"
+            className="hud-chrome-header !py-1 !px-2"
             style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
           >
-            <div className="hud-chrome-meta">
-              {typeof state.gameTime === 'number' && state.gameTime > 0
-                ? formatGameTime(state.gameTime)
-                : 'HUD'}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ChampionIcon
+                championId={profile.championId}
+                championName={state.localPlayer?.championName}
+                size={16}
+                className="hud-champ-icon shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
+                <div className="hud-chrome-meta !text-[8px]">
+                  {profile.shortLabel}
+                  {typeof state.gameTime === 'number' && state.gameTime > 0
+                    ? ` · ${formatGameTime(state.gameTime)}`
+                    : ''}
+                </div>
+              </div>
             </div>
             <div
               className="flex gap-0.5 justify-end shrink-0"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
-              <button type="button" onClick={() => handleAlignMode(true)} className="hud-btn">Align</button>
-              <button type="button" onClick={handleToggleClicks} className="hud-btn">Lock</button>
-              <button type="button" onClick={handleHide} className="hud-btn">Hide</button>
+              <button type="button" onClick={() => handleAlignMode(true)} className="hud-btn" title="Align HUD">
+                Align
+              </button>
+              <button type="button" onClick={handleToggleClicks} className="hud-btn" title="Lock">
+                Lock
+              </button>
+              <button type="button" onClick={handleHide} className="hud-btn" title="Hide">
+                Hide
+              </button>
               <button type="button" onClick={() => setCollapsed((c) => !c)} className="hud-btn">
                 {collapsed ? '+' : '–'}
               </button>
@@ -457,10 +554,10 @@ export const OverlayApp: React.FC = () => {
           </div>
 
           {!collapsed && (
-            <div className="relative z-10 px-1.5 py-1.5 space-y-1 overflow-hidden">
+            <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
               {!profileMatchesLocal ? (
-                <div className="hud-chrome-cue hud-chrome-cue--warn">
-                  {state.localPlayer?.championName || 'Profile'}
+                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
+                  Switch profile → {state.localPlayer?.championName || '?'}
                 </div>
               ) : null}
               {showGank ? <GankSquare threat={gankStatus} compact /> : null}
@@ -470,7 +567,7 @@ export const OverlayApp: React.FC = () => {
               {buyRow}
             </div>
           )}
-        </div>
+        </OverlayChromePanel>
       </div>
       )}
     </div>

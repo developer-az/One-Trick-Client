@@ -44,6 +44,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "verify:cues": "npx --yes tsx verify_overlay_cues.ts",
+    "verify:icons": "npx --yes tsx verify_champion_icons.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
     "electron:build": "tsc -p tsconfig.electron.json",
