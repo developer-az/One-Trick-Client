@@ -78,6 +78,9 @@ export interface OverlayCue {
   id: string;
   label: string;
   detail: string;
+  rationale?: string;
+  /** Deterministic 0-100 confidence score for next-move ranking. */
+  confidence?: number;
   urgency: 'info' | 'warn' | 'spike';
   /**
    * Wall-clock seconds this cue may stay once first shown.
@@ -182,6 +185,25 @@ function actionCue(
   return { id, label: compactCueLabel(label), detail: '', urgency, maxAgeSec };
 }
 
+function cueConfidenceScore(cue: OverlayCue): number {
+  const urgencyScore: Record<OverlayCue['urgency'], number> = {
+    spike: 70,
+    warn: 52,
+    info: 36,
+  };
+  let score = urgencyScore[cue.urgency];
+  if (/^(ult-online|pan-ult|yone-ult|sum-flash)$/.test(cue.id)) score += 18;
+  else if (/^(threat-|roam-cannon|cannon-shove)/.test(cue.id)) score += 14;
+  else if (/^(swap-oracle|xp-hold|pan-behind|pan-ahead|prey-focus)/.test(cue.id)) score += 10;
+  else if (/^buy-/.test(cue.id)) score += 6;
+
+  const maxAge = cue.maxAgeSec ?? 30;
+  if (maxAge <= 20) score += 8;
+  else if (maxAge <= 30) score += 4;
+
+  return Math.max(0, Math.min(100, score));
+}
+
 /** Time-critical HUD lines only — gank square / buy icons / doctrine live elsewhere. */
 function finalizeCues(
   base: OverlayCue[],
@@ -216,7 +238,6 @@ function finalizeCues(
     }
   }
 
-  const priority = { spike: 0, warn: 1, info: 2 } as const;
   const seen = new Set<string>();
   return [...base, ...shared]
     .filter((cue) => {
@@ -225,11 +246,16 @@ function finalizeCues(
       seen.add(cue.id);
       return true;
     })
-    .sort((a, b) => priority[a.urgency] - priority[b.urgency])
+    .map((cue) => ({ ...cue, confidence: cueConfidenceScore(cue) }))
+    .sort((a, b) => {
+      if ((b.confidence ?? 0) !== (a.confidence ?? 0)) return (b.confidence ?? 0) - (a.confidence ?? 0);
+      return a.id.localeCompare(b.id);
+    })
     .slice(0, 4)
     .map((cue) => ({
       ...cue,
       label: compactCueLabel(cue.label),
+      rationale: (cue.detail || '').replace(/\s+/g, ' ').trim().slice(0, 68),
       detail: '',
       maxAgeSec:
         cue.maxAgeSec ??
