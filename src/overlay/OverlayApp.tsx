@@ -16,6 +16,7 @@ import {
   resolveAllyJungleName,
   resolveProfileId,
   situationFromState,
+  type OverlayCue,
   type OverlayState,
 } from './overlayLogic';
 import { SummonerTimers } from '../components/SummonerTimers';
@@ -257,8 +258,12 @@ export const OverlayApp: React.FC = () => {
   );
 
   const cueFirstSeen = useRef<Map<string, number>>(new Map());
+  const selectedCueRef = useRef<{ id: string; chosenAt: number } | null>(null);
   useEffect(() => {
-    if (!state.inGame) cueFirstSeen.current.clear();
+    if (!state.inGame) {
+      cueFirstSeen.current.clear();
+      selectedCueRef.current = null;
+    }
   }, [state.inGame]);
 
   const cues = useMemo(() => {
@@ -279,7 +284,36 @@ export const OverlayApp: React.FC = () => {
       }
       seen.delete(cue.id);
     }
-    return alive.slice(0, 1);
+    if (alive.length === 0) {
+      selectedCueRef.current = null;
+      return [] as OverlayCue[];
+    }
+
+    const top = alive[0];
+    const selected = selectedCueRef.current;
+    if (!selected) {
+      selectedCueRef.current = { id: top.id, chosenAt: gameTime };
+      return [top];
+    }
+
+    const current = alive.find((cue) => cue.id === selected.id);
+    if (!current) {
+      selectedCueRef.current = { id: top.id, chosenAt: gameTime };
+      return [top];
+    }
+
+    const HOLD_SEC = 6;
+    const SWITCH_MARGIN = 12;
+    const held = gameTime - selected.chosenAt < HOLD_SEC;
+    const currentScore = current.confidence ?? 0;
+    const topScore = top.confidence ?? 0;
+
+    if (top.id !== current.id && !held && topScore >= currentScore + SWITCH_MARGIN) {
+      selectedCueRef.current = { id: top.id, chosenAt: gameTime };
+      return [top];
+    }
+
+    return [current];
   }, [rawCues, state.gameTime]);
 
   const wardStatus = useMemo(() => getWardStatus(state, profileId), [state, profileId]);
@@ -370,7 +404,8 @@ export const OverlayApp: React.FC = () => {
 
   const actionLine = showAction ? (
     <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
-      {cues[0].label}
+      <div>{cues[0].label}</div>
+      {cues[0].rationale ? <div className="text-[8px] opacity-75">{cues[0].rationale}</div> : null}
     </div>
   ) : null;
 
