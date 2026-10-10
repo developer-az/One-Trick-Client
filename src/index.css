@@ -1316,6 +1316,10 @@ html:not(.overlay-root) .font-mono {
   font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
 }
 
+.hud-studio-fit {
+  width: 100%;
+}
+
 .hud-studio-wrap {
   overflow: auto;
   border: 1px solid rgba(212, 216, 222, 0.22);

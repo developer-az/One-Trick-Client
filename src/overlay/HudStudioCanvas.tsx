@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeChromeColor } from './chromeTheme';
 import { HUD_MODULE_LABELS, type HudModuleId } from './hudModules';
 import {
@@ -44,12 +44,29 @@ export const HudStudioCanvas: React.FC<{
   width = 960,
   height = 540,
 }) => {
+  const hostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: width, h: height });
   const [dragId, setDragId] = useState<string | null>(null);
   const color = normalizeChromeColor(chromeColor);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const apply = () => {
+      const nextW = Math.max(280, Math.floor(host.clientWidth));
+      const nextH = Math.max(1, Math.round((nextW * height) / width));
+      setBox((prev) => (prev.w === nextW && prev.h === nextH ? prev : { w: nextW, h: nextH }));
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [width, height]);
+
   const geo = useMemo(
-    () => computeLeagueGeometry({ vw: width, vh: height, hudScale, mapScale, gameWidth: 1920, gameHeight: 1080 }),
-    [width, height, hudScale, mapScale]
+    () => computeLeagueGeometry({ vw: box.w, vh: box.h, hudScale, mapScale, gameWidth: 1920, gameHeight: 1080 }),
+    [box.w, box.h, hudScale, mapScale]
   );
 
   const abilityWidth = geo.abilityW;
@@ -85,14 +102,15 @@ export const HudStudioCanvas: React.FC<{
   };
 
   return (
-    <div
-      ref={stageRef}
-      className={`hud-studio-stage${editable ? ' is-edit' : ''}`}
-      style={{ width, height, ['--chrome-frame-color' as string]: color }}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => setDragId(null)}
-      onPointerCancel={() => setDragId(null)}
-    >
+    <div ref={hostRef} className="hud-studio-fit">
+      <div
+        ref={stageRef}
+        className={`hud-studio-stage${editable ? ' is-edit' : ''}`}
+        style={{ width: box.w, height: box.h, ['--chrome-frame-color' as string]: color }}
+        onPointerMove={onPointerMove}
+        onPointerUp={() => setDragId(null)}
+        onPointerCancel={() => setDragId(null)}
+      >
       <div
         className="hud-studio-game"
         style={{
@@ -153,6 +171,7 @@ export const HudStudioCanvas: React.FC<{
           <StickerMark sticker={sticker} />
         </button>
       ))}
+    </div>
     </div>
   );
 };
