@@ -93,11 +93,11 @@ export default function App() {
             <ChromeMark size={22} />
             <span className="font-display text-lg tracking-tight">One Trick</span>
           </a>
-          <nav className="hidden items-center gap-7 font-mono text-[11px] uppercase tracking-[0.18em] text-chrome-dim sm:flex">
-            <a href="#features" className="hover:text-chrome-bright">
+          <nav className="flex items-center gap-4 font-mono text-[11px] uppercase tracking-[0.18em] text-chrome-dim sm:gap-7">
+            <a href="#features" className="hidden hover:text-chrome-bright sm:inline">
               Features
             </a>
-            <a href="#profiles" className="hover:text-chrome-bright">
+            <a href="#profiles" className="hidden hover:text-chrome-bright sm:inline">
               Profiles
             </a>
             <a href={`${base}studio/`} className="hover:text-chrome-bright">
@@ -106,7 +106,7 @@ export default function App() {
             <a href="#download" className="hover:text-chrome-bright">
               Download
             </a>
-            <a href={REPO_URL} target="_blank" rel="noreferrer" className="hover:text-chrome-bright">
+            <a href={REPO_URL} target="_blank" rel="noreferrer" className="hidden hover:text-chrome-bright sm:inline">
               GitHub
             </a>
           </nav>

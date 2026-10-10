@@ -33,6 +33,7 @@ export function StudioApp() {
   const [layout, setLayout] = useState<HudLayout>(() => loadStoredHudLayout())
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
   const [patch, setPatch] = useState<string>('')
+  const [importError, setImportError] = useState<string>('')
   const fileRef = useRef<HTMLInputElement>(null)
   const modules = useMemo(() => layoutToHudModules(layout), [layout])
 
@@ -127,8 +128,9 @@ export function StudioApp() {
                 void file.text().then((text) => {
                   try {
                     commit(normalizeHudLayout(JSON.parse(text)))
+                    setImportError('')
                   } catch {
-                    /* ignore */
+                    setImportError('That file is not a HUD layout JSON.')
                   }
                 })
                 event.target.value = ''
@@ -140,6 +142,10 @@ export function StudioApp() {
               </a>
             )}
           </div>
+
+          {importError && (
+            <p className="mt-3 font-mono text-[11px] text-chrome-blood">{importError}</p>
+          )}
 
           <div className="hud-studio-wrap mt-8">
             <HudStudioCanvas layout={layout} onChange={commit} />
