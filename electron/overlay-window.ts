@@ -2,6 +2,7 @@ import { app, BrowserWindow, screen } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
+import { clusterOverlayWindows, type OverlayCluster } from './overlay-bounds';
 
 export interface FrameCalibration {
     dx: number;
@@ -21,14 +22,26 @@ const DEFAULT_CALIBRATION: OverlayCalibration = {
 };
 
 let overlayWin: BrowserWindow | null = null;
+/** Extra slim rails so locked mode never uses one fullscreen layered window. */
+const extraWindows: BrowserWindow[] = [];
+
+function overlayWindows(): BrowserWindow[] {
+    const list: BrowserWindow[] = [];
+    if (overlayWin && !overlayWin.isDestroyed()) list.push(overlayWin);
+    for (const win of extraWindows) {
+        if (win && !win.isDestroyed()) list.push(win);
+    }
+    return list;
+}
 
 /** When the overlay is hidden, allow Chromium to throttle it and free GPU/CPU for League. */
 function setOverlayThrottling(enabled: boolean): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
-    try {
-        overlayWin.webContents.setBackgroundThrottling(enabled);
-    } catch {
-        // Older Electron builds — ignore
+    for (const win of overlayWindows()) {
+        try {
+            win.webContents.setBackgroundThrottling(enabled);
+        } catch {
+            // Older Electron builds — ignore
+        }
     }
 }
 
@@ -105,7 +118,162 @@ function getOverlayUrl(): string {
 }
 
 export function getOverlayWindow(): BrowserWindow | null {
-    return overlayWin;
+    return overlayWindows()[0] || null;
+}
+
+function destroyExtraWindows(): void {
+    while (extraWindows.length) {
+        const win = extraWindows.pop();
+        if (win && !win.isDestroyed()) {
+            win.destroy();
+        }
+    }
+}
+
+function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
+    const win = new BrowserWindow({
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+        transparent: true,
+        frame: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        focusable: false,
+        hasShadow: false,
+        fullscreenable: false,
+        roundedCorners: false,
+        show: false,
+        backgroundColor: '#00000000',
+        paintWhenInitiallyHidden: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            backgroundThrottling: false,
+        },
+    });
+    assertAlwaysOnTop(win);
+    win.setMenu(null);
+    win.webContents.on('context-menu', (e) => {
+        e.preventDefault();
+    });
+    const url = getOverlayUrl();
+    if (url.startsWith('http')) {
+        win.loadURL(url);
+    } else {
+        win.loadFile(url);
+    }
+    win.webContents.on('did-finish-load', () => {
+        broadcastOverlayMeta();
+    });
+    return win;
+}
+
+function widgetsFromSettings(): Array<{
+    id: string;
+    kind: 'module' | 'sticker';
+    xNorm: number;
+    yNorm: number;
+    scale?: number;
+    anchor?: string;
+}> {
+    const raw = hudLayout && typeof hudLayout === 'object' ? (hudLayout as {
+        elements?: Array<{ id?: string; visible?: boolean; x?: number; y?: number; scale?: number; anchor?: string }>;
+        stickers?: Array<{ id?: string; x?: number; y?: number; scale?: number }>;
+    }) : null;
+    const defaults = [
+        { id: 'sums', visible: true, x: 0.018, y: 0.078, scale: 1, anchor: 'tl' },
+        { id: 'gank', visible: true, x: 0.835, y: 0.078, scale: 1, anchor: 'tr' },
+        { id: 'vision', visible: true, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'buy', visible: true, x: 0.835, y: 0.42, scale: 1, anchor: 'tr' },
+        { id: 'action', visible: true, x: 0.835, y: 0.54, scale: 1, anchor: 'tr' },
+    ];
+    const elements = Array.isArray(raw?.elements) && raw.elements.length ? raw.elements : defaults;
+    const widgets: Array<{
+        id: string;
+        kind: 'module' | 'sticker';
+        xNorm: number;
+        yNorm: number;
+        scale?: number;
+        anchor?: string;
+    }> = [];
+    for (const el of elements) {
+        if (!el?.id || el.id === 'frames') continue;
+        const allowed = HUD_MODULE_IDS.includes(el.id as HudModuleId);
+        if (!allowed) continue;
+        const moduleOn = hudModules[el.id as HudModuleId] !== false && el.visible !== false;
+        if (!moduleOn) continue;
+        widgets.push({
+            id: el.id,
+            kind: 'module',
+            xNorm: Number.isFinite(el.x) ? Number(el.x) : 0,
+            yNorm: Number.isFinite(el.y) ? Number(el.y) : 0,
+            scale: typeof el.scale === 'number' ? el.scale : 1,
+            anchor: el.anchor,
+        });
+    }
+    for (const sticker of raw?.stickers || []) {
+        if (!sticker?.id) continue;
+        widgets.push({
+            id: sticker.id,
+            kind: 'sticker',
+            xNorm: Number.isFinite(sticker.x) ? Number(sticker.x) : 0,
+            yNorm: Number.isFinite(sticker.y) ? Number(sticker.y) : 0,
+            scale: typeof sticker.scale === 'number' ? sticker.scale : 1,
+            anchor: 'tl',
+        });
+    }
+    return widgets;
+}
+
+function applyClusterToWindow(win: BrowserWindow, cluster: OverlayCluster, clickPass: boolean): void {
+    win.setBounds({
+        x: cluster.x,
+        y: cluster.y,
+        width: cluster.width,
+        height: cluster.height,
+    });
+    win.setMovable(false);
+    win.setFocusable(false);
+    win.setIgnoreMouseEvents(clickPass);
+    if (!win.isVisible() && !userHidden) {
+        win.showInactive();
+    }
+}
+
+function applyLockedClusters(): void {
+    if (!overlayWin || overlayWin.isDestroyed()) return;
+    const display = screen.getDisplayMatching(overlayWin.getBounds()) || screen.getPrimaryDisplay();
+    const clusters = clusterOverlayWindows({
+        widgets: widgetsFromSettings(),
+        display: display.bounds,
+        gameWidth,
+        gameHeight,
+        hudScale,
+    });
+    if (!clusters.length) {
+        destroyExtraWindows();
+        overlayWin.hide();
+        return;
+    }
+
+    applyClusterToWindow(overlayWin, clusters[0], true);
+    for (let i = 1; i < clusters.length; i += 1) {
+        let extra = extraWindows[i - 1];
+        if (!extra || extra.isDestroyed()) {
+            extra = createLayeredWindow(clusters[i]);
+            extraWindows[i - 1] = extra;
+        }
+        applyClusterToWindow(extra, clusters[i], true);
+    }
+    while (extraWindows.length > clusters.length - 1) {
+        const spare = extraWindows.pop();
+        if (spare && !spare.isDestroyed()) spare.destroy();
+    }
 }
 
 export function isOverlayUserHidden(): boolean {
@@ -221,6 +389,9 @@ export function syncScalesFromLeague(): {
         } catch {
             // ignore
         }
+        if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+            applyLockedClusters();
+        }
         broadcastOverlayMeta();
         return {
             hudScale,
@@ -247,13 +418,12 @@ export function createOverlayWindow(): BrowserWindow {
     // Always re-read game.cfg on overlay create so frames match Interface scales
     syncScalesFromLeague();
     const display = screen.getPrimaryDisplay();
-    const { width, height } = display.bounds;
 
     overlayWin = new BrowserWindow({
-        width,
-        height,
-        x: display.bounds.x,
-        y: display.bounds.y,
+        width: 260,
+        height: 320,
+        x: display.bounds.x + 16,
+        y: display.bounds.y + 48,
         transparent: true,
         frame: false,
         alwaysOnTop: true,
@@ -263,8 +433,10 @@ export function createOverlayWindow(): BrowserWindow {
         focusable: false,
         hasShadow: false,
         fullscreenable: false,
+        roundedCorners: false,
         show: false,
         backgroundColor: '#00000000',
+        paintWhenInitiallyHidden: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -289,12 +461,17 @@ export function createOverlayWindow(): BrowserWindow {
         if (userHidden || !overlayWin || overlayWin.isDestroyed()) return;
         if (clickThrough && !alignMode) {
             try {
-                assertAlwaysOnTop(overlayWin);
-                if (!overlayWin.isVisible()) overlayWin.showInactive();
+                for (const win of overlayWindows()) {
+                    assertAlwaysOnTop(win);
+                    if (!win.isVisible()) win.showInactive();
+                }
             } catch {
                 // ignore
             }
         }
+    });
+    overlayWin.webContents.on('did-finish-load', () => {
+        broadcastOverlayMeta();
     });
 
     const url = getOverlayUrl();
@@ -326,18 +503,14 @@ export function createOverlayWindow(): BrowserWindow {
  * while Windows rebinds the layered-window hit-test path over League.
  */
 export function keepOverlayOnTop(): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
-    // If Windows dropped visibility mid-match without user hide, bring it back
-    if (!userHidden && !overlayWin.isVisible()) {
+    if (userHidden) return;
+    for (const win of overlayWindows()) {
         try {
-            overlayWin.showInactive();
+            if (!win.isVisible()) win.showInactive();
+            if (!win.isAlwaysOnTop()) assertAlwaysOnTop(win);
         } catch {
             // ignore
         }
-    }
-    if (!overlayWin.isVisible()) return;
-    if (!overlayWin.isAlwaysOnTop()) {
-        assertAlwaysOnTop(overlayWin);
     }
 }
 
@@ -346,7 +519,9 @@ export function showOverlay(): void {
 
     const win = createOverlayWindow();
     setOverlayThrottling(false);
-    if (!win.isVisible()) {
+    if (clickThrough && !alignMode) {
+        applyLockedClusters();
+    } else if (!win.isVisible()) {
         win.showInactive();
     }
     assertAlwaysOnTop(win);
@@ -355,16 +530,15 @@ export function showOverlay(): void {
 }
 
 export function hideOverlay(): void {
-    if (overlayWin && !overlayWin.isDestroyed()) {
-        if (overlayWin.isVisible()) {
-            overlayWin.hide();
-        }
-        // Hidden overlay should not keep a hot compositor path against the game.
-        setOverlayThrottling(true);
+    for (const win of overlayWindows()) {
+        if (win.isVisible()) win.hide();
     }
+    // Hidden overlay should not keep a hot compositor path against the game.
+    setOverlayThrottling(true);
 }
 
 export function destroyOverlay(): void {
+    destroyExtraWindows();
     if (overlayWin && !overlayWin.isDestroyed()) {
         overlayWin.destroy();
     }
@@ -431,7 +605,8 @@ export function setClickThrough(enabled: boolean): void {
             saveSettings();
         }
         alignMode = false;
-        applyFullscreenBounds();
+        // Tight column windows — never a display-sized layered HWND over League.
+        applyLockedClusters();
         overlayWin.setFocusable(false);
         // No { forward: true }: forwarding still routes every mousemove through
         // Chromium for hit-testing, which hitchs the cursor over League. Locked
@@ -444,6 +619,7 @@ export function setClickThrough(enabled: boolean): void {
     } else {
         // Unlocked = compact movable panel (game stays clickable around it)
         alignMode = false;
+        destroyExtraWindows();
         applyCompactPanelBounds();
         overlayWin.setFocusable(true);
         overlayWin.setIgnoreMouseEvents(false);
@@ -481,6 +657,7 @@ export function setAlignMode(enabled: boolean): boolean {
         }
         alignMode = true;
         clickThrough = false;
+        destroyExtraWindows();
         applyFullscreenBounds();
         overlayWin.setFocusable(true);
         overlayWin.setIgnoreMouseEvents(false);
@@ -490,6 +667,7 @@ export function setAlignMode(enabled: boolean): boolean {
         alignMode = false;
         // Back to compact movable panel (still unlocked)
         clickThrough = false;
+        destroyExtraWindows();
         applyCompactPanelBounds();
         overlayWin.setFocusable(true);
         overlayWin.setIgnoreMouseEvents(false);
@@ -512,6 +690,9 @@ export function setHudModules(next: unknown): HudModules {
     ensureSettingsLoaded();
     hudModules = normalizeHudModules({ ...hudModules, ...(next && typeof next === 'object' ? next : {}) });
     saveSettings();
+    if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+        applyLockedClusters();
+    }
     broadcastOverlayMeta();
     return { ...hudModules };
 }
@@ -526,6 +707,9 @@ export function setHudLayout(next: unknown): unknown {
     if (next && typeof next === 'object') {
         hudLayout = next;
         saveSettings();
+        if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+            applyLockedClusters();
+        }
         broadcastOverlayMeta();
     }
     return hudLayout;
@@ -539,6 +723,9 @@ export function getHudScale(): number {
 export function setHudScale(scale: number): number {
     hudScale = Math.max(0, Math.min(100, Math.round(scale)));
     saveSettings();
+    if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+        applyLockedClusters();
+    }
     broadcastOverlayMeta();
     return hudScale;
 }
@@ -551,6 +738,9 @@ export function getMapScale(): number {
 export function setMapScale(scale: number): number {
     mapScale = Math.max(0, Math.min(100, Math.round(scale)));
     saveSettings();
+    if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+        applyLockedClusters();
+    }
     broadcastOverlayMeta();
     return mapScale;
 }
@@ -607,20 +797,55 @@ export function getGameResolution(): { gameWidth: number; gameHeight: number } {
 }
 
 export function broadcastOverlayMeta(): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
-    overlayWin.webContents.send('overlay-meta', {
-        visible: !userHidden && overlayWin.isVisible(),
-        clickThrough,
-        userHidden,
-        hudScale,
-        mapScale,
-        chromeColor,
-        calibration,
-        gameWidth,
-        gameHeight,
-        alignMode,
-        hudModules,
-        hudLayout,
+    const display = screen.getPrimaryDisplay();
+    const windows = overlayWindows();
+    if (!windows.length) return;
+    const clusters =
+        clickThrough && !alignMode
+            ? clusterOverlayWindows({
+                  widgets: widgetsFromSettings(),
+                  display: display.bounds,
+                  gameWidth,
+                  gameHeight,
+                  hudScale,
+              })
+            : [];
+    windows.forEach((win, index) => {
+        if (win.isDestroyed()) return;
+        const cluster = clusters[index];
+        win.webContents.send('overlay-meta', {
+            visible: !userHidden && win.isVisible(),
+            clickThrough,
+            userHidden,
+            hudScale,
+            mapScale,
+            chromeColor,
+            calibration,
+            gameWidth,
+            gameHeight,
+            alignMode,
+            hudModules,
+            hudLayout,
+            displayWidth: display.bounds.width,
+            displayHeight: display.bounds.height,
+            slot: cluster
+                ? {
+                      id: cluster.id,
+                      originX: cluster.x - display.bounds.x,
+                      originY: cluster.y - display.bounds.y,
+                      moduleIds: cluster.moduleIds,
+                      stickerIds: cluster.stickerIds,
+                      mode: 'locked' as const,
+                  }
+                : {
+                      id: alignMode ? 'align' : 'compact',
+                      originX: 0,
+                      originY: 0,
+                      moduleIds: HUD_MODULE_IDS,
+                      stickerIds: [],
+                      mode: alignMode ? ('align' as const) : ('compact' as const),
+                  },
+        });
     });
 }
 
@@ -656,7 +881,7 @@ export function sendOverlayUpdate(payload: unknown): void {
 
     for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
-        const isOverlay = overlayWin != null && !overlayWin.isDestroyed() && win.id === overlayWin.id;
+        const isOverlay = overlayWindows().some((overlay) => overlay.id === win.id);
         win.webContents.send('overlay-update', isOverlay ? full : slim);
     }
 }
