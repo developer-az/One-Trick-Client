@@ -2,13 +2,13 @@ import { ingestChampionCatalog } from '../data/championCatalog';
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { buildCatalogBundle, buildRecommendation } from './buildCatalog';
 import { roleFromChampionTags } from './roles';
-import {
-  DEFAULT_CATALOG_API_BASE,
-  type CatalogBundle,
-  type CatalogChampion,
-  type CatalogItem,
-  type CatalogRecommendation,
-  type CatalogRole,
+import { CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE } from './site';
+import type {
+  CatalogBundle,
+  CatalogChampion,
+  CatalogItem,
+  CatalogRecommendation,
+  CatalogRole,
 } from './types';
 
 const STORAGE_KEY = 'onetrick.catalog.v1';
@@ -169,7 +169,7 @@ export async function warmCatalog(opts?: {
     }
   }
 
-  const bases = [opts?.apiBase, localApiBase(), DEFAULT_CATALOG_API_BASE].filter(
+  const bases = [opts?.apiBase, localApiBase(), ...CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE].filter(
     (value, index, list): value is string => !!value && list.indexOf(value) === index
   );
 

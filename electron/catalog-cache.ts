@@ -2,7 +2,10 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 
-const PAGES_API = 'https://developer-az.github.io/One-Trick-Client/api/v1';
+const CATALOG_APIS = [
+    'https://one-trick-client.vercel.app/api/v1',
+    'https://developer-az.github.io/One-Trick-Client/api/v1',
+];
 const DDRAGON_VERSIONS = 'https://ddragon.leagueoflegends.com/api/versions.json';
 
 let memory: unknown = null;
@@ -42,20 +45,22 @@ async function readJson(url: string): Promise<unknown> {
 }
 
 export async function refreshCatalogCache(): Promise<unknown | null> {
-    try {
-        const [manifest, champions, items, runes, recommendations, profiles] = await Promise.all([
-            readJson(`${PAGES_API}/manifest.json`),
-            readJson(`${PAGES_API}/champions.json`),
-            readJson(`${PAGES_API}/items.json`),
-            readJson(`${PAGES_API}/runes.json`),
-            readJson(`${PAGES_API}/recommendations.json`),
-            readJson(`${PAGES_API}/profiles.json`),
-        ]);
-        const bundle = { manifest, champions, items, runes, recommendations, profiles };
-        writeCache(bundle);
-        return bundle;
-    } catch {
-        // Static API may not be deployed yet — still try a live DDragon roster so new champs resolve.
+    for (const api of CATALOG_APIS) {
+        try {
+            const [manifest, champions, items, runes, recommendations, profiles] = await Promise.all([
+                readJson(`${api}/manifest.json`),
+                readJson(`${api}/champions.json`),
+                readJson(`${api}/items.json`),
+                readJson(`${api}/runes.json`),
+                readJson(`${api}/recommendations.json`),
+                readJson(`${api}/profiles.json`),
+            ]);
+            const bundle = { manifest, champions, items, runes, recommendations, profiles };
+            writeCache(bundle);
+            return bundle;
+        } catch {
+            /* try the next host */
+        }
     }
 
     try {

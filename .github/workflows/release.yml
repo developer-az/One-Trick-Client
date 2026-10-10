@@ -138,11 +138,12 @@ jobs:
             **One Trick ${{ github.ref_name }}** — production release.
 
             ### Install
-            - Download the Windows `.exe` from Assets below
+            - Download **One.Trick.Setup** from Assets below
             - Use **Borderless** display mode in League
             - Open the League client, connect in One Trick, then export in champ select
             - Overlay HUD modules: Sums, Gank, Vision, Buy, Action (Frames off by default)
             - **Sync LoL** if you enable Frames and need HUD/minimap alignment
+            - Pin a custom HUD in the companion **Studio** tab, or at https://one-trick-client.vercel.app/studio/
 
             ### In-game
             - **PageUp** / **Numpad 9** — toggle primary Flash (ADC or Mid)
@@ -152,9 +153,9 @@ jobs:
             - Main window parks during matches on purpose — live HUD is the overlay
 
             ### Highlights
-            - Gothic companion chrome restored (splash header, Hostiles / Bond / Loadout)
-            - Overlay stays a quiet HUD: item icons, one action line, no coach dump
-            - Toggleable HUD modules (Frames optional)
-            - Champion and item icons resolve through a live catalog + Community Dragon fallbacks
-            - Dual-rail overlay layout with correct left/right scale origins
+            - Live catalog API so every champion resolves (authored Pyke / Pantheon / Yone stay deep)
+            - HUD studio: drag modules and chrome stickers onto the League HUD / minimap map
+            - Overlay places widgets from saved layout JSON (dual-rail default)
+            - Next-move cue ranking with a 6s hold / +12 switch margin
+            - Site + studio on Vercel; desktop still owns LCU export and the click-through overlay
           generateReleaseNotes: true
