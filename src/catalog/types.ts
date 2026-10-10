@@ -89,6 +89,4 @@ export const AUTHORED_CATALOG_PROFILES: CatalogAuthoredProfile[] = [
   { id: 'yone-mid', championId: 'Yone', role: 'Mid' },
 ];
 
-/** GitHub Pages host for the static API. Desktop also live-refreshes DDragon/CDragon. */
-export const DEFAULT_CATALOG_API_BASE =
-  'https://developer-az.github.io/One-Trick-Client/api/v1';
+export { DEFAULT_CATALOG_API_BASE, CATALOG_API_BASES, SITE_ORIGIN } from './site';

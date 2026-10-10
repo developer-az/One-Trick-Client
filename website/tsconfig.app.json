@@ -25,6 +25,7 @@
   "include": [
     "src",
     "../src/catalog/types.ts",
+    "../src/catalog/site.ts",
     "../src/catalog/roles.ts",
     "../src/catalog/buildCatalog.ts",
     "../src/catalog/client.ts",

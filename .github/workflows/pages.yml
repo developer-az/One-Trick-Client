@@ -1,3 +1,4 @@
+# Optional GitHub Pages mirror. Canonical site is Vercel (website/ root).
 name: Deploy website
 
 on:

@@ -10,7 +10,7 @@
 [![React](https://img.shields.io/badge/React-19.2-blue)](https://react.dev/)
 [![Electron](https://img.shields.io/badge/Electron-39-blue)](https://www.electronjs.org/)
 
-[Download](https://github.com/developer-az/One-Trick-Client/releases) · [HUD Studio](https://developer-az.github.io/One-Trick-Client/studio/) · [Site](https://developer-az.github.io/One-Trick-Client/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
+[Download](https://github.com/developer-az/One-Trick-Client/releases) · [HUD Studio](https://one-trick-client.vercel.app/studio/) · [Site](https://one-trick-client.vercel.app/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
 
 </div>
 
@@ -44,7 +44,7 @@ Authored doctrine: **Pyke Support**, **Pantheon Support**, **Yone Mid**. Every o
 
 ### In-game overlay
 
-- **HUD studio** — pin modules and chrome stickers on a League HUD / minimap map (companion + [web studio](https://developer-az.github.io/One-Trick-Client/studio/)); overlay uses the saved layout
+- **HUD studio** — pin modules and chrome stickers on a League HUD / minimap map (companion + [web studio](https://one-trick-client.vercel.app/studio/)); overlay uses the saved layout
 - HUD modules you can toggle: enemy summoners, gank square, vision, next-buy icons, one time-critical action line
 - **Gank probability square** — yellow = fog / low-vision risk; red = brief high window from per-jungler pathing
 - **Vision** — short location + pink/sweep hint (detail in tooltip)
@@ -236,7 +236,7 @@ MIT — see [LICENSE](LICENSE).
 
 - **Issues**: [GitHub Issues](https://github.com/developer-az/One-Trick-Client/issues)
 - **Releases**: [GitHub Releases](https://github.com/developer-az/One-Trick-Client/releases)
-- **Site**: [developer-az.github.io/One-Trick-Client](https://developer-az.github.io/One-Trick-Client/)
+- **Site**: [one-trick-client.vercel.app](https://one-trick-client.vercel.app/)
 - **Repository**: [developer-az/One-Trick-Client](https://github.com/developer-az/One-Trick-Client)
 
 ---
