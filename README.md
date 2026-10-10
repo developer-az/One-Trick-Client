@@ -146,6 +146,51 @@ npm run verify:cues
 npm run verify:icons
 ```
 
+## Release readiness (Windows)
+
+Use this gate before tagging any `v*` release.
+
+### Acceptance criteria
+
+- `npm run dist` succeeds and generates both installer + portable outputs
+- App startup works and LCU connect/export works in client
+- Overlay + hotkeys work in live match:
+  - `PageUp` / `PageDown`
+  - `Numpad 9` / `Numpad 3` fallback
+- No regressions in supported profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**
+
+### Mandatory quality gates (must pass before tag)
+
+```bash
+npm run lint
+npm run verify:cues
+npm run verify:icons
+npm run electron:build
+npm run build
+npx tsc --noEmit
+```
+
+> The release workflow now enforces these checks before Windows packaging/publish.
+
+### Pre-release regression checklist
+
+- Installer and portable launch on Windows
+- Overlay show/hide, click-through, align mode, and **Sync LoL** all work
+- In-game FPS impact checked with overlay **on** and **off**
+- Admin/elevation hotkey behavior verified (UIPI edge case)
+- Match start/end transitions keep overlay persistence correct
+- Packaging metadata still valid (targets/icons/signing flags) and release artifacts exist
+- Smoke test on single monitor + multi-monitor + varied Windows DPI/scale setups
+
+### Performance validation
+
+- Run `npx electron scripts/perf-harness.mjs`
+- Confirm transition burst and steady-state CPU stay within expected budget
+- In live match, tune only high-impact paths:
+  - polling cadence
+  - overlay update frequency
+  - renderer workload while main window is parked
+
 ### Layout
 
 ```
