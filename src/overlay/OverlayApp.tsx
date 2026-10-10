@@ -104,6 +104,15 @@ export const OverlayApp: React.FC = () => {
     vw: typeof window !== 'undefined' ? window.innerWidth : 1920,
     vh: typeof window !== 'undefined' ? window.innerHeight : 1080,
   }));
+  const [displaySize, setDisplaySize] = useState({ w: 1920, h: 1080 });
+  const [slot, setSlot] = useState<{
+    id: string;
+    originX: number;
+    originY: number;
+    moduleIds: string[];
+    stickerIds: string[];
+    mode: 'locked' | 'compact' | 'align';
+  } | null>(null);
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
@@ -176,7 +185,21 @@ export const OverlayApp: React.FC = () => {
         gameHeight?: number;
         hudModules?: unknown;
         hudLayout?: unknown;
+        displayWidth?: number;
+        displayHeight?: number;
+        slot?: {
+          id: string;
+          originX: number;
+          originY: number;
+          moduleIds: string[];
+          stickerIds: string[];
+          mode: 'locked' | 'compact' | 'align';
+        };
       };
+      if (typeof meta.displayWidth === 'number' && typeof meta.displayHeight === 'number') {
+        setDisplaySize({ w: meta.displayWidth, h: meta.displayHeight });
+      }
+      if (meta.slot) setSlot(meta.slot);
       if (typeof meta.clickThrough === 'boolean') setClickThrough(meta.clickThrough);
       if (typeof meta.alignMode === 'boolean') setAlignMode(meta.alignMode);
       if (typeof meta.hudScale === 'number') setHudScale(meta.hudScale);
@@ -418,15 +441,30 @@ export const OverlayApp: React.FC = () => {
   const gameGeo = useMemo(
     () =>
       computeLeagueGeometry({
-        vw: viewport.vw,
-        vh: viewport.vh,
+        vw: slot?.mode === 'locked' ? displaySize.w : viewport.vw,
+        vh: slot?.mode === 'locked' ? displaySize.h : viewport.vh,
         hudScale,
         mapScale,
         gameWidth,
         gameHeight,
       }),
-    [viewport, hudScale, mapScale, gameWidth, gameHeight]
+    [viewport, displaySize, slot, hudScale, mapScale, gameWidth, gameHeight]
   );
+
+  const paintGeo = useMemo(() => {
+    if (!slot || slot.mode !== 'locked') return gameGeo;
+    return {
+      ...gameGeo,
+      offsetX: gameGeo.offsetX - slot.originX,
+      offsetY: gameGeo.offsetY - slot.originY,
+    };
+  }, [gameGeo, slot]);
+
+  const slotHasModule = (id: string): boolean => !slot || slot.mode !== 'locked' || slot.moduleIds.includes(id);
+  const slotStickers =
+    slot?.mode === 'locked'
+      ? hudLayout.stickers.filter((sticker) => slot.stickerIds.includes(sticker.id))
+      : hudLayout.stickers;
 
   if (!state.inGame) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
@@ -478,7 +516,7 @@ export const OverlayApp: React.FC = () => {
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}
-        enabled={showFrames}
+        enabled={showFrames && (alignMode || slotHasModule('frames'))}
         chromeColor={chromeColor}
         calibration={calibration}
         showGuides={alignMode}
@@ -526,11 +564,11 @@ export const OverlayApp: React.FC = () => {
 
       {!compactPanel && !collapsed && (
         <>
-          <OverlayStickers stickers={hudLayout.stickers} geo={gameGeo} />
-          {showSumsRail && layoutElement(hudLayout, 'sums')?.visible !== false && (
+          <OverlayStickers stickers={slotStickers} geo={paintGeo} />
+          {showSumsRail && slotHasModule('sums') && layoutElement(hudLayout, 'sums')?.visible !== false && (
           <div
             className="hud-overlay-scale hud-overlay-scale--left w-[220px]"
-            style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, gameGeo)}
+            style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo)}
           >
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
@@ -551,39 +589,39 @@ export const OverlayApp: React.FC = () => {
           </div>
           )}
 
-          {showGank && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+          {showGank && slotHasModule('gank') && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5"><GankSquare threat={gankStatus} compact /></div>
             </OverlayChromePanel>
           </div>
           )}
 
-          {showVision && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+          {showVision && slotHasModule('vision') && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5"><WardIndicator status={wardStatus} compact /></div>
             </OverlayChromePanel>
           </div>
           )}
 
-          {showAction && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+          {showAction && slotHasModule('action') && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5">{actionLine}</div>
             </OverlayChromePanel>
           </div>
           )}
 
-          {showBuy && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+          {showBuy && slotHasModule('buy') && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5">{buyRow}</div>
             </OverlayChromePanel>
           </div>
           )}
 
-          {showRightRail && !profileMatchesLocal && (
+          {showRightRail && !profileMatchesLocal && slotHasModule('gank') && (
           <div className="hud-overlay-scale hud-overlay-scale--right w-[220px] absolute top-14 right-3">
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
