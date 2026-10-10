@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'website/**'
+      - 'src/catalog/**'
+      - 'src/overlay/hudLayout.ts'
+      - 'scripts/generate-catalog.ts'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -31,6 +34,12 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: website/package-lock.json
+
+      - name: Generate live catalog API
+        working-directory: .
+        run: |
+          npm ci
+          npm run catalog:generate
 
       - name: Install
         run: npm ci

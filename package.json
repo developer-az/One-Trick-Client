@@ -1,8 +1,8 @@
 {
   "name": "pyke-dominator",
   "private": true,
-  "version": "1.1.0",
-  "description": "One Trick — League companion for Pyke / Pantheon Support + Yone Mid. LCU export and in-game overlay.",
+  "version": "1.2.0",
+  "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
     "type": "git",
@@ -45,6 +45,9 @@
     "lint": "eslint .",
     "verify:cues": "npx --yes tsx verify_overlay_cues.ts",
     "verify:icons": "npx --yes tsx verify_champion_icons.ts",
+    "verify:catalog": "npx --yes tsx verify_catalog.ts",
+    "verify:layout": "npx --yes tsx verify_layout.ts",
+    "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
     "electron:build": "tsc -p tsconfig.electron.json",

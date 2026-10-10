@@ -2,15 +2,15 @@
 
 <div align="center">
 
-**Windows League overlay client for Pyke Support, Pantheon Support, and Yone Mid — loadout export and a live HUD**
+**Windows League overlay + web HUD studio — authored Pyke / Pantheon / Yone, live catalog for every champion**
 
-[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0)
+[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.2.0)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.2-blue)](https://react.dev/)
 [![Electron](https://img.shields.io/badge/Electron-39-blue)](https://www.electronjs.org/)
 
-[Download v1.1.0](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0) · [Site](https://developer-az.github.io/One-Trick-Client/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
+[Download](https://github.com/developer-az/One-Trick-Client/releases) · [HUD Studio](https://developer-az.github.io/One-Trick-Client/studio/) · [Site](https://developer-az.github.io/One-Trick-Client/) · [Issues](https://github.com/developer-az/One-Trick-Client/issues)
 
 </div>
 
@@ -20,7 +20,7 @@
 
 **One Trick** connects to the League Client, fills enemy picks in champion select, recommends items and runes for your profile, exports loadouts into the client, and keeps a click-through HUD alive while you play.
 
-Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
+Authored doctrine: **Pyke Support**, **Pantheon Support**, **Yone Mid**. Every other champion gets a generic profile from the live Data Dragon / Community Dragon catalog API.
 
 ---
 
@@ -44,6 +44,7 @@ Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 
 ### In-game overlay
 
+- **HUD studio** — pin modules and chrome stickers on a League HUD / minimap map (companion + [web studio](https://developer-az.github.io/One-Trick-Client/studio/)); overlay uses the saved layout
 - HUD modules you can toggle: enemy summoners, gank square, vision, next-buy icons, one time-critical action line
 - **Gank probability square** — yellow = fog / low-vision risk; red = brief high window from per-jungler pathing
 - **Vision** — short location + pink/sweep hint (detail in tooltip)
@@ -64,8 +65,8 @@ Profiles: **Pyke Support**, **Pantheon Support**, **Yone Mid**.
 
 ### From a release (recommended)
 
-1. Open [**v1.1.0**](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.1.0)
-2. Download **`One.Trick.Setup.1.1.0.exe`**
+1. Open the [**latest release**](https://github.com/developer-az/One-Trick-Client/releases)
+2. Download **`One.Trick.Setup.*.exe`**
 3. Launch with the League Client open (or start League afterward — it reconnects)
 
 ### From source
@@ -84,7 +85,7 @@ Builds land in `release/`.
 ## Quick start
 
 1. Start **League of Legends**, then open **One Trick**
-2. Lock in on a supported profile (Pyke / Pantheon / Yone)
+2. Lock in — authored Pyke / Pantheon / Yone stay deep; any other champ uses the live catalog
 3. Review **items** and **runes**, then **Export**
 4. Overlay HUD appears when the match starts (Borderless display mode)
 
@@ -144,6 +145,9 @@ npm run website:build
 npm run lint
 npm run verify:cues
 npm run verify:icons
+npm run verify:catalog
+npm run verify:layout
+npm run catalog:generate      # website/public/api/v1
 ```
 
 ## Release readiness (Windows)
@@ -165,6 +169,8 @@ Use this gate before tagging any `v*` release.
 npm run lint
 npm run verify:cues
 npm run verify:icons
+npm run verify:catalog
+npm run verify:layout
 npm run electron:build
 npm run build
 npx tsc --noEmit
@@ -198,9 +204,10 @@ One-Trick-Client/
 ├── electron/           # Main process, LCU, live client, overlay, key hook
 ├── src/
 │   ├── components/     # Main window UI
+│   ├── catalog/        # Live DDragon/CDragon catalog + generic recs
 │   ├── logic/          # Builds, matchups, jungle, vision
-│   └── overlay/        # In-game overlay React app
-├── website/            # Product landing (GitHub Pages)
+│   └── overlay/        # In-game overlay + HUD studio canvas
+├── website/            # Landing + /studio + static /api/v1 catalog
 └── release/            # electron-builder output
 ```
 

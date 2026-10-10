@@ -1,5 +1,6 @@
 import type { Build, MatchupAnalysis } from '../logic/pykeLogic';
-import type { ProfileId } from '../logic/profiles';
+import { profileIdFromChampion, isSupportStyleProfile, profileFocusLane, type ProfileId } from '../logic/profiles';
+import { roleFromLivePosition } from '../catalog/roles';
 import { formatCd } from '../logic/summonerSpells';
 import { nextCannon, formatCannonEta } from '../logic/waveLogic';
 import { assessJungleThreat } from '../logic/jungleLogic';
@@ -98,11 +99,13 @@ export interface OverlayCueContext {
 
 /** Resolve the active profile for a live state (live champion wins over stored). */
 export function resolveProfileId(state: OverlayState, fallback?: ProfileId): ProfileId {
-  const live = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
-  if (live === 'yone') return 'yone-mid';
-  if (live === 'pantheon') return 'pantheon-support';
-  if (live === 'pyke') return 'pyke-support';
-  return state.profileHint || fallback || (state.isYone ? 'yone-mid' : 'pyke-support');
+  const liveName = state.localPlayer?.championName;
+  if (liveName) {
+    return profileIdFromChampion(liveName, roleFromLivePosition(state.localPlayer?.position));
+  }
+  if (state.profileHint) return state.profileHint;
+  if (state.isYone) return 'yone-mid';
+  return fallback || 'pyke-support';
 }
 
 /** Behind / even / ahead read straight off the live payload. */
@@ -119,7 +122,7 @@ export function situationFromState(state: OverlayState): ProfileSituation {
 /** Vision read for the standalone ward indicator (never in the cue stack). */
 export function getWardStatus(state: OverlayState, profileId: ProfileId): WardStatus | null {
   const gameTime = state.gameTime ?? 0;
-  const focusLane = profileId === 'yone-mid' ? 'mid' : 'bot';
+  const focusLane = profileFocusLane(profileId);
   const jg = assessJungleThreat(gameTime, state.enemies || [], focusLane);
   const items = state.localPlayer?.items || [];
   const owned = new Set(items.map((i) => i.itemID));
@@ -140,8 +143,7 @@ export function getGankStatus(
 ): import('../logic/jungleLogic').JungleThreat | null {
   const gameTime = state.gameTime ?? 0;
   if (gameTime <= 0) return null;
-  const focusLane = profileId === 'yone-mid' ? 'mid' : 'bot';
-  return assessJungleThreat(gameTime, state.enemies || [], focusLane);
+  return assessJungleThreat(gameTime, state.enemies || [], profileFocusLane(profileId));
 }
 
 /** Remaining recommended items — anything already owned by item ID is dropped. */
@@ -161,7 +163,26 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
   if (profileId === 'pantheon-support') {
     return finalizeCues(buildPantheonCues(state, ctx), state, profileId);
   }
-  return finalizeCues(buildPykeCues(state, ctx), state, profileId);
+  if (profileId === 'pyke-support') {
+    return finalizeCues(buildPykeCues(state, ctx), state, profileId);
+  }
+  return finalizeCues(buildGenericCues(state), state, profileId);
+}
+
+/** Shared jungle / vision / wave / threat helpers — no authored-doctrine spam. */
+function buildGenericCues(state: OverlayState): OverlayCue[] {
+  const cues: OverlayCue[] = [];
+  const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
+  const flashDown = (state.enemyBotSummoners || []).flatMap((lane) =>
+    lane.spells.filter((spell) => spell.short === 'Flash' && !spell.ready && spell.remaining > 0)
+  );
+  if (flashDown.length > 0) {
+    cues.push(actionCue('flash-up', `Flash ${formatCd(flashDown[0].remaining)}`, 'warn', 16));
+  }
+  if (level === 6) {
+    cues.push(actionCue('ult-online', 'R online', 'spike', 24));
+  }
+  return cues;
 }
 
 /** Coach / essay cues — kept in champ-select drawers, never on the live HUD. */
@@ -224,7 +245,7 @@ function finalizeCues(
     shared.push(actionCue(`threat-${threat.id}`, threat.cue.label, online ? 'spike' : 'warn'));
   }
 
-  if (profileId === 'pyke-support' || profileId === 'pantheon-support') {
+  if (isSupportStyleProfile(profileId)) {
     const cannon = nextCannon(gameTime);
     if (cannon?.isActionWindow && (cannon.eta == null || cannon.eta <= 20)) {
       shared.push(

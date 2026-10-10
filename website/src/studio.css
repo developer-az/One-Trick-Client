@@ -1,0 +1,82 @@
+.hud-studio-wrap {
+  overflow: auto;
+  border: 1px solid rgba(212, 216, 222, 0.22);
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(232, 184, 74, 0.06), transparent 45%),
+    #07080a;
+}
+
+.hud-studio-stage {
+  position: relative;
+  margin: 0 auto;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(18, 20, 24, 0.92), rgba(7, 8, 10, 0.96)),
+    repeating-linear-gradient(0deg, transparent 0 27px, rgba(212, 216, 222, 0.04) 27px 28px),
+    repeating-linear-gradient(90deg, transparent 0 27px, rgba(212, 216, 222, 0.04) 27px 28px);
+  touch-action: none;
+}
+
+.hud-studio-game {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(212, 216, 222, 0.2);
+  pointer-events: none;
+}
+
+.chrome-frame-box {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.chrome-frame-guide {
+  background: color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 14%, rgba(0, 0, 0, 0.35));
+  border: 1px dashed color-mix(in srgb, var(--chrome-frame-color, #d4d8de) 70%, transparent);
+}
+
+.chrome-frame-guide-map {
+  background: rgba(120, 200, 180, 0.16);
+  border-color: rgba(120, 200, 180, 0.7);
+}
+
+.chrome-frame-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(240, 244, 248, 0.95);
+}
+
+.hud-studio-pin,
+.hud-studio-sticker {
+  position: absolute;
+  z-index: 3;
+  padding: 0.35rem 0.55rem;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f2f4f7;
+  background: rgba(8, 8, 10, 0.78);
+  border: 1px solid rgba(212, 216, 222, 0.4);
+  cursor: grab;
+  user-select: none;
+}
+
+.hud-studio-sticker {
+  padding: 0.2rem;
+}
+
+.hud-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: #111;
+  color: #d4d8de;
+}

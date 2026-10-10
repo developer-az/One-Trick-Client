@@ -40,6 +40,10 @@ const profiles = [
     name: 'Yone Mid',
     line: 'Mid profile that tracks the enemy mid laner — jungle-aware when the draft asks.',
   },
+  {
+    name: 'Every other champion',
+    line: 'Generic profiles from Data Dragon tags + Community Dragon rune recs — new champs resolve on the next patch ingest.',
+  },
 ]
 
 const steps = [
@@ -96,6 +100,9 @@ export default function App() {
             <a href="#profiles" className="hover:text-chrome-bright">
               Profiles
             </a>
+            <a href={`${base}studio/`} className="hover:text-chrome-bright">
+              Studio
+            </a>
             <a href="#download" className="hover:text-chrome-bright">
               Download
             </a>
@@ -120,7 +127,7 @@ export default function App() {
                 className="animate-fade-up mt-5 max-w-md text-lg leading-relaxed text-chrome-silver/85 sm:text-xl"
                 style={{ animationDelay: '120ms' }}
               >
-                Overlay client for Pyke, Pantheon, and Yone — export in champ select, then read icons and numbers in game.
+                Overlay client for every champion — authored Pyke / Pantheon / Yone doctrine, live catalog for the rest, and a HUD studio you can pin.
               </p>
               <div className="animate-fade-up mt-8" style={{ animationDelay: '220ms' }}>
                 <DownloadButtons release={release} />
@@ -201,10 +208,10 @@ export default function App() {
                 Profiles
               </p>
               <h2 className="mt-3 font-display text-3xl tracking-wide text-chrome-bright sm:text-4xl">
-                One client. Three lanes of intent.
+                Authored one-tricks. Live catalog for everyone else.
               </h2>
             </Reveal>
-            <div className="mt-12 grid gap-px bg-chrome-silver/15 sm:grid-cols-3">
+            <div className="mt-12 grid gap-px bg-chrome-silver/15 sm:grid-cols-2 lg:grid-cols-4">
               {profiles.map((p, i) => (
                 <Reveal key={p.name} delayMs={i * 80} className="bg-chrome-ink">
                   <div className="h-full px-6 py-8 sm:px-7 sm:py-10">

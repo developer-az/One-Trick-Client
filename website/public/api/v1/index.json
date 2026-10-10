@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "patch": "16.20.1",
+  "routes": [
+    "/api/v1/manifest.json",
+    "/api/v1/champions.json",
+    "/api/v1/items.json",
+    "/api/v1/runes.json",
+    "/api/v1/recommendations.json",
+    "/api/v1/profiles.json"
+  ]
+}

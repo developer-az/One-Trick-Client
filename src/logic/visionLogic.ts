@@ -4,7 +4,7 @@
  * With sweeper / pink in inventory: name the exact job (deny gank path, pit, sweep).
  */
 
-import type { ProfileId } from './profiles';
+import { isSupportStyleProfile, profileFocusLane, type ProfileId } from './profiles';
 import type { JungleThreat } from './jungleLogic';
 
 export interface WardCue {
@@ -56,7 +56,7 @@ export function visionBuyPlan(
   const held = opts?.controlWardCount ?? 0;
   const hasOracle = !!opts?.hasOracle;
   const hasUmbral = !!opts?.hasUmbral;
-  const support = profileId !== 'yone-mid';
+  const support = isSupportStyleProfile(profileId);
 
   // No pink recommendation until first-back window — potions matter more
   if (minutes < 2.4) {
@@ -86,7 +86,7 @@ export function visionBuyPlan(
   if (support && minutes >= 13 && minutes <= 15.5 && held < 2) toBuy = Math.max(toBuy, 2 - held);
 
   let trinket: VisionBuyPlan['trinket'] = 'stealth';
-  if (profileId === 'yone-mid') {
+  if (profileFocusLane(profileId) === 'mid') {
     trinket = minutes >= 14 || hasUmbral ? 'farsight' : 'stealth';
   } else if (hasOracle) {
     trinket = 'oracle';
@@ -131,7 +131,7 @@ export function buildWardCues(
   const { due, cycleIndex } = rewardCountdown(gameTime);
   const jgName = jg?.junglerName || 'jg';
 
-  if (profileId !== 'yone-mid') {
+  if (profileFocusLane(profileId) !== 'mid') {
     if (minutes >= 1.0 && minutes <= 1.5) {
       cues.push({
         id: 'ward-open',
@@ -247,7 +247,7 @@ function sweepTargetList(
   const targets: string[] = [];
   if (hasOracle) {
     if (minutes < 8) {
-      targets.push(profileId === 'yone-mid' ? 'Sweep river bush before E trade' : 'Sweep pixel / river before crash leave');
+      targets.push(profileFocusLane(profileId) === 'mid' ? 'Sweep river bush before E trade' : 'Sweep pixel / river before crash leave');
     } else if (minutes < 14) {
       targets.push('Sweep pit + river entrance before obj walk-up');
       if (jg?.gankRisk !== 'low') targets.push(`Clear ${jg?.junglerName || 'jg'} path brush`);
@@ -297,7 +297,7 @@ export function buildWardStatus(
     where = top.label;
     why = top.detail;
     urgency = top.urgency;
-  } else if (profileId === 'yone-mid') {
+  } else if (profileFocusLane(profileId) === 'mid') {
     where = 'Cover gank path';
     why = jgBot ? 'Bot-side river while shoving' : 'River bush on shove side';
   } else if (minutes >= 12) {

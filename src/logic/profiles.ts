@@ -1,8 +1,11 @@
 /**
- * Champion profile abstraction — Pyke Support (primary), Pantheon Support
- * (off-champ when Pyke is banned) and Yone Mid.
- * UI / overlay / export all resolve logic through getProfile().
+ * Champion profile abstraction — authored Pyke / Pantheon / Yone stay deep.
+ * Every other Live Client champion resolves to generic:{championId}:{role}.
  */
+import { findChampionInCatalog, getCatalog, inferCatalogRole } from '../catalog/client';
+import { isCatalogRole, roleFromChampionTags } from '../catalog/roles';
+import type { CatalogRole } from '../catalog/types';
+import { resolveChampionRef } from '../data/championCatalog';
 import {
   analyzeMatchup,
   calculateBuild,
@@ -27,10 +30,15 @@ import {
   calculatePantheonRunes,
 } from './pantheonLogic';
 import type { ProfileSituation } from './situation';
+import { createGenericProfile } from './genericProfile';
 
-export type ProfileId = 'pyke-support' | 'pantheon-support' | 'yone-mid';
+export type AuthoredProfileId = 'pyke-support' | 'pantheon-support' | 'yone-mid';
+export type GenericProfileId = `generic:${string}:${CatalogRole}`;
+export type ProfileId = AuthoredProfileId | GenericProfileId;
 
 export type ProfileRole = 'Support' | 'Mid' | 'Top' | 'Jungle' | 'Bot';
+
+const GENERIC_ID = /^generic:([A-Za-z0-9]+):(Support|Mid|Top|Jungle|Bot)$/;
 
 export interface ChampionProfile {
   id: ProfileId;
@@ -150,22 +158,122 @@ const yoneMid: ChampionProfile = {
     calculateYoneDominance(enemies, build, allyJungle),
 };
 
-export const PROFILES: ChampionProfile[] = [pykeSupport, pantheonSupport, yoneMid];
+export const AUTHORED_PROFILES: ChampionProfile[] = [pykeSupport, pantheonSupport, yoneMid];
 
-export const PROFILE_IDS: ProfileId[] = PROFILES.map((p) => p.id);
+/** Authored one-tricks — UI switcher still leads with these. */
+export const PROFILES: ChampionProfile[] = AUTHORED_PROFILES;
+
+export const AUTHORED_PROFILE_IDS: AuthoredProfileId[] = AUTHORED_PROFILES.map(
+  (p) => p.id as AuthoredProfileId
+);
+
+export const PROFILE_IDS: AuthoredProfileId[] = AUTHORED_PROFILE_IDS;
+
+export function isAuthoredProfileId(value: unknown): value is AuthoredProfileId {
+  return typeof value === 'string' && (AUTHORED_PROFILE_IDS as string[]).includes(value);
+}
+
+export function isGenericProfileId(value: unknown): value is GenericProfileId {
+  return typeof value === 'string' && GENERIC_ID.test(value);
+}
 
 export function isProfileId(value: unknown): value is ProfileId {
-  return typeof value === 'string' && (PROFILE_IDS as string[]).includes(value);
+  return isAuthoredProfileId(value) || isGenericProfileId(value);
+}
+
+export function parseGenericProfileId(id: string): { championId: string; role: CatalogRole } | null {
+  const match = GENERIC_ID.exec(id);
+  if (!match) return null;
+  return { championId: match[1], role: match[2] as CatalogRole };
+}
+
+export function genericProfileId(championId: string, role: CatalogRole): GenericProfileId {
+  return `generic:${championId}:${role}`;
+}
+
+const genericCache = new Map<string, ChampionProfile>();
+let genericCatalogStamp = '';
+
+export function invalidateGenericProfiles(): void {
+  genericCache.clear();
+  genericCatalogStamp = '';
+}
+
+function refreshGenericCache(): void {
+  const stamp = getCatalog()?.manifest.generatedAt || '';
+  if (stamp !== genericCatalogStamp) {
+    genericCache.clear();
+    genericCatalogStamp = stamp;
+  }
+}
+
+function authoredByChampion(token: string): ChampionProfile | null {
+  const compact = token.toLowerCase().replace(/[^a-z]/g, '');
+  return (
+    AUTHORED_PROFILES.find((p) => p.championId.toLowerCase().replace(/[^a-z]/g, '') === compact) ||
+    null
+  );
 }
 
 export function getProfile(id: ProfileId | string | null | undefined): ChampionProfile {
-  return PROFILES.find((p) => p.id === id) || pykeSupport;
+  if (isAuthoredProfileId(id)) {
+    return AUTHORED_PROFILES.find((p) => p.id === id) || pykeSupport;
+  }
+  if (isGenericProfileId(id)) {
+    refreshGenericCache();
+    const hit = genericCache.get(id);
+    if (hit) return hit;
+    const parsed = parseGenericProfileId(id);
+    if (!parsed) return pykeSupport;
+    const profile = createGenericProfile(id, parsed.championId, parsed.role);
+    genericCache.set(id, profile);
+    return profile;
+  }
+  return pykeSupport;
 }
 
-export function profileFromChampionName(name: string | null | undefined): ChampionProfile | null {
+export function profileFromChampionName(
+  name: string | null | undefined,
+  role?: CatalogRole | null
+): ChampionProfile | null {
   if (!name) return null;
-  const lower = name.toLowerCase().replace(/[^a-z]/g, '');
-  return PROFILES.find((p) => p.championId.toLowerCase() === lower) || null;
+  const authored = authoredByChampion(name);
+  if (authored) return authored;
+
+  const catalogChamp = findChampionInCatalog(getCatalog(), { name, id: name });
+  const ref = catalogChamp || resolveChampionRef({ name, id: name });
+  const championId = catalogChamp?.id || ref?.id || name.replace(/[^a-zA-Z0-9]/g, '');
+  if (!championId) return null;
+  const resolvedRole =
+    (role && isCatalogRole(role) ? role : null) ||
+    inferCatalogRole(catalogChamp, null) ||
+    roleFromChampionTags(catalogChamp?.tags);
+  return getProfile(genericProfileId(championId, resolvedRole));
+}
+
+export function profileIdFromChampion(
+  name: string | null | undefined,
+  role?: CatalogRole | null
+): ProfileId {
+  return profileFromChampionName(name, role)?.id || 'pyke-support';
+}
+
+export function profileFocusLane(profileId: ProfileId): 'mid' | 'bot' {
+  if (profileId === 'yone-mid') return 'mid';
+  if (isGenericProfileId(profileId)) {
+    const role = parseGenericProfileId(profileId)?.role;
+    if (role === 'Mid' || role === 'Top' || role === 'Jungle') return 'mid';
+  }
+  return 'bot';
+}
+
+export function isSupportStyleProfile(profileId: ProfileId): boolean {
+  if (profileId === 'pyke-support' || profileId === 'pantheon-support') return true;
+  if (isGenericProfileId(profileId)) {
+    const role = parseGenericProfileId(profileId)?.role;
+    return role === 'Support' || role === 'Bot';
+  }
+  return false;
 }
 
 const STORAGE_KEY = 'dominator.activeProfile';

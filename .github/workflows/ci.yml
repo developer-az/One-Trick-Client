@@ -34,6 +34,12 @@ jobs:
       - name: Champion icon catalog
         run: npm run verify:icons
 
+      - name: Live catalog profiles
+        run: npm run verify:catalog
+
+      - name: HUD layout schema
+        run: npm run verify:layout
+
       - name: Build TypeScript
         run: npm run electron:build
 

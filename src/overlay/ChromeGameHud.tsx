@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { normalizeChromeColor } from './chromeTheme';
+import { computeLeagueGeometry } from './leagueGeometry';
 
 /**
  * League anchors the bottom HUD cluster (spells/items/portrait) to bottom-center
@@ -29,73 +30,10 @@ function useLeagueGeometry(
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  return useMemo(() => {
-    const safeHud = Number.isFinite(hudScale) ? Math.max(0, Math.min(100, hudScale)) : 20;
-    const safeMap = Number.isFinite(mapScale) ? Math.max(0, Math.min(100, mapScale)) : 33;
-    const refH = gameHeight && gameHeight > 0 ? gameHeight : 1080;
-    const refW = gameWidth && gameWidth > 0 ? gameWidth : 1920;
-
-    // Letterbox / pillarbox the configured game res into the overlay display
-    const displayAspect = vw / Math.max(1, vh);
-    const gameAspect = refW / Math.max(1, refH);
-    let gameViewW: number;
-    let gameViewH: number;
-    let offsetX: number;
-    let offsetY: number;
-    if (displayAspect > gameAspect) {
-      gameViewH = vh;
-      gameViewW = vh * gameAspect;
-      offsetX = (vw - gameViewW) / 2;
-      offsetY = 0;
-    } else {
-      gameViewW = vw;
-      gameViewH = vw / gameAspect;
-      offsetX = 0;
-      offsetY = (vh - gameViewH) / 2;
-    }
-
-    // Scale vs 1080 design baseline using the *rendered* game height
-    const s = gameViewH / 1080;
-    const g = safeHud / 100;
-    const m = 0.5 + (safeMap / 100) * 1.5;
-    const mapNorm = (m - 0.5) / 1.5;
-
-    // Empirical SR HUD cluster at 1080p across GlobalScale (spellbook + items + portrait)
-    const abilityW = Math.round((540 + 460 * g) * s);
-    const abilityH = Math.round((88 + 62 * g) * s);
-    const abilityBottomPad = Math.round((3 + 4 * g) * s);
-
-    // Minimap: MinimapScale 0.5–2.0 → ~140–360px at 1080p; small edge inset grows slightly with scale
-    const mapSize = Math.round((140 + 220 * mapNorm) * s);
-    const mapPad = Math.round((2 + 6 * mapNorm) * s);
-
-    // Distance from the physical display edge to the game viewport edge
-    const displayBottomInset = Math.max(0, Math.round(vh - offsetY - gameViewH));
-    const displayRightInset = Math.max(0, Math.round(vw - offsetX - gameViewW));
-
-    return {
-      abilityW,
-      abilityH,
-      abilityBottomPad,
-      mapSize,
-      mapPad,
-      displayBottomInset,
-      displayRightInset,
-      offsetX: Math.round(offsetX),
-      offsetY: Math.round(offsetY),
-      gameViewW: Math.round(gameViewW),
-      gameViewH: Math.round(gameViewH),
-      safeHud,
-      safeMap,
-      g,
-      m,
-      vh,
-      vw,
-      s,
-      refH,
-      refW,
-    };
-  }, [vh, vw, hudScale, mapScale, gameWidth, gameHeight]);
+  return useMemo(
+    () => computeLeagueGeometry({ vw, vh, hudScale, mapScale, gameWidth, gameHeight }),
+    [vh, vw, hudScale, mapScale, gameWidth, gameHeight]
+  );
 }
 
 function ThornTip({ style }: { style?: React.CSSProperties }) {
