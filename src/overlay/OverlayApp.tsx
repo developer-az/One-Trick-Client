@@ -25,9 +25,20 @@ import { ChromeGameHud } from './ChromeGameHud';
 import { ChromeMark } from './ChromeMark';
 import { WardIndicator } from './WardIndicator';
 import { GankSquare } from './GankSquare';
+import { warmCatalog } from '../catalog/client';
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
+import { OverlayStickers } from './OverlayStickers';
+import {
+  dualRailLayout,
+  layoutElement,
+  layoutStyle,
+  layoutToHudModules,
+  normalizeHudLayout,
+  type HudLayout,
+} from './hudLayout';
+import { computeLeagueGeometry } from './leagueGeometry';
 
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
@@ -88,6 +99,11 @@ export const OverlayApp: React.FC = () => {
   const [gameWidth, setGameWidth] = useState(1920);
   const [gameHeight, setGameHeight] = useState(1080);
   const [hudModules, setHudModules] = useState<HudModules>(DEFAULT_HUD_MODULES);
+  const [hudLayout, setHudLayout] = useState<HudLayout>(() => dualRailLayout());
+  const [viewport, setViewport] = useState(() => ({
+    vw: typeof window !== 'undefined' ? window.innerWidth : 1920,
+    vh: typeof window !== 'undefined' ? window.innerHeight : 1080,
+  }));
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
@@ -96,28 +112,51 @@ export const OverlayApp: React.FC = () => {
   const profile = useMemo(() => getProfile(profileId), [profileId]);
 
   useEffect(() => {
-    void warmDdragonVersion()
-      .then((latest) =>
-        fetch(`https://ddragon.leagueoflegends.com/cdn/${latest}/data/en_US/champion.json`)
-      )
-      .catch(() => fetch('https://ddragon.leagueoflegends.com/cdn/15.1.1/data/en_US/champion.json'))
-      .then((res) => res.json())
-      .then((data) => {
-        interface ChampionData {
-          id: string;
-          key: string;
-          name: string;
-          tags: string[];
+    const onResize = () => setViewport({ vw: window.innerWidth, vh: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  useEffect(() => {
+    void warmCatalog({
+      electronGet: async () => {
+        const res = await window.electronAPI?.getCatalog?.();
+        return (res?.catalog as import('../catalog/types').CatalogBundle) || null;
+      },
+    })
+      .then((bundle) => {
+        if (bundle?.champions?.length) {
+          const list = bundle.champions.map((c) => ({
+            id: c.id,
+            key: c.key,
+            name: c.name,
+            tags: c.tags,
+            damageType: c.damageType || damageTypeFromTags(c.tags),
+          }));
+          ingestChampionCatalog(list);
+          setChampions(list);
+          return;
         }
-        const list = (Object.values(data.data) as ChampionData[]).map((c) => ({
-          id: c.id,
-          key: c.key,
-          name: c.name,
-          tags: c.tags,
-          damageType: damageTypeFromTags(c.tags),
-        }));
-        ingestChampionCatalog(list);
-        setChampions(list);
+        return warmDdragonVersion()
+          .then((latest) => fetch(`https://ddragon.leagueoflegends.com/cdn/${latest}/data/en_US/champion.json`))
+          .then((res) => res.json())
+          .then((data) => {
+            interface ChampionData {
+              id: string;
+              key: string;
+              name: string;
+              tags: string[];
+            }
+            const list = (Object.values(data.data) as ChampionData[]).map((c) => ({
+              id: c.id,
+              key: c.key,
+              name: c.name,
+              tags: c.tags,
+              damageType: damageTypeFromTags(c.tags),
+            }));
+            ingestChampionCatalog(list);
+            setChampions(list);
+          });
       })
       .catch((err) => console.error('Overlay champion load failed:', err));
   }, []);
@@ -136,6 +175,7 @@ export const OverlayApp: React.FC = () => {
         gameWidth?: number;
         gameHeight?: number;
         hudModules?: unknown;
+        hudLayout?: unknown;
       };
       if (typeof meta.clickThrough === 'boolean') setClickThrough(meta.clickThrough);
       if (typeof meta.alignMode === 'boolean') setAlignMode(meta.alignMode);
@@ -145,7 +185,13 @@ export const OverlayApp: React.FC = () => {
       if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
       if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
       if (meta.calibration) setCalibration(meta.calibration);
-      if (meta.hudModules) setHudModules(normalizeHudModules(meta.hudModules));
+      if (meta.hudLayout) {
+        const nextLayout = normalizeHudLayout(meta.hudLayout);
+        setHudLayout(nextLayout);
+        setHudModules(layoutToHudModules(nextLayout));
+      } else if (meta.hudModules) {
+        setHudModules(normalizeHudModules(meta.hudModules));
+      }
     };
 
     const unsubUpdate = window.electronAPI.onOverlayUpdate((payload) => {
@@ -224,8 +270,8 @@ export const OverlayApp: React.FC = () => {
     };
   }, [allyKey, champions]);
 
-  const allyPartner = profileId === 'yone-mid' ? allyChampions.jungle : allyChampions.mid;
-  const adcForProfile = profileId === 'yone-mid' ? null : allyChampions.adc;
+  const allyPartner = profile.focusAllies.includes('YourJungle') ? allyChampions.jungle : allyChampions.mid;
+  const adcForProfile = profile.focusAllies.includes('YourADC') ? allyChampions.adc : null;
 
   const situationKey = `${state.localPlayer?.level ?? 0}:${state.localPlayer?.scores?.kills ?? 0}:${
     state.localPlayer?.scores?.deaths ?? 0
@@ -365,17 +411,30 @@ export const OverlayApp: React.FC = () => {
   };
 
   const hotkeyHint =
-    profileId === 'yone-mid'
+    profile.role === 'Mid' || profile.role === 'Top' || profile.role === 'Jungle'
       ? 'PgUp/Num9 Mid Flash · PgDn/Num3 Ignite/TP'
       : 'PgUp/Num9 ADC Flash · PgDn/Num3 Supp Flash';
+
+  const gameGeo = useMemo(
+    () =>
+      computeLeagueGeometry({
+        vw: viewport.vw,
+        vh: viewport.vh,
+        hudScale,
+        mapScale,
+        gameWidth,
+        gameHeight,
+      }),
+    [viewport, hudScale, mapScale, gameWidth, gameHeight]
+  );
 
   if (!state.inGame) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
 
-  const profileMatchesLocal =
-    !state.localPlayer?.championName ||
-    state.localPlayer.championName.toLowerCase() === profile.championId.toLowerCase();
+  const liveCompact = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
+  const profileCompact = profile.championId.toLowerCase().replace(/[^a-z]/g, '');
+  const profileMatchesLocal = !liveCompact || liveCompact === profileCompact;
 
   const showFrames = alignMode || (hudModules.frames && !compactPanel);
   const showSumsRail = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
@@ -467,8 +526,12 @@ export const OverlayApp: React.FC = () => {
 
       {!compactPanel && !collapsed && (
         <>
-          {showSumsRail && (
-          <div className="hud-overlay-scale hud-overlay-scale--left absolute top-14 left-3 w-[220px]">
+          <OverlayStickers stickers={hudLayout.stickers} geo={gameGeo} />
+          {showSumsRail && layoutElement(hudLayout, 'sums')?.visible !== false && (
+          <div
+            className="hud-overlay-scale hud-overlay-scale--left w-[220px]"
+            style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, gameGeo)}
+          >
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
                 <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
@@ -488,8 +551,40 @@ export const OverlayApp: React.FC = () => {
           </div>
           )}
 
-          {showRightRail && (
-          <div className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3 w-[220px]">
+          {showGank && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5"><GankSquare threat={gankStatus} compact /></div>
+            </OverlayChromePanel>
+          </div>
+          )}
+
+          {showVision && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5"><WardIndicator status={wardStatus} compact /></div>
+            </OverlayChromePanel>
+          </div>
+          )}
+
+          {showAction && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5">{actionLine}</div>
+            </OverlayChromePanel>
+          </div>
+          )}
+
+          {showBuy && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, gameGeo)}>
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5">{buyRow}</div>
+            </OverlayChromePanel>
+          </div>
+          )}
+
+          {showRightRail && !profileMatchesLocal && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px] absolute top-14 right-3">
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -501,26 +596,17 @@ export const OverlayApp: React.FC = () => {
                   />
                   <div className="min-w-0">
                     <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
-                    <div className="hud-chrome-meta !text-[8px]">
-                      {profile.shortLabel}
-                      {state.localPlayer ? ` · ${state.localPlayer.level}` : ''}
-                    </div>
+                    <div className="hud-chrome-meta !text-[8px]">{profile.shortLabel}</div>
                   </div>
                 </div>
                 <button type="button" onClick={() => setCollapsed(true)} className="hud-btn" title="Collapse rails">
                   –
                 </button>
               </div>
-              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
-                {!profileMatchesLocal ? (
-                  <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
-                    Switch profile → {state.localPlayer?.championName || '?'}
-                  </div>
-                ) : null}
-                {showGank ? <GankSquare threat={gankStatus} compact /> : null}
-                {showVision ? <WardIndicator status={wardStatus} compact /> : null}
-                {actionLine}
-                {buyRow}
+              <div className="relative z-10 px-2 py-1.5">
+                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
+                  Switch profile → {state.localPlayer?.championName || '?'}
+                </div>
               </div>
             </OverlayChromePanel>
           </div>

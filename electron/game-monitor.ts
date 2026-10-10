@@ -166,12 +166,33 @@ async function cacheChampSelectEnemies(): Promise<void> {
     }
 }
 
-/** Live champion → profile id. Keep in sync with src/logic/profiles.ts. */
-const PROFILE_BY_CHAMPION: Record<string, string> = {
+/** Live champion → authored profile. Unknown champs become generic:{id}:{role}. */
+const AUTHORED_BY_CHAMPION: Record<string, string> = {
     pyke: 'pyke-support',
     pantheon: 'pantheon-support',
     yone: 'yone-mid',
 };
+
+const LIVE_ROLE: Record<string, string> = {
+    TOP: 'Top',
+    JUNGLE: 'Jungle',
+    MIDDLE: 'Mid',
+    MID: 'Mid',
+    BOTTOM: 'Bot',
+    BOT: 'Bot',
+    UTILITY: 'Support',
+    SUPPORT: 'Support',
+    ADC: 'Bot',
+};
+
+function profileHintFromLive(championName: string | undefined, position?: string): string | null {
+    if (!championName) return null;
+    const compact = championName.toLowerCase().replace(/[^a-z]/g, '');
+    if (AUTHORED_BY_CHAMPION[compact]) return AUTHORED_BY_CHAMPION[compact];
+    const role = LIVE_ROLE[(position || '').trim().toUpperCase()] || 'Mid';
+    const championId = championName.replace(/[^a-zA-Z0-9]/g, '') || championName;
+    return `generic:${championId}:${role}`;
+}
 
 function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: string | null) {
     const localPlayer = live ? findLocalPlayer(live) : null;
@@ -179,11 +200,15 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
     const isPyke = localPlayer ? localName === 'pyke' : true;
     const isYone = localPlayer ? localName === 'yone' : false;
     const profileHint = localPlayer
-        ? PROFILE_BY_CHAMPION[localName] ?? null
+        ? profileHintFromLive(localPlayer.championName, localPlayer.position)
         : 'pyke-support';
 
     // Yone Mid tracks enemy mid sums; support profiles track bot + support
-    setSummonerFocus(profileHint === 'yone-mid' || isYone ? 'mid' : 'bot');
+    const midFocus =
+        profileHint === 'yone-mid' ||
+        isYone ||
+        (typeof profileHint === 'string' && /generic:[^:]+:(Mid|Top|Jungle)$/.test(profileHint));
+    setSummonerFocus(midFocus ? 'mid' : 'bot');
 
     const enemyPlayers =
         live?.allPlayers?.filter((p) => localPlayer && p.team !== localPlayer.team) || [];

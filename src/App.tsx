@@ -10,12 +10,24 @@ import type { Champion, Build, RunePage, MatchupAnalysis, DominanceMetrics } fro
 import {
   PROFILES,
   getProfile,
+  isGenericProfileId,
   isProfileId,
   loadStoredProfileId,
   storeProfileId,
   profileFromChampionName,
   type ProfileId,
 } from './logic/profiles';
+import { roleFromLcuPosition } from './catalog/roles';
+import { warmCatalog } from './catalog/client';
+import { HudStudio } from './components/HudStudio';
+import {
+  applyModulesToLayout,
+  dualRailLayout,
+  loadStoredHudLayout,
+  normalizeHudLayout,
+  storeHudLayout,
+  type HudLayout,
+} from './overlay/hudLayout';
 import type { OverlayBotSummoner } from './overlay/overlayLogic';
 import { ChromeMark } from './overlay/ChromeMark';
 import { CHROME_COLOR_PRESETS, normalizeChromeColor } from './overlay/chromeTheme';
@@ -62,6 +74,10 @@ const App: React.FC = () => {
   const [mapScale, setMapScale] = useState(33);
   const [chromeColor, setChromeColor] = useState('#d4d8de');
   const [hudModules, setHudModules] = useState<HudModules>(DEFAULT_HUD_MODULES);
+  const [hudLayout, setHudLayout] = useState<HudLayout>(() =>
+    typeof window !== 'undefined' ? loadStoredHudLayout() : dualRailLayout()
+  );
+  const [workspace, setWorkspace] = useState<'loadout' | 'studio'>('loadout');
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
@@ -73,32 +89,49 @@ const App: React.FC = () => {
     storeProfileId(id);
   };
 
-  // Fetch Champions + warm Data Dragon version for icon/splash URLs
+  // Live catalog (static API + DDragon/CDragon refresh) so new champs resolve without a release.
   useEffect(() => {
-    void warmDdragonVersion()
-      .then((latestVersion) =>
-        fetch(`https://ddragon.leagueoflegends.com/cdn/${latestVersion}/data/en_US/champion.json`)
-      )
-      .catch(() => fetch('https://ddragon.leagueoflegends.com/cdn/15.1.1/data/en_US/champion.json'))
-      .then((res) => res.json())
-      .then((data) => {
-        interface ChampionData {
-          id: string;
-          key: string;
-          name: string;
-          tags: string[];
+    void warmCatalog({
+      electronGet: async () => {
+        const res = await window.electronAPI?.getCatalog?.();
+        return (res?.catalog as import('./catalog/types').CatalogBundle) || null;
+      },
+    })
+      .then((bundle) => {
+        if (bundle?.champions?.length) {
+          const list: Champion[] = bundle.champions.map((c) => ({
+            id: c.id,
+            key: c.key,
+            name: c.name,
+            tags: c.tags,
+            damageType: c.damageType,
+          }));
+          setChampions(list);
+          ingestChampionCatalog(list);
+          return;
         }
-
-        const championsData = Object.values(data.data) as ChampionData[];
-        const list: Champion[] = championsData.map((c: ChampionData) => ({
-          id: c.id,
-          key: c.key,
-          name: c.name,
-          tags: c.tags,
-          damageType: c.tags.includes('Mage') || c.tags.includes('Support') ? 'Magic' : 'Physical',
-        }));
-        setChampions(list);
-        ingestChampionCatalog(list);
+        return warmDdragonVersion()
+          .then((latestVersion) =>
+            fetch(`https://ddragon.leagueoflegends.com/cdn/${latestVersion}/data/en_US/champion.json`)
+          )
+          .then((res) => res.json())
+          .then((data) => {
+            interface ChampionData {
+              id: string;
+              key: string;
+              name: string;
+              tags: string[];
+            }
+            const list: Champion[] = (Object.values(data.data) as ChampionData[]).map((c) => ({
+              id: c.id,
+              key: c.key,
+              name: c.name,
+              tags: c.tags,
+              damageType: c.tags.includes('Mage') || c.tags.includes('Support') ? 'Magic' : 'Physical',
+            }));
+            setChampions(list);
+            ingestChampionCatalog(list);
+          });
       })
       .catch((error) => {
         console.error('Failed to fetch champions:', error);
@@ -144,7 +177,14 @@ const App: React.FC = () => {
         setHudScale(res.hudScale);
         if (typeof res.mapScale === 'number') setMapScale(res.mapScale);
         if (typeof res.chromeColor === 'string') setChromeColor(res.chromeColor);
-        if (res.hudModules) setHudModules(normalizeHudModules(res.hudModules));
+        if (res.hudLayout) {
+          const next = normalizeHudLayout(res.hudLayout);
+          setHudLayout(next);
+          storeHudLayout(next);
+          setHudModules(normalizeHudModules(res.hudModules || next.elements));
+        } else if (res.hudModules) {
+          setHudModules(normalizeHudModules(res.hudModules));
+        }
       }
     });
 
@@ -152,11 +192,16 @@ const App: React.FC = () => {
       setOverlayVisible(payload.visible);
     });
     const unsubMeta = window.electronAPI.onOverlayMeta?.((payload) => {
-      const meta = payload as { clickThrough?: boolean; hudScale?: number; mapScale?: number; chromeColor?: string; hudModules?: unknown };
+      const meta = payload as { clickThrough?: boolean; hudScale?: number; mapScale?: number; chromeColor?: string; hudModules?: unknown; hudLayout?: unknown };
       if (typeof meta.clickThrough === 'boolean') setOverlayClickThrough(meta.clickThrough);
       if (typeof meta.hudScale === 'number') setHudScale(meta.hudScale);
       if (typeof meta.mapScale === 'number') setMapScale(meta.mapScale);
       if (typeof meta.chromeColor === 'string') setChromeColor(meta.chromeColor);
+      if (meta.hudLayout) {
+        const next = normalizeHudLayout(meta.hudLayout);
+        setHudLayout(next);
+        storeHudLayout(next);
+      }
       if (meta.hudModules) setHudModules(normalizeHudModules(meta.hudModules));
     });
 
@@ -278,7 +323,8 @@ const App: React.FC = () => {
             const me = myTeam.find((m) => m.cellId === localPlayerCellId);
             if (me?.championId && me.championId !== 0) {
               const myChamp = champions.find((c) => c.key === String(me.championId));
-              const matched = profileFromChampionName(myChamp?.id || myChamp?.name);
+              const assigned = roleFromLcuPosition(me.assignedPosition || me.teamPosition || me.position);
+              const matched = profileFromChampionName(myChamp?.id || myChamp?.name, assigned);
               if (matched) {
                 setProfileId((prev) => {
                   if (prev !== matched.id) {
@@ -436,9 +482,10 @@ const App: React.FC = () => {
     const enemyRoles = ['Top', 'Jungle', 'Mid', 'Bot', 'Support'];
     const enemies = enemyRoles.map(role => selections[role]).filter(c => c !== null) as Champion[];
     // Pyke partners: ADC + Mid. Yone is mid — partner is Jungle only.
-    const yourADC = profile.id === 'yone-mid' ? null : selections.YourADC;
-    const allyPartner =
-      profile.id === 'yone-mid' ? selections.YourJungle : selections.YourMid;
+    const yourADC = profile.focusAllies.includes('YourADC') ? selections.YourADC : null;
+    const allyPartner = profile.focusAllies.includes('YourJungle')
+      ? selections.YourJungle
+      : selections.YourMid;
 
     if (enemies.length > 0) {
       const currentBuild = profile.calculateBuild(enemies, yourADC, allyPartner);
@@ -642,12 +689,29 @@ const App: React.FC = () => {
   const handleHudModuleToggle = async (id: HudModuleId) => {
     const next = { ...hudModules, [id]: !hudModules[id] };
     setHudModules(next);
+    const nextLayout = applyModulesToLayout(hudLayout, next);
+    setHudLayout(nextLayout);
+    storeHudLayout(nextLayout);
     try {
       const res = await window.electronAPI?.setOverlayHudModules?.(next);
       if (res?.success && res.hudModules) setHudModules(normalizeHudModules(res.hudModules));
+      await window.electronAPI?.setOverlayHudLayout?.(nextLayout);
     } catch (error) {
       console.error('Unable to save HUD modules:', error);
     }
+  };
+
+  const handleLayoutChange = (next: HudLayout) => {
+    const normalized = normalizeHudLayout(next);
+    const nextModules = { ...hudModules };
+    for (const el of normalized.elements) {
+      if (el.id in nextModules) nextModules[el.id as HudModuleId] = el.visible;
+    }
+    setHudLayout(normalized);
+    setHudModules(nextModules);
+    storeHudLayout(normalized);
+    void window.electronAPI?.setOverlayHudLayout?.(normalized);
+    void window.electronAPI?.setOverlayHudModules?.(nextModules);
   };
 
   return (
@@ -732,7 +796,7 @@ const App: React.FC = () => {
                   <span className="font-mono text-[10px] tracking-[0.28em] uppercase text-chrome-dim">
                     Windows · League of Legends
                   </span>
-                  <span className="hud-chip hud-chip--quiet !py-0.5 !text-[8px]">v1.1.0</span>
+                  <span className="hud-chip hud-chip--quiet !py-0.5 !text-[8px]">v1.2.0</span>
                 </div>
                 <h1 className="hud-brand text-3xl md:text-5xl truncate leading-none">One Trick</h1>
                 <p className="mt-2 font-mono text-[10px] tracking-[0.22em] uppercase text-chrome-dim/90">
@@ -758,6 +822,32 @@ const App: React.FC = () => {
                     {p.shortLabel}
                   </button>
                 ))}
+                {isGenericProfileId(profileId) && (
+                  <button
+                    type="button"
+                    className="hud-profile-tab is-active"
+                    title={profile.label}
+                  >
+                    <ChampionIcon championId={profile.championId} size={18} className="hud-champ-icon" />
+                    {profile.shortLabel}
+                  </button>
+                )}
+              </div>
+              <div className="hud-profile-switch" role="group" aria-label="Workspace">
+                <button
+                  type="button"
+                  className={`hud-profile-tab ${workspace === 'loadout' ? 'is-active' : ''}`}
+                  onClick={() => setWorkspace('loadout')}
+                >
+                  Loadout
+                </button>
+                <button
+                  type="button"
+                  className={`hud-profile-tab ${workspace === 'studio' ? 'is-active' : ''}`}
+                  onClick={() => setWorkspace('studio')}
+                >
+                  Studio
+                </button>
               </div>
               <div
                 className={`hud-chip flex items-center gap-2 ${
@@ -861,7 +951,24 @@ const App: React.FC = () => {
         </header>
 
         {/* In-match: main UI goes static — overlay owns CPU; avoid rebuild churn */}
-        {overlayInGame ? (
+        {workspace === 'studio' && !overlayInGame ? (
+          <HudStudio
+            layout={hudLayout}
+            onLayoutChange={handleLayoutChange}
+            modules={hudModules}
+            onModulesChange={(next) => {
+              setHudModules(next);
+              const synced = applyModulesToLayout(hudLayout, next);
+              setHudLayout(synced);
+              storeHudLayout(synced);
+              void window.electronAPI?.setOverlayHudModules?.(next);
+              void window.electronAPI?.setOverlayHudLayout?.(synced);
+            }}
+            chromeColor={chromeColor}
+            hudScale={hudScale}
+            mapScale={mapScale}
+          />
+        ) : overlayInGame ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-fade-in">
             <HudFrame accent="steel" label="Match Live" className="p-6 lg:col-span-5">
               <div className="flex flex-col gap-3">
@@ -933,14 +1040,18 @@ const App: React.FC = () => {
               <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-chrome-dim mb-1">02 — Allies</p>
               <h2 className="hud-heading text-xl text-chrome-bright mb-4">
                 <ChromeMark size={14} className="text-chrome-dim inline-block align-[-2px] mr-1.5" />{' '}
-                {profile.id === 'yone-mid' ? 'Ally Jungle' : 'Ally Lanes'}
+                {profile.focusAllies.includes('YourJungle') && !profile.focusAllies.includes('YourADC')
+                  ? 'Ally Jungle'
+                  : 'Ally Lanes'}
               </h2>
               <p className="text-[10px] font-mono text-chrome-dim/75 mb-3 tracking-wide leading-relaxed">
                 {profile.id === 'yone-mid'
                   ? 'You are mid — matchup math uses your jungler, not another mid.'
                   : profile.id === 'pantheon-support'
                     ? 'ADC first — you play through them. Mid decides whether a roam is free.'
-                    : 'ADC + mid for roam / 2v2 scoring.'}
+                    : isGenericProfileId(profile.id)
+                      ? `${profile.label} — live catalog runes and tag-scored items.`
+                      : 'ADC + mid for roam / 2v2 scoring.'}
               </p>
               <ChampionSelect
                 champions={champions}

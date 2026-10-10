@@ -22,5 +22,21 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "../src/catalog/types.ts",
+    "../src/catalog/roles.ts",
+    "../src/catalog/buildCatalog.ts",
+    "../src/catalog/client.ts",
+    "../src/overlay/hudLayout.ts",
+    "../src/overlay/leagueGeometry.ts",
+    "../src/overlay/chromeTheme.ts",
+    "../src/overlay/ChromeMark.tsx",
+    "../src/overlay/HudStudioCanvas.tsx",
+    "../src/overlay/OverlayStickers.tsx",
+    "../src/overlay/hudModules.ts",
+    "../src/components/GameIcons.tsx",
+    "../src/data/ddragonAssets.ts",
+    "../src/data/championCatalog.ts"
+  ]
 }

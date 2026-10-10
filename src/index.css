@@ -1316,6 +1316,83 @@ html:not(.overlay-root) .font-mono {
   font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
 }
 
+.hud-studio-wrap {
+  overflow: auto;
+  border: 1px solid rgba(212, 216, 222, 0.22);
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(232, 184, 74, 0.06), transparent 45%),
+    #07080a;
+}
+
+.hud-studio-stage {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(18, 20, 24, 0.92), rgba(7, 8, 10, 0.96)),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 27px,
+      rgba(212, 216, 222, 0.04) 27px 28px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 27px,
+      rgba(212, 216, 222, 0.04) 27px 28px
+    );
+  touch-action: none;
+}
+
+.hud-studio-stage.is-edit {
+  cursor: crosshair;
+}
+
+.hud-studio-game {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid rgba(212, 216, 222, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.hud-studio-pin,
+.hud-studio-sticker {
+  position: absolute;
+  z-index: 3;
+  padding: 0.35rem 0.55rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--chrome-bright, #f2f4f7);
+  background: rgba(8, 8, 10, 0.78);
+  border: 1px solid rgba(212, 216, 222, 0.4);
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  cursor: grab;
+  user-select: none;
+}
+
+.hud-studio-sticker {
+  padding: 0.2rem;
+  background: rgba(8, 8, 10, 0.55);
+}
+
+.hud-studio-pin.is-drag,
+.hud-studio-sticker.is-drag {
+  cursor: grabbing;
+  border-color: rgba(242, 244, 247, 0.75);
+}
+
+.hud-studio-sticker-text {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  letter-spacing: 0.16em;
+}
+
+.hud-overlay-sticker {
+  pointer-events: none;
+  z-index: 2;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
   .animate-slide-in,

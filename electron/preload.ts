@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setOverlayMapScale: (scale: number) => ipcRenderer.invoke('overlay-set-map-scale', scale),
     setOverlayChromeColor: (color: string) => ipcRenderer.invoke('overlay-set-chrome-color', color),
     setOverlayHudModules: (modules: unknown) => ipcRenderer.invoke('overlay-set-hud-modules', modules),
+    setOverlayHudLayout: (layout: unknown) => ipcRenderer.invoke('overlay-set-hud-layout', layout),
+    getCatalog: () => ipcRenderer.invoke('catalog-get'),
+    refreshCatalog: () => ipcRenderer.invoke('catalog-refresh'),
     syncLeagueScales: () => ipcRenderer.invoke('overlay-sync-league-scales'),
     adjustOverlayCalibration: (target: 'ability' | 'minimap', field: 'dx' | 'dy' | 'dw' | 'dh', delta: number) =>
         ipcRenderer.invoke('overlay-adjust-calibration', target, field, delta),

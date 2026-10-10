@@ -29,6 +29,8 @@ import {
     setChromeColor,
     getHudModules,
     setHudModules,
+    getHudLayout,
+    setHudLayout,
     syncScalesFromLeague,
     getCalibration,
     adjustCalibration,
@@ -45,6 +47,7 @@ import {
     type TrackedRole,
 } from './summoner-tracker';
 import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive } from './global-key-hook';
+import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 
 process.env.DIST = path.join(__dirname, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(__dirname, '../public');
@@ -283,6 +286,10 @@ app.whenReady().then(() => {
         startGameMonitor();
     }, 2000);
 
+    void refreshCatalogCache().catch(() => {
+        loadCatalogCache();
+    });
+
     // IPC Handlers
     ipcMain.handle('lcu-connect', async () => {
         try {
@@ -456,6 +463,19 @@ app.whenReady().then(() => {
         return { success: true, hudModules: setHudModules(modules) };
     });
 
+    ipcMain.handle('overlay-set-hud-layout', async (_event, layout: unknown) => {
+        return { success: true, hudLayout: setHudLayout(layout) };
+    });
+
+    ipcMain.handle('catalog-get', () => {
+        return { success: true, catalog: loadCatalogCache() };
+    });
+
+    ipcMain.handle('catalog-refresh', async () => {
+        const catalog = await refreshCatalogCache();
+        return { success: !!catalog, catalog };
+    });
+
     ipcMain.handle('overlay-sync-league-scales', async () => {
         const res = syncScalesFromLeague();
         return { success: true, ...res };
@@ -486,6 +506,7 @@ app.whenReady().then(() => {
             mapScale: getMapScale(),
             chromeColor: getChromeColor(),
             hudModules: getHudModules(),
+            hudLayout: getHudLayout(),
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,

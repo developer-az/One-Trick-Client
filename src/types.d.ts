@@ -60,6 +60,9 @@ declare global {
             setOverlayMapScale: (scale: number) => Promise<{ success: boolean; mapScale: number }>;
             setOverlayChromeColor: (color: string) => Promise<{ success: boolean; chromeColor: string }>;
             setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
+            setOverlayHudLayout: (layout: unknown) => Promise<{ success: boolean; hudLayout?: unknown }>;
+            getCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
+            refreshCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             syncLeagueScales: () => Promise<{ success: boolean; hudScale: number; mapScale: number; source?: string }>;
             adjustOverlayCalibration: (target: 'ability' | 'minimap', field: 'dx' | 'dy' | 'dw' | 'dh', delta: number) => Promise<{ success: boolean; calibration: OverlayCalibration }>;
             resetOverlayCalibration: () => Promise<{ success: boolean; calibration: OverlayCalibration }>;
@@ -73,6 +76,7 @@ declare global {
                 mapScale?: number;
                 chromeColor?: string;
                 hudModules?: HudModules;
+                hudLayout?: unknown;
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;

@@ -56,6 +56,7 @@ const DEFAULT_HUD_MODULES: HudModules = {
 };
 
 let hudModules: HudModules = { ...DEFAULT_HUD_MODULES };
+let hudLayout: unknown = null;
 let settingsLoaded = false;
 
 function normalizeHudModules(value: unknown): HudModules {
@@ -167,6 +168,8 @@ function loadSettings(): void {
             interactiveBounds = settings.interactiveBounds;
         }
         hudModules = normalizeHudModules(settings.hudModules);
+        const savedLayout = (settings as { hudLayout?: unknown }).hudLayout;
+        if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
     } catch {
         // No saved settings yet.
     }
@@ -183,6 +186,7 @@ function persistSettings(preferLeagueCfg: boolean): void {
                 interactiveBounds,
                 calibration,
                 hudModules,
+                hudLayout,
                 preferLeagueCfg,
             }),
             'utf8'
@@ -512,6 +516,21 @@ export function setHudModules(next: unknown): HudModules {
     return { ...hudModules };
 }
 
+export function getHudLayout(): unknown {
+    ensureSettingsLoaded();
+    return hudLayout;
+}
+
+export function setHudLayout(next: unknown): unknown {
+    ensureSettingsLoaded();
+    if (next && typeof next === 'object') {
+        hudLayout = next;
+        saveSettings();
+        broadcastOverlayMeta();
+    }
+    return hudLayout;
+}
+
 export function getHudScale(): number {
     ensureSettingsLoaded();
     return hudScale;
@@ -601,6 +620,7 @@ export function broadcastOverlayMeta(): void {
         gameHeight,
         alignMode,
         hudModules,
+        hudLayout,
     });
 }
 
