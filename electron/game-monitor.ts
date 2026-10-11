@@ -1,4 +1,5 @@
-import { connectToLCU, makeLCURequest } from './lcu-connector';
+import { makeLCURequest } from './lcu-connector';
+import { lcuSocket } from './lcu-socket';
 import { fetchLiveClientData, findLocalPlayer, type LiveClientAllGameData } from './live-client';
 import {
     showOverlay,
@@ -23,49 +24,37 @@ import {
     setSummonerFocus,
 } from './summoner-tracker';
 import { clipboard } from 'electron';
+import { getAppSettings } from './app-settings';
+
+/**
+ * Match lifecycle, driven by League Client events (see lcu-socket.ts).
+ *
+ * Nothing here polls the League client. The only timer is the Live Client
+ * read, and it runs only while a match is in progress (or, when the client
+ * can't be found at all, as a slow probe for a running game).
+ */
 
 /** True terminal phases — only these end a match immediately. */
 const MATCH_OVER_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 
-/** Soft lobby phases — only end the match if live client is also gone (strike buffer). */
-const LOBBY_PHASES = new Set([
-    'Lobby',
-    'ChampSelect',
-    'ReadyCheck',
-    'Matchmaking',
-    'None',
-]);
-
 /** Gameflow phases where an active match (including Practice Tool) is running. */
-const IN_GAME_PHASES = new Set(['InProgress', 'GameStart']);
+const IN_GAME_PHASES = new Set(['InProgress', 'GameStart', 'Reconnect']);
 
-/** Quiet lobby / menu — rare phase checks only. */
-const POLL_IDLE_MS = 5000;
-/** Champ select needs faster enemy/summoner ingest. */
-const POLL_CHAMPSELECT_MS = 2000;
 /** In-game: overlay owns the hot path; ~2.5s keeps cues/wards fresh without thrashing. */
 const POLL_INGAME_MS = 2500;
 /** In-game with the overlay hidden: still ingest live for timers, but less often. */
 const POLL_INGAME_HIDDEN_MS = 8000;
+/** No League client found: probe the game API slowly in case a match is running anyway. */
+const POLL_PROBE_MS = 5000;
 /** Clipboard is a synchronous OS call — never more than once per this window. */
 const CLIPBOARD_MIN_INTERVAL_MS = 20000;
-/** Soft end requires this many consecutive failed ticks. */
+/** Live Client must fail this many consecutive reads before a match is considered over. */
 const END_GAME_STRIKES_NEEDED = 4;
 /** Re-assert always-on-top at most this often (DWM churn = FPS loss). */
 const KEEP_ON_TOP_MIN_MS = 20000;
-/** Re-bind PageUp/PageDown hook periodically — Windows can drop it mid-match. */
-const HOTKEY_REBIND_MIN_MS = 45000;
-/** Lobby/menu LCU reconnect backoff. */
-const LCU_RECONNECT_IDLE_MS = 5000;
-/**
- * Mid-match reconnect backoff. PowerShell/WMI fallback can freeze the PC for
- * seconds — never thrash it while Live Client is still the source of truth.
- */
-const LCU_RECONNECT_INGAME_MS = 45000;
 
 let lastClipboardWrite = 0;
 let lastKeepOnTopAt = 0;
-let lastHotkeyRebindAt = 0;
 /** Last healthy live payload — never clobber the HUD with a null Live Client blip. */
 let lastGoodPayload: ReturnType<typeof buildOverlayPayload> | null = null;
 
@@ -75,15 +64,16 @@ export interface CachedEnemy {
     position?: string;
 }
 
-let monitorInterval: ReturnType<typeof setInterval> | null = null;
+let monitorStarted = false;
+let liveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastChampSelectEnemies: CachedEnemy[] = [];
 let inGame = false;
-/** Consecutive ticks where the match looked over — avoid destroying overlay on blips. */
+/** Consecutive Live Client failures while we believe a match is running. */
 let endGameStrikes = 0;
 let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
-let lastLcuConnectAttempt = 0;
 let lastOverlayFingerprint = '';
-let currentPollMs = POLL_IDLE_MS;
+let currentPollMs = POLL_INGAME_MS;
+let liveReadsTotal = 0;
 let onGameStateChange: ((active: boolean) => void) | null = null;
 /** Optional hook so main can re-bind PageUp/PageDown when a match starts. */
 let onMatchStartHotkeys: (() => void) | null = null;
@@ -96,7 +86,12 @@ export function isCurrentlyInGame(): boolean {
     return inGame;
 }
 
-/** Optional hook so main window can minimize / pause work while League is running. */
+/** Diagnostics for the performance panel. */
+export function getMonitorStats(): { inGame: boolean; livePollMs: number | null; liveReads: number } {
+    return { inGame, livePollMs: liveTimer ? currentPollMs : null, liveReads: liveReadsTotal };
+}
+
+/** Optional hook so main window can hide / pause work while League is running. */
 export function setGameStateChangeHandler(handler: ((active: boolean) => void) | null): void {
     onGameStateChange = handler;
 }
@@ -105,64 +100,49 @@ export function setMatchStartHotkeyHandler(handler: (() => void) | null): void {
     onMatchStartHotkeys = handler;
 }
 
-/** Attempt (re)connect with backoff. Mid-match uses a long cooldown to avoid PowerShell stalls. */
-async function ensureLcuConnected(): Promise<boolean> {
-    const now = Date.now();
-    const backoff = inGame ? LCU_RECONNECT_INGAME_MS : LCU_RECONNECT_IDLE_MS;
-    if (now - lastLcuConnectAttempt < backoff) return false;
-    lastLcuConnectAttempt = now;
-    try {
-        await connectToLCU();
-        return true;
-    } catch {
-        return false;
-    }
-}
+function ingestChampSelectSession(session: unknown): void {
+    if (!session || typeof session !== 'object') return;
+    const theirTeam = (session as {
+        theirTeam?: Array<{
+            championId?: number;
+            championName?: string;
+            assignedPosition?: string;
+            teamPosition?: string;
+            position?: string;
+            spell1Id?: number;
+            spell2Id?: number;
+        }>;
+    }).theirTeam;
+    if (!Array.isArray(theirTeam)) return;
 
-async function pollGameflowPhase(): Promise<string | null> {
-    try {
-        const phase = await makeLCURequest('GET', '/lol-gameflow/v1/gameflow-phase');
-        return typeof phase === 'string' ? phase : null;
-    } catch {
-        return null;
-    }
-}
-
-async function cacheChampSelectEnemies(): Promise<void> {
-    try {
-        const session = await makeLCURequest('GET', '/lol-champ-select/v1/session');
-        if (!session || typeof session !== 'object') return;
-
-        const theirTeam = (session as {
-            theirTeam?: Array<{
-                championId?: number;
-                championName?: string;
-                assignedPosition?: string;
-                teamPosition?: string;
-                position?: string;
-                spell1Id?: number;
-                spell2Id?: number;
-            }>;
-        }).theirTeam;
-        if (!Array.isArray(theirTeam)) return;
-
-        const enemies: CachedEnemy[] = [];
-        for (const member of theirTeam) {
-            if (member.championId && member.championId !== 0) {
-                enemies.push({
-                    championId: member.championId,
-                    championName: member.championName,
-                    position: member.assignedPosition,
-                });
-            }
+    const enemies: CachedEnemy[] = [];
+    for (const member of theirTeam) {
+        if (member.championId && member.championId !== 0) {
+            enemies.push({
+                championId: member.championId,
+                championName: member.championName,
+                position: member.assignedPosition,
+            });
         }
-        if (enemies.length > 0) {
-            lastChampSelectEnemies = enemies;
+    }
+    if (enemies.length > 0) {
+        lastChampSelectEnemies = enemies;
+    }
+    // Auto-fill enemy summoner intel while sitting in client
+    ingestChampSelectTeam(theirTeam);
+
+    const summons = serializeSummoners();
+    if (summons.length > 0) {
+        const fp = `pre:${summonerFingerprint()}`;
+        if (fp !== lastOverlayFingerprint) {
+            lastOverlayFingerprint = fp;
+            sendOverlayUpdate({
+                inGame: false,
+                enemyBotSummoners: summons,
+                cachedChampSelectEnemies: lastChampSelectEnemies,
+                timestamp: Date.now(),
+            });
         }
-        // Auto-fill enemy bot summoner intel while sitting in client
-        ingestChampSelectTeam(theirTeam);
-    } catch {
-        // Not in champ select
     }
 }
 
@@ -330,7 +310,6 @@ function resetMatchCaches(): void {
     lastOverlayFingerprint = '';
     lastGoodPayload = null;
     lastKeepOnTopAt = 0;
-    lastHotkeyRebindAt = 0;
     resetSummonerTracker();
 }
 
@@ -341,29 +320,32 @@ function maybeKeepOverlayOnTop(): void {
     keepOverlayOnTop();
 }
 
-function maybeRebindHotkeys(): void {
-    const now = Date.now();
-    if (now - lastHotkeyRebindAt < HOTKEY_REBIND_MIN_MS) return;
-    lastHotkeyRebindAt = now;
+function beginMatch(): void {
+    console.info('[match] started');
+    inGame = true;
+    endGameStrikes = 0;
+    if (destroyOverlayTimer) {
+        clearTimeout(destroyOverlayTimer);
+        destroyOverlayTimer = null;
+    }
+    // New match — never stay hidden from a previous manual hide
+    setOverlayUserHidden(false);
+    if (getAppSettings().overlayEnabled) {
+        syncScalesFromLeague();
+        createOverlayWindow();
+        showOverlay();
+    }
     try {
         onMatchStartHotkeys?.();
     } catch {
         // ignore
     }
-}
-
-function setPollCadence(ms: number): void {
-    if (ms === currentPollMs && monitorInterval) return;
-    currentPollMs = ms;
-    if (monitorInterval) {
-        clearInterval(monitorInterval);
-        monitorInterval = setInterval(() => {
-            void tick();
-        }, currentPollMs);
-    }
+    onGameStateChange?.(true);
 }
 
 function endGameSession(): void {
+    if (!inGame) return;
+    console.info('[match] ended');
     inGame = false;
     endGameStrikes = 0;
     resetMatchCaches();
@@ -382,173 +364,100 @@ function endGameSession(): void {
         localPlayer: null,
         timestamp: Date.now(),
     });
-    setPollCadence(POLL_IDLE_MS);
     onGameStateChange?.(false);
+    scheduleLive();
+}
+
+/** Should the Live Client be read at all right now, and how often? */
+function liveCadence(): number | null {
+    const phase = lcuSocket.phase;
+    if (inGame || (phase && IN_GAME_PHASES.has(phase))) {
+        return isOverlayUserHidden() ? POLL_INGAME_HIDDEN_MS : POLL_INGAME_MS;
+    }
+    // No client to tell us about matches: probe slowly so a running game is still found.
+    if (lcuSocket.state === 'searching') return POLL_PROBE_MS;
+    return null;
+}
+
+function scheduleLive(): void {
+    if (!monitorStarted) return;
+    const cadence = liveCadence();
+    if (cadence === null) {
+        if (liveTimer) clearTimeout(liveTimer);
+        liveTimer = null;
+        return;
+    }
+    if (liveTimer && cadence === currentPollMs) return;
+    if (liveTimer) clearTimeout(liveTimer);
+    currentPollMs = cadence;
+    liveTimer = setTimeout(() => {
+        liveTimer = null;
+        void liveTick().finally(scheduleLive);
+    }, cadence);
 }
 
 let tickInFlight = false;
 
-async function tick(): Promise<void> {
-    // Guard against overlapping ticks: if LCU/Live Client latency ever exceeds
-    // the poll cadence, setInterval would otherwise stack concurrent ticks.
+async function liveTick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
     try {
-        // Mid-match: prefer Live Client first. Never spawn a PowerShell LCU
-        // reconnect while the game API is healthy — that stalls mouse/input.
-        // Always fetch while in-game (even if overlay is hidden) so summoner
-        // ingest / timers keep updating.
-        let live: LiveClientAllGameData | null = null;
+        const phase = lcuSocket.phase;
+        const live = await fetchLiveClientData();
+        liveReadsTotal += 1;
         const overlayHidden = isOverlayUserHidden();
-        if (inGame) {
-            live = await fetchLiveClientData();
-        }
 
-        let phase = await pollGameflowPhase();
-        if (phase === null && !(inGame && live)) {
-            const reconnected = await ensureLcuConnected();
-            if (reconnected) {
-                phase = await pollGameflowPhase();
-            }
-        }
-
-        const phaseInGame = phase ? IN_GAME_PHASES.has(phase) : false;
-        const phaseMatchOver = phase ? MATCH_OVER_PHASES.has(phase) : false;
-        const phaseLobby = phase ? LOBBY_PHASES.has(phase) : false;
-        const phaseChampSelect = phase === 'ChampSelect' || phase === 'ReadyCheck';
-
-        // Champ-select ingest only — skip LCU session reads while sitting in lobby/menus
-        if (!inGame && !phaseInGame && phaseChampSelect) {
-            await cacheChampSelectEnemies();
-            setPollCadence(POLL_CHAMPSELECT_MS);
-        } else if (!inGame && !phaseInGame) {
-            setPollCadence(POLL_IDLE_MS);
-        }
-
-        // Live client is the in-game hot path. Always fetch while we believe a match
-        // is running (even if the overlay is hidden) so summoner ingest / timers keep.
-        // Skip only on known terminal post-game phases.
-        if (live === null && (phaseInGame || phase === null || inGame) && !phaseMatchOver) {
-            live = await fetchLiveClientData();
-        }
-        const liveAvailable = live !== null;
-
-        // Prefer gameflow when known for true end-of-game. Lobby/ChampSelect mid-match
-        // must NOT instantly kill the overlay — those blips happen when LCU flaps.
-        // Stay in-session on live blips if we already have a good payload.
-        const shouldShow =
-            phaseInGame ||
-            (liveAvailable && !phaseMatchOver && phase === null) ||
-            (inGame && !phaseMatchOver && (liveAvailable || !!lastGoodPayload));
-
-        if (shouldShow) {
+        if (live) {
+            if (phase && MATCH_OVER_PHASES.has(phase)) return;
             const wasInGame = inGame;
-            inGame = true;
-            if (liveAvailable) endGameStrikes = 0;
-            if (destroyOverlayTimer) {
-                clearTimeout(destroyOverlayTimer);
-                destroyOverlayTimer = null;
-            }
-            setPollCadence(overlayHidden ? POLL_INGAME_HIDDEN_MS : POLL_INGAME_MS);
+            if (!wasInGame) beginMatch();
+            endGameStrikes = 0;
 
-            if (!wasInGame) {
-                // New match — never stay hidden from a previous manual hide
-                setOverlayUserHidden(false);
-                syncScalesFromLeague();
-                createOverlayWindow();
-                showOverlay();
-                lastHotkeyRebindAt = Date.now();
-                try {
-                    onMatchStartHotkeys?.();
-                } catch {
-                    // ignore
-                }
-                onGameStateChange?.(true);
-            } else if (!overlayHidden) {
+            if (wasInGame && !overlayHidden) {
                 // Self-heal: window was destroyed mid-match — bring it back
-                if (!getOverlayWindow()) {
+                if (!getOverlayWindow() && getAppSettings().overlayEnabled) {
                     createOverlayWindow();
                     showOverlay();
                 }
                 maybeKeepOverlayOnTop();
-                maybeRebindHotkeys();
-            } else {
-                // Hidden: still refresh hotkeys so PageUp works when they unhide
-                maybeRebindHotkeys();
             }
 
-            if (liveAvailable) {
-                const payload = buildOverlayPayload(live, phase);
-                lastGoodPayload = payload;
-                if (overlayHidden) {
-                    // Slim ping so the main window stays parked as "in match"
-                    if (!wasInGame) {
-                        sendOverlayUpdate({ inGame: true, timestamp: Date.now() });
-                    }
-                } else {
-                    const fp = overlayFingerprint(payload);
-                    if (fp !== lastOverlayFingerprint) {
-                        lastOverlayFingerprint = fp;
-                        sendOverlayUpdate(payload);
-                    }
-                }
-            } else if (lastGoodPayload) {
-                // Live Client blip — hold last good board (never wipe items/jungle/wards).
-                // Advance clock locally so countdowns keep moving; count strikes so a
-                // true disconnect still ends the session.
-                endGameStrikes += 1;
-                if (endGameStrikes >= END_GAME_STRIKES_NEEDED) {
-                    endGameSession();
-                } else {
-                    if (!overlayHidden) {
-                        const advanced = {
-                            ...lastGoodPayload,
-                            gameTime: (lastGoodPayload.gameTime || 0) + currentPollMs / 1000,
-                            timestamp: Date.now(),
-                        };
-                        lastGoodPayload = advanced;
-                        const fp = overlayFingerprint(advanced);
-                        if (fp !== lastOverlayFingerprint) {
-                            lastOverlayFingerprint = fp;
-                            sendOverlayUpdate(advanced);
-                        }
-                    } else if (!wasInGame) {
-                        sendOverlayUpdate({ inGame: true, timestamp: Date.now() });
-                    }
-                }
-            } else if (overlayHidden && !wasInGame) {
-                sendOverlayUpdate({ inGame: true, timestamp: Date.now() });
+            const payload = buildOverlayPayload(live, phase);
+            lastGoodPayload = payload;
+            if (overlayHidden) {
+                // Slim ping so the main window stays parked as "in match"
+                if (!wasInGame) sendOverlayUpdate({ inGame: true, timestamp: Date.now() });
+                return;
             }
-        } else if (inGame) {
-            // True end-of-game: end immediately.
-            // Lobby/ChampSelect/null: only end if live client is also dead for N strikes.
-            if (phaseMatchOver) {
-                endGameSession();
-            } else if (phaseLobby || phase === null) {
-                if (!liveAvailable) {
-                    endGameStrikes += 1;
-                    if (endGameStrikes >= END_GAME_STRIKES_NEEDED) endGameSession();
-                } else {
-                    endGameStrikes = 0;
-                }
-            } else {
-                endGameStrikes += 1;
-                if (endGameStrikes >= END_GAME_STRIKES_NEEDED) endGameSession();
+            const fp = overlayFingerprint(payload);
+            if (fp !== lastOverlayFingerprint) {
+                lastOverlayFingerprint = fp;
+                sendOverlayUpdate(payload);
             }
-        } else if (!inGame) {
-            // Pregame: push bot summoner intel to main UI occasionally (no overlay window)
-            const summons = serializeSummoners();
-            if (summons.length > 0) {
-                const fp = `pre:${summonerFingerprint()}`;
-                if (fp !== lastOverlayFingerprint) {
-                    lastOverlayFingerprint = fp;
-                    sendOverlayUpdate({
-                        inGame: false,
-                        enemyBotSummoners: summons,
-                        cachedChampSelectEnemies: lastChampSelectEnemies,
-                        timestamp: Date.now(),
-                    });
-                }
+            return;
+        }
+
+        if (!inGame) return;
+
+        // Live Client blip — hold the last good board (never wipe items/jungle/wards),
+        // advance the clock locally, and count strikes so a real end still ends.
+        endGameStrikes += 1;
+        const clientSaysInGame = !!phase && IN_GAME_PHASES.has(phase);
+        if (endGameStrikes >= END_GAME_STRIKES_NEEDED && !clientSaysInGame) {
+            endGameSession();
+            return;
+        }
+        if (lastGoodPayload && !overlayHidden) {
+            const advanced = {
+                ...lastGoodPayload,
+                gameTime: (lastGoodPayload.gameTime || 0) + currentPollMs / 1000,
+                timestamp: Date.now(),
+            };
+            lastGoodPayload = advanced;
+            const fp = overlayFingerprint(advanced);
+            if (fp !== lastOverlayFingerprint) {
+                lastOverlayFingerprint = fp;
+                sendOverlayUpdate(advanced);
             }
         }
     } finally {
@@ -556,11 +465,23 @@ async function tick(): Promise<void> {
     }
 }
 
+function onPhase(phase: string | null): void {
+    if (phase && MATCH_OVER_PHASES.has(phase)) {
+        endGameSession();
+    }
+    if (phase && IN_GAME_PHASES.has(phase) && !liveTimer) {
+        // Read immediately rather than waiting a full interval after loading.
+        void liveTick().finally(scheduleLive);
+        return;
+    }
+    scheduleLive();
+}
+
 /** Immediate overlay/UI refresh after a manual summoner mark. */
 export function pushSummonerUpdate(): void {
     lastOverlayFingerprint = '';
     if (inGame) {
-        void tick();
+        void liveTick();
         return;
     }
     sendOverlayUpdate({
@@ -570,21 +491,28 @@ export function pushSummonerUpdate(): void {
     });
 }
 
+/** Overlay shown/hidden by the user — adjust the live cadence right away. */
+export function refreshLiveCadence(): void {
+    scheduleLive();
+}
+
 export function startGameMonitor(): void {
-    if (monitorInterval) return;
-
-    // Do NOT create the overlay window until a match actually starts —
-    // a fullscreen transparent always-on-top surface costs DWM composition.
-
-    void tick();
-    monitorInterval = setInterval(() => {
-        void tick();
-    }, currentPollMs);
+    if (monitorStarted) return;
+    monitorStarted = true;
+    lcuSocket.on('phase', onPhase);
+    lcuSocket.on('state', () => scheduleLive());
+    lcuSocket.on('champSelect', (session) => ingestChampSelectSession(session));
+    lcuSocket.start();
+    // Catch a match that is already running when the app opens.
+    void liveTick().finally(scheduleLive);
 }
 
 export function stopGameMonitor(): void {
-    if (monitorInterval) {
-        clearInterval(monitorInterval);
-        monitorInterval = null;
-    }
+    monitorStarted = false;
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = null;
+    lcuSocket.stop();
 }
+
+/** Re-export for main-process IPC handlers that need a one-off LCU read. */
+export { makeLCURequest };

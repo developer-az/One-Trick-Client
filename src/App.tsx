@@ -20,6 +20,7 @@ import {
 import { roleFromLcuPosition } from './catalog/roles';
 import { warmCatalog } from './catalog/client';
 import { HudStudio } from './components/HudStudio';
+import { PerformancePanel } from './components/PerformancePanel';
 import {
   applyModulesToLayout,
   dualRailLayout,
@@ -63,12 +64,14 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<MatchupAnalysis | null>(null);
   const [dominance, setDominance] = useState<DominanceMetrics | null>(null);
   const [lcuConnected, setLcuConnected] = useState(false);
+  const [lcuStatus, setLcuStatus] = useState<LcuStatus | null>(null);
   const [exportStatus, setExportStatus] = useState<'idle' | 'working' | 'success' | 'error'>('idle');
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportDetail, setExportDetail] = useState<string | null>(null);
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [overlayInGame, setOverlayInGame] = useState(false);
   const wasInGameRef = React.useRef(false);
+  const hadSessionRef = React.useRef(false);
   const [overlayClickThrough, setOverlayClickThrough] = useState(true);
   const [hudScale, setHudScale] = useState(20);
   const [mapScale, setMapScale] = useState(33);
@@ -77,7 +80,7 @@ const App: React.FC = () => {
   const [hudLayout, setHudLayout] = useState<HudLayout>(() =>
     typeof window !== 'undefined' ? loadStoredHudLayout() : dualRailLayout()
   );
-  const [workspace, setWorkspace] = useState<'loadout' | 'studio'>('loadout');
+  const [workspace, setWorkspace] = useState<'loadout' | 'studio' | 'performance'>('loadout');
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
@@ -138,36 +141,16 @@ const App: React.FC = () => {
       });
   }, []);
 
-  // LCU Connection via IPC — retry until Live (client may launch after the app)
+  // League client connection is discovered and pushed by the main process.
   useEffect(() => {
     if (!window.electronAPI) return;
 
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let attempts = 0;
-
-    // Each attempt spawns a PowerShell process to read the client's command line,
-    // so back off instead of hammering it every 5s while League is closed.
-    const tryConnect = () => {
-      if (!window.electronAPI || cancelled) return;
-      window.electronAPI.connectLCU().then(res => {
-        if (cancelled) return;
-        if (res && res.success) {
-          setLcuConnected(true);
-          return;
-        }
-        scheduleRetry();
-      }).catch(() => scheduleRetry());
+    const applyLcu = (status: LcuStatus) => {
+      setLcuStatus(status);
+      setLcuConnected(status.state === 'connected');
     };
-
-    const scheduleRetry = () => {
-      if (cancelled) return;
-      attempts += 1;
-      const delay = Math.min(30000, 5000 * Math.min(attempts, 6));
-      retryTimer = setTimeout(tryConnect, delay);
-    };
-
-    tryConnect();
+    void window.electronAPI.getLcuStatus?.().then(applyLcu);
+    const unsubLcu = window.electronAPI.onLcuStatus?.(applyLcu);
 
     window.electronAPI.getOverlayStatus?.().then((res) => {
       if (res?.success) {
@@ -206,8 +189,7 @@ const App: React.FC = () => {
     });
 
     return () => {
-      cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
+      unsubLcu?.();
       unsubVis?.();
       unsubMeta?.();
     };
@@ -268,35 +250,21 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Auto-Detect Logic (Polling)
+  // Champ select is pushed from the main process (LCU WebSocket) — no polling.
   useEffect(() => {
-    // While a match is live the main window is minimized and champ select is
-    // irrelevant — do not even schedule the timer, so League keeps the CPU.
-    if (!lcuConnected || !window.electronAPI || champions.length === 0 || overlayInGame) return;
+    if (!window.electronAPI?.onChampSelect || champions.length === 0 || overlayInGame) return;
 
-    let pollInFlight = false;
-
-    const poll = async () => {
-      if (document.hidden) return;
-      // Avoid stacking overlapping requests if one poll runs long
-      if (pollInFlight) return;
-
-      if (!window.electronAPI) return;
-      pollInFlight = true;
+    const applySession = (session: unknown) => {
+      if (!session) {
+        // Left champ select (dodge, requeue, or game start): don't carry stale picks.
+        if (hadSessionRef.current && !overlayInGame) setSelections(emptySelections());
+        hadSessionRef.current = false;
+        return;
+      }
+      hadSessionRef.current = true;
       try {
-        const res = await window.electronAPI.requestLCU('GET', '/lol-champ-select/v1/session');
-
-        // Handle 404 gracefully (not in champ select) or other errors
-        if (!res.success) {
-          // If it's a 404, that's expected when not in champ select - silently ignore
-          if (res.error && res.error.includes('404')) {
-            return; // Not in champ select, this is normal
-          }
-          // Other errors might be connection issues, but don't spam console
-          return;
-        }
-
-        if (res.success && res.data) {
+        if (session) {
+          const res = { data: session };
           interface TeamMember {
             championId?: number;
             cellId?: number;
@@ -444,36 +412,13 @@ const App: React.FC = () => {
           }
         }
       } catch (e) {
-        // Session likely not active or other expected errors, ignore silently
-        // Only log unexpected errors
-        if (e && typeof e === 'object' && 'message' in e) {
-          const errorMessage = String((e as { message?: unknown }).message || '');
-          if (!errorMessage.includes('404')) {
-            console.debug('LCU polling error:', e);
-          }
-        }
-      } finally {
-        pollInFlight = false;
+        console.debug('Champ select ingest error:', e);
       }
     };
 
-    // Poll every 1.5s when active (slower = less LCU contention with the game client)
-    const intervalId = setInterval(poll, 1500);
-
-    // Listener to handle visibility changes immediately
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        void poll(); // Poll immediately when becoming visible
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      clearInterval(intervalId);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [lcuConnected, champions, overlayInGame]);
+    void window.electronAPI.getChampSelect?.().then((res) => applySession(res?.session ?? null));
+    return window.electronAPI.onChampSelect(applySession);
+  }, [champions, overlayInGame]);
 
   // Recalculate Build & Analysis — skip while in-game (overlay owns the hot path)
   useEffect(() => {
@@ -848,6 +793,14 @@ const App: React.FC = () => {
                 >
                   Studio
                 </button>
+                <button
+                  type="button"
+                  className={`hud-profile-tab ${workspace === 'performance' ? 'is-active' : ''}`}
+                  onClick={() => setWorkspace('performance')}
+                  title={lcuStatus ? `League client: ${lcuStatus.state}` : undefined}
+                >
+                  Performance
+                </button>
               </div>
               <div
                 className={`hud-chip flex items-center gap-2 ${
@@ -951,7 +904,9 @@ const App: React.FC = () => {
         </header>
 
         {/* In-match: main UI goes static — overlay owns CPU; avoid rebuild churn */}
-        {workspace === 'studio' && !overlayInGame ? (
+        {workspace === 'performance' ? (
+          <PerformancePanel />
+        ) : workspace === 'studio' && !overlayInGame ? (
           <HudStudio
             layout={hudLayout}
             onLayoutChange={handleLayoutChange}

@@ -1,7 +1,9 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, clipboard, Menu, Tray, nativeImage } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { connectToLCU, makeLCURequest } from './lcu-connector';
+import { lcuSocket } from './lcu-socket';
+import { getAppSettings, gpuAccelerationAtLaunch, loadAppSettings, updateAppSettings } from './app-settings';
 import { fetchLiveClientData } from './live-client';
 import {
     startGameMonitor,
@@ -10,6 +12,8 @@ import {
     setGameStateChangeHandler,
     setMatchStartHotkeyHandler,
     pushSummonerUpdate,
+    getMonitorStats,
+    refreshLiveCadence,
 } from './game-monitor';
 import {
     destroyOverlay,
@@ -37,6 +41,9 @@ import {
     resetCalibration,
     getGameResolution,
     broadcastOverlayMeta,
+    hideOverlay,
+    setOverlaySlotContent,
+    getOverlayWindowStats,
     type FrameCalibration,
 } from './overlay-window';
 import {
@@ -46,14 +53,72 @@ import {
     getSummonerFocus,
     type TrackedRole,
 } from './summoner-tracker';
-import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive } from './global-key-hook';
+import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive, getKeyHookStatus } from './global-key-hook';
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 
 process.env.DIST = path.join(__dirname, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(__dirname, '../public');
 
 let win: BrowserWindow | null;
+let tray: Tray | null = null;
+/** Set when the dashboard was hidden by a match starting, so it is restored after. */
+let hiddenForMatch = false;
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
+
+// GPU mode must be chosen before the app is ready. Software rendering is the
+// default: One Trick's windows are mostly static, and keeping our compositor
+// off the GPU leaves the whole GPU queue to League.
+loadAppSettings();
+if (!gpuAccelerationAtLaunch()) {
+    app.disableHardwareAcceleration();
+}
+
+/** Single instance: a second launch focuses the first instead of doubling every hook and timer. */
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) {
+    app.quit();
+}
+app.on('second-instance', () => {
+    showDashboard();
+});
+
+function showDashboard(): void {
+    if (!win || win.isDestroyed()) return;
+    if (!win.isVisible()) win.show();
+    if (win.isMinimized()) win.restore();
+    win.focus();
+}
+
+function sendToDashboard(channel: string, payload: unknown): void {
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function createTray(): void {
+    if (tray) return;
+    try {
+        const image = nativeImage.createFromPath(resolveAppIcon());
+        tray = new Tray(image.isEmpty() ? image : image.resize({ width: 16, height: 16 }));
+    } catch {
+        return;
+    }
+    tray.setToolTip('One Trick');
+    tray.on('click', showDashboard);
+    tray.setContextMenu(
+        Menu.buildFromTemplate([
+            { label: 'Open One Trick', click: showDashboard },
+            {
+                label: 'Show / hide overlay',
+                click: () => {
+                    const visible = toggleOverlayVisibility();
+                    refreshLiveCadence();
+                    sendToDashboard('overlay-visibility-changed', { visible });
+                },
+            },
+            { type: 'separator' },
+            { label: 'Quit', click: () => app.quit() },
+        ])
+    );
+}
 
 function resolveAppIcon(): string {
     const candidates = [
@@ -196,13 +261,14 @@ function registerFlashHotkeys(): void {
 
     if (!upOk || !downOk) {
         console.warn(
-            '[overlay] Flash hotkeys fallback incomplete. Prefer fixing uiohook-napi load, ' +
+            '[keys] Flash hotkeys fallback incomplete. Check the onetrick-keys helper, ' +
                 'or run One Trick as admin if League is elevated.'
         );
     } else {
         console.warn(
-            '[overlay] Using Electron globalShortcut fallback for PageUp/PageDown — ' +
-                'these often fail while League has focus. Check that uiohook-napi loaded.'
+            '[keys] Using Electron globalShortcut fallback for PageUp/PageDown — ' +
+                'these often fail while League has focus. ' +
+                (getKeyHookStatus().error || 'The onetrick-keys helper did not start.')
         );
     }
 }
@@ -212,6 +278,7 @@ function registerOverlayHotkeys() {
     // Ctrl+Shift combos still use globalShortcut (rarely conflict with League).
     const hideOk = globalShortcut.register('CommandOrControl+Shift+H', () => {
         const visible = toggleOverlayVisibility();
+        refreshLiveCadence();
         win?.webContents.send('overlay-visibility-changed', { visible });
     });
 
@@ -257,6 +324,7 @@ app.on('will-quit', () => {
 });
 
 app.whenReady().then(() => {
+    if (!primaryInstance) return;
     if (process.platform === 'win32') {
         app.setAppUserModelId('com.onetrick.app');
     }
@@ -269,38 +337,111 @@ app.whenReady().then(() => {
         registerFlashHotkeys();
     });
 
-    // Minimize the main window during matches so its renderer/GPU work
-    // does not steal frames from League. Restore when the match ends.
+    // Park the dashboard during matches so it never paints over League's frames.
+    // Hidden (tray) is the default; a hidden window produces no frames at all,
+    // whereas a minimized one can still be restored onto a second monitor.
     setGameStateChangeHandler((active) => {
         if (!win || win.isDestroyed()) return;
         if (active) {
-            if (!win.isMinimized()) win.minimize();
+            if (getAppSettings().hideDashboardInGame) {
+                if (win.isVisible()) {
+                    win.hide();
+                    hiddenForMatch = true;
+                }
+            } else if (!win.isMinimized()) {
+                win.minimize();
+            }
+        } else if (hiddenForMatch) {
+            hiddenForMatch = false;
+            win.showInactive();
         } else if (win.isMinimized()) {
             win.restore();
         }
     });
 
-    // Start monitoring once LCU may be available — reconnect attempts happen in tick
-    // Delay slightly so main window loads first
-    setTimeout(() => {
-        startGameMonitor();
-    }, 2000);
+    createTray();
+
+    // League client state is pushed (WebSocket) — forward it to the dashboard.
+    const pushLcuStatus = () => sendToDashboard('lcu-status', lcuSocket.summary());
+    lcuSocket.on('state', pushLcuStatus);
+    lcuSocket.on('phase', pushLcuStatus);
+    lcuSocket.on('summoner', pushLcuStatus);
+    lcuSocket.on('champSelect', (session) => sendToDashboard('champ-select', session));
+
+    startGameMonitor();
 
     void refreshCatalogCache().catch(() => {
         loadCatalogCache();
     });
 
     // IPC Handlers
+    // User-initiated connect: allowed to use the slow process probe once.
     ipcMain.handle('lcu-connect', async () => {
+        if (lcuSocket.state === 'connected') return { success: true };
         try {
-            const credentials = await connectToLCU();
-            // Kick monitor after successful connect
-            startGameMonitor();
-            return { success: true, credentials };
+            await connectToLCU(true);
+            lcuSocket.poke();
+            return { success: true };
         } catch (error: unknown) {
             const err = error as { message?: string };
             return { success: false, error: err.message || 'Unknown error' };
         }
+    });
+
+    ipcMain.handle('lcu-status', () => lcuSocket.summary());
+    ipcMain.handle('champ-select-get', () => ({ session: lcuSocket.champSelect }));
+
+    ipcMain.handle('app-settings-get', () => getAppSettings());
+    ipcMain.handle('app-settings-set', (_event, patch: unknown) => {
+        const before = getAppSettings();
+        const result = updateAppSettings(patch);
+        if (before.overlayEnabled !== result.settings.overlayEnabled) {
+            if (!result.settings.overlayEnabled) hideOverlay();
+            else if (isCurrentlyInGame()) showOverlay();
+        }
+        return result;
+    });
+    ipcMain.handle('app-relaunch', () => {
+        app.relaunch();
+        app.exit(0);
+    });
+
+    ipcMain.on('overlay-slot-content', (event, hasContent: boolean) => {
+        if (process.env.ONETRICK_DEBUG) console.info(`[overlay] slot ${event.sender.id} content=${hasContent}`);
+        setOverlaySlotContent(event.sender.id, !!hasContent);
+    });
+
+    if (process.env.ONETRICK_DEBUG) {
+        setInterval(() => {
+            const o = getOverlayWindowStats();
+            const m = getMonitorStats();
+            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}`);
+        }, 5000);
+    }
+
+    ipcMain.handle('perf-stats', () => {
+        const processes = app.getAppMetrics().map((m) => ({
+            type: String(m.type),
+            name: m.name || m.serviceName || String(m.type),
+            cpu: Math.round(m.cpu.percentCPUUsage * 10) / 10,
+            memoryMb: Math.round((m.memory?.workingSetSize || 0) / 1024),
+        }));
+        const overlay = getOverlayWindowStats();
+        const monitor = getMonitorStats();
+        return {
+            processes,
+            totalCpu: Math.round(processes.reduce((sum, p) => sum + p.cpu, 0) * 10) / 10,
+            totalMemoryMb: processes.reduce((sum, p) => sum + p.memoryMb, 0),
+            overlayWindows: overlay.windows,
+            overlayVisible: overlay.visible > 0,
+            gpuAcceleration: getAppSettings().gpuAcceleration,
+            gpuActive: gpuAccelerationAtLaunch(),
+            hotkeys: getKeyHookStatus(),
+            lcu: lcuSocket.summary(),
+            inGame: monitor.inGame,
+            livePollMs: monitor.livePollMs,
+            liveReads: monitor.liveReads,
+        };
     });
 
     ipcMain.handle('lcu-request', async (_event, method, endpoint, body) => {
@@ -398,6 +539,7 @@ app.whenReady().then(() => {
     ipcMain.handle('overlay-toggle', async () => {
         try {
             const visible = toggleOverlayVisibility();
+            refreshLiveCadence();
             win?.webContents.send('overlay-visibility-changed', { visible });
             return { success: true, visible };
         } catch (error) {
@@ -412,6 +554,7 @@ app.whenReady().then(() => {
             if (visible && isCurrentlyInGame()) {
                 showOverlay();
             }
+            refreshLiveCadence();
             win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() });
             return { success: true, visible: !isOverlayUserHidden() };
         } catch (error) {
