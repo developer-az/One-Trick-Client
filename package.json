@@ -65,6 +65,8 @@
     "build:keyhook": "node scripts/build-keyhook.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
     "axios": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

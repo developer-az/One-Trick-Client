@@ -1,0 +1,753 @@
+/*
+ * One Trick — dashboard design system.
+ *
+ * Dark, quiet surfaces with League-native accents: hextech gold for "yours",
+ * teal for live state, red for enemies, blue for allies. Everything is static:
+ * no infinite animations, no backdrop blur, no filters (the dashboard may sit
+ * next to a running game on a second monitor).
+ */
+
+html:not(.overlay-root) {
+  --ot-bg: #0a0c10;
+  --ot-bg-raised: #0e1117;
+  --ot-surface: #12161d;
+  --ot-surface-2: #181d26;
+  --ot-surface-3: #1f2530;
+  --ot-border: rgba(255, 255, 255, 0.07);
+  --ot-border-strong: rgba(255, 255, 255, 0.13);
+  --ot-text: #e7e9ee;
+  --ot-text-2: #a7aebb;
+  --ot-text-3: #6d7584;
+  --ot-gold: #d6b46c;
+  --ot-gold-soft: rgba(214, 180, 108, 0.14);
+  --ot-teal: #35d0ba;
+  --ot-teal-soft: rgba(53, 208, 186, 0.13);
+  --ot-red: #f0656a;
+  --ot-red-soft: rgba(240, 101, 106, 0.13);
+  --ot-blue: #6aa6f8;
+  --ot-blue-soft: rgba(106, 166, 248, 0.13);
+  --ot-amber: #f2b350;
+  --ot-amber-soft: rgba(242, 179, 80, 0.13);
+  --ot-radius: 12px;
+  --ot-radius-sm: 8px;
+  --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --ot-font-display: 'Space Grotesk Variable', 'Inter Variable', 'Segoe UI', sans-serif;
+
+  font-family: var(--ot-font);
+  font-weight: 450;
+  letter-spacing: -0.005em;
+  color: var(--ot-text);
+  background: var(--ot-bg);
+}
+
+html:not(.overlay-root) body {
+  font-family: var(--ot-font);
+  color: var(--ot-text);
+  background: var(--ot-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+html:not(.overlay-root) ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+html:not(.overlay-root) ::-webkit-scrollbar-track {
+  background: transparent;
+}
+html:not(.overlay-root) ::-webkit-scrollbar-thumb {
+  background: var(--ot-surface-3);
+  border: 3px solid var(--ot-bg);
+  border-radius: 999px;
+}
+html:not(.overlay-root) ::-webkit-scrollbar-thumb:hover {
+  background: #2c3442;
+}
+
+html:not(.overlay-root) ::selection {
+  background: var(--ot-gold-soft);
+  color: var(--ot-text);
+}
+
+/* ---------- Shell ---------- */
+
+.ot-shell {
+  display: grid;
+  grid-template-rows: 44px 1fr;
+  grid-template-columns: 224px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.ot-titlebar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 152px 0 16px; /* right: native window controls (titleBarOverlay) */
+  border-bottom: 1px solid var(--ot-border);
+  background: var(--ot-bg);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.ot-titlebar .ot-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.ot-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--ot-font-display);
+  font-weight: 650;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  color: var(--ot-text);
+}
+.ot-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #2a2210, #15120a);
+  border: 1px solid rgba(214, 180, 108, 0.35);
+  color: var(--ot-gold);
+}
+
+.ot-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--ot-border);
+  background: var(--ot-bg);
+  overflow-y: auto;
+}
+.ot-sidebar-label {
+  padding: 14px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+
+.ot-nav {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--ot-radius-sm);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.ot-nav:hover {
+  background: var(--ot-surface);
+  color: var(--ot-text);
+}
+.ot-nav.is-active {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+  box-shadow: inset 2px 0 0 var(--ot-gold);
+}
+.ot-nav svg {
+  flex: none;
+  opacity: 0.85;
+}
+.ot-nav-badge {
+  margin-left: auto;
+  min-width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ot-teal);
+}
+
+.ot-main {
+  overflow-y: auto;
+  background: var(--ot-bg-raised);
+}
+.ot-page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px 32px 48px;
+}
+.ot-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.ot-page-title {
+  font-family: var(--ot-font-display);
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+}
+.ot-page-sub {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--ot-text-2);
+}
+
+/* ---------- Surfaces ---------- */
+
+.ot-card {
+  position: relative;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+}
+.ot-card-pad {
+  padding: 18px 20px;
+}
+.ot-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-card-heading {
+  font-family: var(--ot-font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ot-text);
+}
+.ot-divider {
+  height: 1px;
+  background: var(--ot-border);
+}
+
+/* ---------- Text ---------- */
+
+.ot-muted {
+  color: var(--ot-text-2);
+}
+.ot-faint {
+  color: var(--ot-text-3);
+}
+.ot-num {
+  font-variant-numeric: tabular-nums;
+}
+.ot-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--ot-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--ot-surface-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ot-text);
+  white-space: nowrap;
+}
+
+/* ---------- Controls ---------- */
+
+.ot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--ot-radius-sm);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--ot-text);
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.ot-btn:hover:not(:disabled) {
+  background: var(--ot-surface-3);
+}
+.ot-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ot-btn:focus-visible,
+.ot-nav:focus-visible,
+.ot-input:focus-visible,
+.ot-switch:focus-visible,
+.ot-chip-btn:focus-visible {
+  outline: 2px solid var(--ot-gold);
+  outline-offset: 2px;
+}
+.ot-btn-primary {
+  border-color: transparent;
+  background: var(--ot-gold);
+  color: #1a1407;
+}
+.ot-btn-primary:hover:not(:disabled) {
+  background: #e3c27d;
+}
+.ot-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ot-text-2);
+}
+.ot-btn-ghost:hover:not(:disabled) {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-btn-sm {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.ot-btn-lg {
+  height: 44px;
+  padding: 0 20px;
+  font-size: 15px;
+}
+
+.ot-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: var(--ot-radius-sm);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-bg);
+  font-size: 14px;
+  color: var(--ot-text);
+}
+.ot-input::placeholder {
+  color: var(--ot-text-3);
+}
+
+.ot-switch {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--ot-surface-3);
+  border: 1px solid var(--ot-border-strong);
+  transition: background 0.15s ease;
+}
+.ot-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--ot-text-2);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.ot-switch[aria-checked='true'] {
+  background: var(--ot-gold);
+  border-color: transparent;
+}
+.ot-switch[aria-checked='true']::after {
+  transform: translateX(16px);
+  background: #1a1407;
+}
+
+.ot-segment {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: var(--ot-bg);
+  border: 1px solid var(--ot-border);
+}
+.ot-segment button {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--ot-text-2);
+}
+.ot-segment button.is-active {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+
+/* ---------- Status ---------- */
+
+.ot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border);
+  background: var(--ot-surface);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+}
+.ot-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ot-text-3);
+  flex: none;
+}
+.ot-tone-live .ot-dot,
+.ot-dot.ot-tone-live {
+  background: var(--ot-teal);
+}
+.ot-tone-warn .ot-dot,
+.ot-dot.ot-tone-warn {
+  background: var(--ot-amber);
+}
+.ot-tone-bad .ot-dot,
+.ot-dot.ot-tone-bad {
+  background: var(--ot-red);
+}
+.ot-tone-gold .ot-dot,
+.ot-dot.ot-tone-gold {
+  background: var(--ot-gold);
+}
+.ot-pill.ot-tone-live {
+  color: var(--ot-text);
+  border-color: rgba(53, 208, 186, 0.3);
+  background: var(--ot-teal-soft);
+}
+
+.ot-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--ot-surface-3);
+  color: var(--ot-text-2);
+  white-space: nowrap;
+}
+.ot-badge-gold {
+  background: var(--ot-gold-soft);
+  color: var(--ot-gold);
+}
+.ot-badge-teal {
+  background: var(--ot-teal-soft);
+  color: var(--ot-teal);
+}
+.ot-badge-red {
+  background: var(--ot-red-soft);
+  color: var(--ot-red);
+}
+.ot-badge-blue {
+  background: var(--ot-blue-soft);
+  color: var(--ot-blue);
+}
+.ot-badge-amber {
+  background: var(--ot-amber-soft);
+  color: var(--ot-amber);
+}
+
+.ot-callout {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--ot-radius-sm);
+  border: 1px solid var(--ot-border);
+  background: var(--ot-surface-2);
+  font-size: 14px;
+  color: var(--ot-text-2);
+}
+.ot-callout-warn {
+  border-color: rgba(242, 179, 80, 0.3);
+  background: var(--ot-amber-soft);
+  color: var(--ot-text);
+}
+.ot-callout-bad {
+  border-color: rgba(240, 101, 106, 0.3);
+  background: var(--ot-red-soft);
+  color: var(--ot-text);
+}
+.ot-callout-good {
+  border-color: rgba(53, 208, 186, 0.3);
+  background: var(--ot-teal-soft);
+  color: var(--ot-text);
+}
+
+/* ---------- Game art ---------- */
+
+.ot-portrait {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--ot-surface-3);
+  border: 1px solid var(--ot-border-strong);
+}
+.ot-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.08);
+}
+.ot-portrait .hud-icon-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ot-text-3);
+}
+.ot-portrait-ring-gold {
+  border-color: var(--ot-gold);
+  box-shadow: 0 0 0 2px rgba(214, 180, 108, 0.25);
+}
+.ot-portrait-ring-red {
+  border-color: rgba(240, 101, 106, 0.6);
+}
+.ot-portrait-ring-blue {
+  border-color: rgba(106, 166, 248, 0.6);
+}
+
+.ot-item {
+  flex: none;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-bg);
+}
+.ot-item img {
+  width: 100%;
+  height: 100%;
+}
+.ot-item .hud-icon-fallback {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  font-size: 10px;
+  color: var(--ot-text-3);
+}
+
+.ot-splash {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.ot-splash img {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 70%;
+  height: auto;
+  transform: translateY(-38%);
+  opacity: 0.35;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 55%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 55%);
+}
+
+/* ---------- Draft board ---------- */
+
+.ot-slot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 8px 12px 8px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--ot-border);
+  background: var(--ot-surface-2);
+}
+.ot-slot.is-local {
+  border-color: rgba(214, 180, 108, 0.5);
+  background: linear-gradient(90deg, var(--ot-gold-soft), var(--ot-surface-2) 70%);
+}
+.ot-slot.is-empty {
+  background: transparent;
+  border-style: dashed;
+}
+.ot-role {
+  width: 64px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+
+.ot-combobox-menu {
+  position: absolute;
+  z-index: 60;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+}
+.ot-combobox-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 14px;
+  color: var(--ot-text);
+  text-align: left;
+}
+.ot-combobox-option:hover,
+.ot-combobox-option.is-active {
+  background: var(--ot-surface-3);
+}
+
+/* ---------- Runes / build ---------- */
+
+.ot-rune {
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ot-bg);
+  border: 1px solid var(--ot-border-strong);
+}
+.ot-rune img {
+  width: 88%;
+  height: 88%;
+}
+.ot-rune-keystone {
+  border-color: rgba(214, 180, 108, 0.6);
+  background: radial-gradient(circle at 50% 40%, #241d0f, var(--ot-bg));
+}
+
+.ot-step-arrow {
+  color: var(--ot-text-3);
+}
+
+/* ---------- Summoner timers ---------- */
+
+.ot-spell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  min-width: 84px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ot-text-2);
+}
+.ot-spell:hover {
+  background: var(--ot-surface-3);
+}
+.ot-spell.is-ready {
+  border-color: rgba(53, 208, 186, 0.35);
+  background: var(--ot-teal-soft);
+  color: var(--ot-text);
+}
+.ot-spell.is-down {
+  border-color: rgba(240, 101, 106, 0.35);
+  background: var(--ot-red-soft);
+  color: var(--ot-text);
+}
+
+/* ---------- Range ---------- */
+
+.ot-range {
+  width: 100%;
+  accent-color: var(--ot-gold);
+}
+
+.ot-hero {
+  position: relative;
+  overflow: hidden;
+}
+.ot-hero > * {
+  position: relative;
+}
+.ot-hero > .ot-splash {
+  position: absolute;
+}
+.ot-stat-big {
+  font-family: var(--ot-font-display);
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+/* ---------- Toasts ---------- */
+
+.ot-toasts {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(380px, calc(100vw - 40px));
+}
+.ot-toast {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  animation: ot-toast-in 0.18s ease-out;
+}
+@keyframes ot-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- Embedded legacy studio ---------- */
+
+.ot-studio-embed .hud-panel {
+  border-radius: var(--ot-radius);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ot-toast {
+    animation: none;
+  }
+  .ot-switch,
+  .ot-switch::after,
+  .ot-nav,
+  .ot-btn {
+    transition: none;
+  }
+}
+
+.ot-studio-embed .hud-studio-wrap {
+  border-radius: var(--ot-radius-sm);
+  border-color: var(--ot-border-strong);
+}

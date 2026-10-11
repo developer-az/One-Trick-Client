@@ -58,6 +58,17 @@ function readLocalCache(): CatalogBundle | null {
   }
 }
 
+/** Compare "16.10.1" vs "16.9.1" numerically — string comparison gets this backwards. */
+export function comparePatch(a: string | undefined, b: string | undefined): number {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 export function catalogApiUrl(base: string, file: string): string {
   return `${base.replace(/\/$/, '')}/${file.replace(/^\//, '')}`;
 }
@@ -169,6 +180,16 @@ export async function warmCatalog(opts?: {
     }
   }
 
+  if (!cached) {
+    // First launch (or cleared cache): paint immediately from the bundled snapshot.
+    try {
+      const { SNAPSHOT_BUNDLE } = await import('./snapshot');
+      if (SNAPSHOT_BUNDLE?.champions?.length) applyBundle(SNAPSHOT_BUNDLE);
+    } catch {
+      /* snapshot missing from this build */
+    }
+  }
+
   const bases = [opts?.apiBase, localApiBase(), ...CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE].filter(
     (value, index, list): value is string => !!value && list.indexOf(value) === index
   );
@@ -177,7 +198,7 @@ export async function warmCatalog(opts?: {
     const staticBundle = await fetchStaticApi(base);
     if (staticBundle?.champions?.length) {
       const current = cached;
-      if (!current || staticBundle.manifest.patch >= current.manifest.patch) {
+      if (!current || comparePatch(staticBundle.manifest.patch, current.manifest.patch) >= 0) {
         applyBundle(staticBundle);
       }
       break;
@@ -188,7 +209,11 @@ export async function warmCatalog(opts?: {
     await warmDdragonVersion();
     const live = await buildCatalogBundle();
     const current = cached;
-    if (!current || live.manifest.patch >= current.manifest.patch || live.champions.length > current.champions.length) {
+    if (
+      !current ||
+      comparePatch(live.manifest.patch, current.manifest.patch) >= 0 ||
+      live.champions.length > current.champions.length
+    ) {
       applyBundle(live);
     }
   } catch {
