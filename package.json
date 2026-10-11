@@ -20,9 +20,6 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
-    "asarUnpack": [
-      "**/node_modules/uiohook-napi/**"
-    ],
     "npmRebuild": false,
     "nodeGypRebuild": false,
     "win": {
@@ -37,7 +34,13 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "native/bin/onetrick-keys.exe",
+        "to": "onetrick-keys.exe"
+      }
+    ]
   },
   "scripts": {
     "dev": "vite",
@@ -52,25 +55,27 @@
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
     "electron:build": "tsc -p tsconfig.electron.json",
-    "dev:electron": "npm run electron:build && concurrently -k \"npm run dev\" \"npm run electron\"",
+    "dev:electron": "node scripts/build-keyhook.mjs --optional && npm run electron:build && concurrently -k \"npm run dev\" \"npm run electron\"",
     "dev:electron:win": "dev-electron.cmd",
-    "pack": "npm run build && npm run electron:build && electron-builder --dir",
-    "dist": "npm run build && npm run electron:build && electron-builder",
+    "pack": "npm run build && npm run electron:build && npm run build:keyhook && electron-builder --dir",
+    "dist": "npm run build && npm run electron:build && npm run build:keyhook && electron-builder",
     "website:dev": "npm --prefix website run dev",
     "website:build": "npm --prefix website run build",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "build:keyhook": "node scripts/build-keyhook.mjs"
   },
   "dependencies": {
     "axios": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "uiohook-napi": "^1.5.5"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.1",

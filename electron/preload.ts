@@ -62,4 +62,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('overlay-visibility-changed', listener);
         return () => ipcRenderer.removeListener('overlay-visibility-changed', listener);
     },
+
+    // League client (push-based)
+    getLcuStatus: () => ipcRenderer.invoke('lcu-status'),
+    onLcuStatus: (callback: (payload: unknown) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+        ipcRenderer.on('lcu-status', listener);
+        return () => ipcRenderer.removeListener('lcu-status', listener);
+    },
+    getChampSelect: () => ipcRenderer.invoke('champ-select-get'),
+    onChampSelect: (callback: (session: unknown) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, session: unknown) => callback(session);
+        ipcRenderer.on('champ-select', listener);
+        return () => ipcRenderer.removeListener('champ-select', listener);
+    },
+
+    // App settings + diagnostics
+    getAppSettings: () => ipcRenderer.invoke('app-settings-get'),
+    setAppSettings: (patch: unknown) => ipcRenderer.invoke('app-settings-set', patch),
+    relaunchApp: () => ipcRenderer.invoke('app-relaunch'),
+    getPerfStats: () => ipcRenderer.invoke('perf-stats'),
+    reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),
 });

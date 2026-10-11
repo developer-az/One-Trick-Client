@@ -50,6 +50,19 @@ jobs:
       - name: Check for TypeScript errors
         run: npx tsc --noEmit
 
+      - name: Build keyboard hotkey helper
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-x86-64
+          npm run build:keyhook
+
+      - name: Upload hotkey helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: onetrick-keys
+          path: native/bin/onetrick-keys.exe
+          if-no-files-found: error
+
   release-electron:
     needs: quality-gates
     runs-on: windows-latest
@@ -79,6 +92,16 @@ jobs:
           if (-not $pkg.build.nsis.installerIcon -or -not $pkg.build.nsis.uninstallerIcon -or -not $pkg.build.nsis.installerHeaderIcon) {
             throw "NSIS icon metadata is incomplete"
           }
+
+      - name: Download hotkey helper
+        uses: actions/download-artifact@v4
+        with:
+          name: onetrick-keys
+          path: native/bin
+
+      - name: Verify hotkey helper
+        shell: pwsh
+        run: if (-not (Test-Path "native/bin/onetrick-keys.exe")) { throw "Missing native/bin/onetrick-keys.exe hotkey helper" }
 
       - name: Build Web
         run: npm run build
@@ -151,9 +174,9 @@ jobs:
             ### In-game
             - **PageUp** / **Numpad 9** — toggle primary Flash (ADC or Mid)
             - **PageDown** / **Numpad 3** — Support Flash, or Mid Ignite/TP
-            - Works while League has focus (low-level keyboard hook). If League is Run as Administrator, run One Trick elevated too.
+            - Works while League has focus (keyboard-only hook helper, no mouse hook). If League is Run as Administrator, run One Trick elevated too.
             - Ctrl+Shift+U unlock/lock · Ctrl+Shift+H hide
-            - Main window parks during matches on purpose — live HUD is the overlay
+            - Main window hides to the tray during matches on purpose — live HUD is the overlay
 
             ### Highlights
             - Live catalog API so every champion resolves (authored Pyke / Pantheon / Yone stay deep)

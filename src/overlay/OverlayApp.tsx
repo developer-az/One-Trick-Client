@@ -466,6 +466,34 @@ export const OverlayApp: React.FC = () => {
       ? hudLayout.stickers.filter((sticker) => slot.stickerIds.includes(sticker.id))
       : hudLayout.stickers;
 
+  // Locked mode: tell the main process whether this window has anything to
+  // draw. Empty windows are hidden, so nothing sits over League's swap chain
+  // until there is something worth showing.
+  const lockedSlot = slot?.mode === 'locked';
+  const slotHasContent = (() => {
+    if (!state.inGame) return false;
+    if (!lockedSlot) return true;
+    if (slotStickers.length > 0) return true;
+    const liveName = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
+    const mismatch = !!liveName && liveName !== profile.championId.toLowerCase().replace(/[^a-z]/g, '');
+    const sumsOn =
+      hudModules.sums &&
+      (state.enemyBotSummoners?.length ?? 0) > 0 &&
+      layoutElement(hudLayout, 'sums')?.visible !== false;
+    return (
+      (sumsOn && slotHasModule('sums')) ||
+      (hudModules.gank && !!gankStatus && slotHasModule('gank')) ||
+      (mismatch && slotHasModule('gank')) ||
+      (hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
+      (hudModules.action && cues.length > 0 && slotHasModule('action')) ||
+      (hudModules.buy && itemsLeft.length > 0 && slotHasModule('buy'))
+    );
+  })();
+
+  useEffect(() => {
+    window.electronAPI?.reportOverlayContent?.(slotHasContent);
+  }, [slotHasContent]);
+
   if (!state.inGame) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }

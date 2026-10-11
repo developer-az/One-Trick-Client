@@ -8,7 +8,7 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-let credentials: { port: string; token: string; protocol: string } | null = null;
+let credentials: LcuCredentials | null = null;
 
 // Reused across every request — creating a new https.Agent per call (as this
 // previously did) means a fresh TLS context/socket pool on every single LCU
@@ -16,29 +16,79 @@ let credentials: { port: string; token: string; protocol: string } | null = null
 // avoidable socket churn competing with the game for CPU.
 const lcuHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
-const LOCKFILE_CANDIDATES = [
-    path.join('C:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join('D:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join('E:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join(process.env.LOCALAPPDATA || '', 'Riot Games', 'League of Legends', 'lockfile'),
+export interface LcuCredentials {
+    port: string;
+    token: string;
+    protocol: string;
+    /** pid of LeagueClient — changes on every client restart. */
+    pid?: number;
+}
+
+// Literal roots: path.join('C:', 'Riot Games') is drive-relative on Windows.
+const DEFAULT_INSTALL_DIRS = [
+    'C:\\Riot Games\\League of Legends',
+    'D:\\Riot Games\\League of Legends',
+    'E:\\Riot Games\\League of Legends',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Riot Games', 'League of Legends'),
 ];
 
-function parseLockfile(raw: string): { port: string; token: string; protocol: string } | null {
+/**
+ * Riot's own installer metadata records where League actually lives, so custom
+ * install folders work without PowerShell process scanning.
+ */
+const RIOT_PRODUCT_SETTINGS = path.join(
+    process.env['ProgramData'] || 'C:\\ProgramData',
+    'Riot Games',
+    'Metadata',
+    'league_of_legends.live',
+    'league_of_legends.live.product_settings.yaml'
+);
+
+let installDirs: string[] | null = null;
+
+async function discoverInstallDirs(): Promise<string[]> {
+    if (installDirs) return installDirs;
+    const dirs: string[] = [];
+    try {
+        const raw = await fs.promises.readFile(RIOT_PRODUCT_SETTINGS, 'utf8');
+        const match = raw.match(/product_install_full_path:\s*"?([^"\r\n]+)"?/);
+        if (match?.[1]) dirs.push(path.normalize(match[1].trim()));
+    } catch {
+        // Not installed in the default Riot layout — fall back to common folders.
+    }
+    for (const dir of DEFAULT_INSTALL_DIRS) {
+        if (!dirs.includes(dir)) dirs.push(dir);
+    }
+    installDirs = dirs;
+    return dirs;
+}
+
+/** Remember a folder learned from the process command line for future lockfile reads. */
+function rememberInstallDir(dir: string): void {
+    const normalized = path.normalize(dir);
+    installDirs = [normalized, ...(installDirs || []).filter((d) => d !== normalized)];
+}
+
+function parseLockfile(raw: string): LcuCredentials | null {
     // Format: LeagueClient:pid:port:password:https
     const parts = raw.trim().split(':');
     if (parts.length < 5) return null;
+    const pid = Number(parts[1]);
     const port = parts[2];
     const token = parts[3];
     const protocol = parts[4] || 'https';
     if (!/^\d+$/.test(port) || !token) return null;
-    return { port, token, protocol };
+    return { port, token, protocol, pid: Number.isFinite(pid) ? pid : undefined };
 }
 
-async function connectViaLockfile(): Promise<{ port: string; token: string; protocol: string } | null> {
-    for (const lockPath of LOCKFILE_CANDIDATES) {
+/**
+ * The lockfile exists only while the League client runs, so reading it is both
+ * the cheapest "is the client open?" probe and the credential source.
+ */
+export async function readLockfileCredentials(): Promise<LcuCredentials | null> {
+    for (const dir of await discoverInstallDirs()) {
         try {
-            const raw = await fs.promises.readFile(lockPath, 'utf8');
+            const raw = await fs.promises.readFile(path.join(dir, 'lockfile'), 'utf8');
             const parsed = parseLockfile(raw);
             if (parsed) return parsed;
         } catch {
@@ -48,36 +98,55 @@ async function connectViaLockfile(): Promise<{ port: string; token: string; prot
     return null;
 }
 
-/** Slow fallback — PowerShell+CIM can stall the machine for seconds. Prefer lockfile. */
-async function connectViaPowerShell(): Promise<{ port: string; token: string; protocol: string }> {
+let lastPowerShellProbe = 0;
+/** PowerShell + CIM can stall a machine for seconds; never run it more than once a minute. */
+const POWERSHELL_MIN_INTERVAL_MS = 60000;
+
+/** Slow fallback for unusual installs. Only used on explicit connect requests. */
+async function connectViaPowerShell(): Promise<LcuCredentials> {
+    const now = Date.now();
+    if (now - lastPowerShellProbe < POWERSHELL_MIN_INTERVAL_MS) {
+        throw new Error('League client not found — open the League client and try again');
+    }
+    lastPowerShellProbe = now;
     const command = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name = 'LeagueClientUx.exe'\\" | Select-Object -ExpandProperty CommandLine"`;
     const { stdout } = await execAsync(command, { timeout: 8000, windowsHide: true });
     if (!stdout?.trim()) {
-        throw new Error('League Client not found — open the League client and try again');
+        throw new Error('League client not found — open the League client and try again');
     }
     const portMatch = stdout.match(/--app-port=([0-9]*)/);
     const tokenMatch = stdout.match(/--remoting-auth-token=([\w-]*)/);
+    const dirMatch = stdout.match(/--install-directory=([^"]+?)(?:"|\s--)/);
+    if (dirMatch?.[1]) rememberInstallDir(dirMatch[1].trim());
     if (!portMatch || !tokenMatch) {
-        throw new Error('Could not parse LCU credentials from process command line');
+        throw new Error('Could not parse League client credentials from its command line');
     }
     return { port: portMatch[1], token: tokenMatch[1], protocol: 'https' };
 }
 
-export const connectToLCU = async (): Promise<{ port: string; token: string; protocol: string }> => {
-    const fromLock = await connectViaLockfile();
+export function getLcuCredentials(): LcuCredentials | null {
+    return credentials;
+}
+
+export function setLcuCredentials(next: LcuCredentials | null): void {
+    credentials = next;
+}
+
+/**
+ * Resolve credentials. `allowSlowProbe` permits the PowerShell fallback and is
+ * only set for user-initiated connects, never from background loops.
+ */
+export const connectToLCU = async (allowSlowProbe = false): Promise<LcuCredentials> => {
+    const fromLock = await readLockfileCredentials();
     if (fromLock) {
         credentials = fromLock;
         return credentials;
     }
-    try {
+    if (process.platform === 'win32' && allowSlowProbe) {
         credentials = await connectViaPowerShell();
         return credentials;
-    } catch (error) {
-        console.log('LCU not found or error:', error);
-        throw error instanceof Error
-            ? error
-            : new Error('League Client not found — open the League client and try again');
     }
+    throw new Error('League client not found — open the League client and try again');
 };
 
 /** Refresh credentials before write ops — tokens rotate when the client restarts. */
