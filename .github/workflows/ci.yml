@@ -46,6 +46,9 @@ jobs:
       - name: Verify summoner timers
         run: npm run verify:summoners
 
+      - name: Verify match stats
+        run: npm run verify:stats
+
       - name: Build TypeScript
         run: npm run electron:build
 

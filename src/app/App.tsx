@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
-import { IconDraft, IconGauge, IconHome, IconLoadout, IconMark, IconOverlay } from './icons';
-import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useDraft, useLeague, useProfile, useToasts } from './hooks';
+import { IconDraft, IconGauge, IconHome, IconLoadout, IconMark, IconOverlay, IconStats } from './icons';
+import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useMatchHistory, useDraft, useLeague, useProfile, useToasts } from './hooks';
 import { leagueStatus } from './status';
 import { Pill, Toasts } from './ui';
 import { HomeView } from './views/HomeView';
@@ -10,13 +10,15 @@ import { DraftView } from './views/DraftView';
 import { LoadoutView } from './views/LoadoutView';
 import { OverlayView } from './views/OverlayView';
 import { PerformanceView } from './views/PerformanceView';
+import { StatsView } from './views/StatsView';
 
-export type ViewId = 'home' | 'draft' | 'loadout' | 'overlay' | 'performance';
+export type ViewId = 'home' | 'draft' | 'loadout' | 'stats' | 'overlay' | 'performance';
 
 const NAV: Array<{ id: ViewId; label: string; icon: React.ReactNode }> = [
   { id: 'home', label: 'Home', icon: <IconHome /> },
   { id: 'draft', label: 'Champ select', icon: <IconDraft /> },
   { id: 'loadout', label: 'Build & runes', icon: <IconLoadout /> },
+  { id: 'stats', label: 'Your stats', icon: <IconStats /> },
   { id: 'overlay', label: 'In-game overlay', icon: <IconOverlay /> },
   { id: 'performance', label: 'Performance', icon: <IconGauge /> },
 ];
@@ -88,6 +90,7 @@ export const App: React.FC = () => {
   }, [enemies, allyAdc, allyPartner, profile]);
 
   const { settings } = useAppSettings();
+  const history = useMatchHistory(league, view === 'stats' || draft.live);
   useAutoImport({
     draft,
     profile,
@@ -159,6 +162,7 @@ export const App: React.FC = () => {
             champions={catalog.champions}
             profile={profile}
             loadout={loadout}
+            history={history.games}
             onManual={setManual}
             onClear={clearManual}
             onNavigate={setView}
@@ -171,6 +175,16 @@ export const App: React.FC = () => {
             connected={league.lcu?.state === 'connected'}
             onNavigate={setView}
             onToast={push}
+          />
+        ) : null}
+        {view === 'stats' ? (
+          <StatsView
+            champions={catalog.champions}
+            games={history.games}
+            loading={history.loading}
+            error={history.error}
+            connected={league.lcu?.state === 'connected'}
+            onReload={history.reload}
           />
         ) : null}
         {view === 'overlay' ? <OverlayView inGame={league.inGame} summoners={league.enemySummoners} /> : null}

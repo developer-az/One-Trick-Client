@@ -476,3 +476,65 @@ export function useAutoImport(args: {
     return () => window.clearTimeout(timer);
   }, [key, loadout, profile, autoSpells]);
 }
+
+/* ------------------------------------------------------------ match history */
+
+interface HistoryState {
+  games: MatchSummary[] | null;
+  loading: boolean;
+  error: string | null;
+  loadedAt: number;
+}
+let historyState: HistoryState = { games: null, loading: false, error: null, loadedAt: 0 };
+const historyListeners = new Set<() => void>();
+function setHistory(next: Partial<HistoryState>) {
+  historyState = { ...historyState, ...next };
+  historyListeners.forEach((l) => l());
+}
+
+function loadHistory() {
+  const api = window.electronAPI;
+  if (!api?.getMatchHistory || historyState.loading) return;
+  setHistory({ loading: true, error: null });
+  void api
+    .getMatchHistory()
+    .then((res) =>
+      setHistory({
+        loading: false,
+        games: res.success ? res.games : historyState.games,
+        error: res.success ? null : res.error || 'Could not read match history',
+        loadedAt: Date.now(),
+      })
+    )
+    .catch((e: Error) => setHistory({ loading: false, error: e.message }));
+}
+
+/**
+ * Your recent games, shared by every screen. Loads when first needed while the
+ * client is connected and not in a match, and again after each match ends.
+ */
+export function useMatchHistory(league: LeagueState, wanted: boolean) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const l = () => force((n) => n + 1);
+    historyListeners.add(l);
+    return () => {
+      historyListeners.delete(l);
+    };
+  }, []);
+
+  const connected = league.lcu?.state === 'connected';
+  const inGame = league.inGame;
+  const wasInGame = useRef(inGame);
+  useEffect(() => {
+    // A finished match adds a game, so the cached list is stale.
+    if (wasInGame.current && !inGame) historyState = { ...historyState, loadedAt: 0 };
+    wasInGame.current = inGame;
+    if (!wanted || !connected || inGame) return;
+    // Otherwise the list only changes when a game ends.
+    if (historyState.games && Date.now() - historyState.loadedAt < 10 * 60_000) return;
+    loadHistory();
+  }, [wanted, connected, inGame]);
+
+  return { ...historyState, reload: loadHistory };
+}

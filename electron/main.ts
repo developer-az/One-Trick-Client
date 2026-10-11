@@ -487,6 +487,17 @@ app.whenReady().then(() => {
         }
     });
 
+    ipcMain.handle('match-history-get', async () => {
+        try {
+            const { getMatchHistory } = await import('./match-history');
+            const games = await getMatchHistory({ canFetchDetails: () => !isCurrentlyInGame() });
+            return { success: true, games };
+        } catch (error: unknown) {
+            const err = error as { message?: string };
+            return { success: false, games: [], error: err.message || 'Unknown error' };
+        }
+    });
+
     ipcMain.handle('lcu-set-summoner-spells', async (_event, spellIds: unknown) => {
         try {
             const { setSummonerSpells } = await import('./lcu-connector');
