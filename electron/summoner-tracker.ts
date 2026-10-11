@@ -35,6 +35,8 @@ export interface EnemyLaneSpells {
   spells: TrackedSpell[];
   /** First Flash auto-start already consumed for this lane */
   flashDeathArmed?: boolean;
+  /** Summoner Spell Haste visible from items (Lucidity boots). Runes are hidden for enemies. */
+  summonerHaste?: number;
 }
 
 /** @deprecated alias — prefer EnemyLaneSpells */
@@ -117,7 +119,28 @@ function toTracked(def: SpellDef, readyAt = 0): TrackedSpell {
   return { spellId: def.id, name: def.name, short: def.short, baseCd: def.baseCd, readyAt };
 }
 
+/**
+ * Summoner Spell Haste from items. Ionian Boots of Lucidity give 10; Crimson
+ * Lucidity (its upgrade) is counted at the same 10 as a floor. Cosmic Insight
+ * also gives haste but enemy rune pages aren't exposed by the Live Client, so
+ * it can't be counted.
+ */
+const SUMMONER_HASTE_ITEMS: Record<string, number> = { '3158': 10, '3171': 10 };
+
+export function summonerHasteFromItems(itemIds: Array<string | number>): number {
+  let haste = 0;
+  for (const id of itemIds) haste = Math.max(haste, SUMMONER_HASTE_ITEMS[String(id)] || 0);
+  return haste;
+}
+
+/** Cooldown in ms after haste: base * 100 / (100 + haste). */
+export function hastedCooldownMs(baseCdSeconds: number, haste = 0): number {
+  return (baseCdSeconds * 100 * 1000) / (100 + Math.max(0, haste));
+}
+
 let trackedLanes: EnemyLaneSpells[] = [];
+/** False until the first event batch of a match has been seen. */
+let eventsPrimed = false;
 let processedEventIds = new Set<number>();
 let lastFingerprint = '';
 /** Focus lane Flash/sums coming back — clipboard auto-copy. */
@@ -141,6 +164,7 @@ export function getEnemyBotSummoners(): EnemyLaneSpells[] {
 export function resetSummonerTracker(): void {
   trackedLanes = [];
   processedEventIds = new Set();
+  eventsPrimed = false;
   lastFingerprint = '';
   pendingClipboardText = null;
   prevReady.clear();
@@ -184,6 +208,7 @@ function upsertLane(
     championId,
     spells,
     flashDeathArmed: existing?.flashDeathArmed ?? true,
+    summonerHaste: existing?.summonerHaste,
   };
   if (existing) {
     Object.assign(existing, entry);
@@ -217,6 +242,61 @@ function resolveRole(pos: string, championName: string, defs: SpellDef[]): Track
   return inferRoleFromSpells(defs) || inferRoleFromChamp(championName);
 }
 
+const LANE_ROLES: TrackedRole[] = ['Bot', 'Support', 'Mid'];
+
+/** How well a champion + spells fit a lane (0 = no evidence). */
+function laneScore(champ: string, defs: SpellDef[], role: TrackedRole): number {
+  let score = inferRoleFromChamp(champ) === role ? 3 : 0;
+  const names = new Set(defs.map((d) => d.name));
+  if (role === 'Bot' && (names.has('Heal') || names.has('Barrier'))) score += 2;
+  if (role === 'Support' && names.has('Exhaust')) score += 2;
+  if (role === 'Mid' && names.has('Teleport')) score += 1;
+  return score;
+}
+
+/**
+ * Give each lane (Bot, Support, Mid) to at most one enemy, maximising total
+ * fit. Players with a reported position keep it. Assigning one by one let
+ * several enemies claim the same lane, so timers jumped between champions.
+ */
+export function assignLaneRoles(
+  candidates: Array<{ champ: string; defs: SpellDef[]; fixed: TrackedRole | null }>
+): Map<string, TrackedRole> {
+  const out = new Map<string, TrackedRole>();
+  const taken = new Set<TrackedRole>();
+  for (const c of candidates) {
+    if (c.fixed && !taken.has(c.fixed)) {
+      out.set(c.champ, c.fixed);
+      taken.add(c.fixed);
+    }
+  }
+  const open = LANE_ROLES.filter((r) => !taken.has(r));
+  const pool = candidates.filter((c) => !c.fixed);
+  let best: Array<[string, TrackedRole]> = [];
+  let bestScore = 0;
+  const walk = (i: number, used: Set<string>, picked: Array<[string, TrackedRole]>, score: number) => {
+    if (score > bestScore) {
+      bestScore = score;
+      best = [...picked];
+    }
+    if (i >= open.length) return;
+    walk(i + 1, used, picked, score); // leave this lane empty
+    for (const c of pool) {
+      if (used.has(c.champ)) continue;
+      const gain = laneScore(c.champ, c.defs, open[i]);
+      if (gain <= 0) continue;
+      used.add(c.champ);
+      picked.push([c.champ, open[i]]);
+      walk(i + 1, used, picked, score + gain);
+      picked.pop();
+      used.delete(c.champ);
+    }
+  };
+  walk(0, new Set(), [], 0);
+  for (const [champ, role] of best) out.set(champ, role);
+  return out;
+}
+
 /** Champ select: cache enemy BOTTOM + UTILITY + MIDDLE spell ids. */
 export function ingestChampSelectTeam(
   theirTeam: Array<{
@@ -244,52 +324,41 @@ export function ingestLivePlayers(
   enemies: Array<{
     championName: string;
     position?: string;
+    itemIds?: Array<string | number>;
     summonerSpells?: {
       summonerSpellOne?: { displayName: string };
       summonerSpellTwo?: { displayName: string };
     };
   }>
 ): void {
-  const candidates: Array<{
-    champ: string;
-    pos: string;
-    defs: SpellDef[];
-    role: TrackedRole | null;
-  }> = [];
+  const candidates: Array<{ champ: string; defs: SpellDef[]; fixed: TrackedRole | null }> = [];
   for (const e of enemies) {
     const defs = [
       defFromName(e.summonerSpells?.summonerSpellOne?.displayName),
       defFromName(e.summonerSpells?.summonerSpellTwo?.displayName),
     ].filter(Boolean) as SpellDef[];
     if (defs.some((d) => d.name === 'Smite')) continue;
-    const role = resolveRole(e.position || '', e.championName, defs);
-    candidates.push({ champ: e.championName, pos: e.position || '', defs, role });
+    const p = (e.position || '').toUpperCase();
+    const known = p !== '' && p !== 'NONE';
+    const fixed = known ? resolveRole(p, e.championName, defs) : null;
+    if (known && !fixed) continue; // Top / Jungle
+    candidates.push({ champ: e.championName, defs, fixed });
   }
 
-  for (const c of candidates) {
-    if (!c.role) continue;
+  for (const [champ, role] of assignLaneRoles(candidates)) {
+    const c = candidates.find((x) => x.champ === champ);
+    if (!c) continue;
     if (c.defs.length === 0) {
-      const existing = trackedLanes.find((b) => b.role === c.role);
-      if (existing) {
-        if (existing.championName.startsWith('#') || !existing.championName) {
-          existing.championName = c.champ;
-        } else if (normChamp(existing.championName) !== normChamp(c.champ)) {
-          existing.championName = c.champ;
-        }
-      }
+      const existing = trackedLanes.find((b) => b.role === role);
+      if (existing) existing.championName = c.champ;
       continue;
     }
-    upsertLane(c.role, c.champ, undefined, c.defs);
+    upsertLane(role, c.champ, undefined, c.defs);
   }
 
-  for (const role of ['Bot', 'Support', 'Mid'] as const) {
-    if (trackedLanes.some((b) => b.role === role)) continue;
-    const hit = candidates.find(
-      (c) =>
-        !c.role &&
-        (inferRoleFromSpells(c.defs) === role || inferRoleFromChamp(c.champ) === role)
-    );
-    if (hit && hit.defs.length) upsertLane(role, hit.champ, undefined, hit.defs);
+  for (const e of enemies) {
+    const lane = trackedLanes.find((l) => laneMatchesChampion(l, e.championName));
+    if (lane && e.itemIds) lane.summonerHaste = summonerHasteFromItems(e.itemIds);
   }
 }
 
@@ -301,13 +370,15 @@ function startSpellCd(
   lane: EnemyLaneSpells,
   spellName: string,
   source: TrackedSpell['source'],
-  opts?: { force?: boolean }
+  opts?: { force?: boolean; at?: number }
 ): boolean {
   const spell = lane.spells.find((s) => s.name === spellName);
   if (!spell) return false;
-  const now = Date.now();
-  if (!opts?.force && spell.readyAt > now) return false;
-  spell.readyAt = now + spell.baseCd * 1000;
+  // `at` is when the spell was most likely used (the kill event time), so a
+  // timer reflects the event, not the moment we happened to poll.
+  const at = opts?.at ?? Date.now();
+  if (!opts?.force && spell.readyAt > at) return false;
+  spell.readyAt = at + hastedCooldownMs(spell.baseCd, lane.summonerHaste);
   spell.source = source;
   return true;
 }
@@ -334,9 +405,20 @@ interface LiveEvent {
  */
 export function ingestLiveEvents(
   events: LiveEvent[] | undefined,
-  nameToChampion: Map<string, string>
+  nameToChampion: Map<string, string>,
+  gameTime?: number
 ): void {
   if (!events?.length) return;
+  const now = Date.now();
+  // Map an event's game time to wall-clock. Without a game clock, events seen
+  // for the first time (app started mid-match, or a reset) can't be dated, so
+  // they are recorded without starting timers instead of replaying old kills now.
+  const eventAt = (ev: LiveEvent): number | null =>
+    typeof gameTime === 'number' && typeof ev.EventTime === 'number'
+      ? now - Math.max(0, gameTime - ev.EventTime) * 1000
+      : eventsPrimed
+        ? now
+        : null;
 
   const lookup = (raw: string | undefined): string | undefined => {
     if (!raw) return undefined;
@@ -347,6 +429,8 @@ export function ingestLiveEvents(
     if (ev.EventName !== 'ChampionKill' || ev.EventID == null) continue;
     if (processedEventIds.has(ev.EventID)) continue;
     processedEventIds.add(ev.EventID);
+    const at = eventAt(ev);
+    if (at === null) continue;
 
     const killerChamp = lookup(ev.KillerName);
     const victimChamp = lookup(ev.VictimName);
@@ -355,41 +439,42 @@ export function ingestLiveEvents(
       // Combat sums: Support Ignite/Exhaust are reliable; ADC kills are usually autos
       if (lane.role === 'Support' || lane.role === 'Mid') {
         if (laneMatchesChampion(lane, killerChamp)) {
-          startSpellCd(lane, 'Ignite', 'kill');
+          startSpellCd(lane, 'Ignite', 'kill', { at });
         }
         for (const a of ev.Assisters || []) {
           const assistChamp = lookup(a);
           if (laneMatchesChampion(lane, assistChamp)) {
-            startSpellCd(lane, 'Exhaust', 'kill');
-            startSpellCd(lane, 'Ignite', 'kill');
+            startSpellCd(lane, 'Exhaust', 'kill', { at });
+            startSpellCd(lane, 'Ignite', 'kill', { at });
           }
         }
       }
 
-        if (laneMatchesChampion(lane, victimChamp)) {
+      if (laneMatchesChampion(lane, victimChamp)) {
         // High-confidence defensive sums — usually burned before death
-        startSpellCd(lane, 'Heal', 'death');
-        startSpellCd(lane, 'Barrier', 'death');
-        startSpellCd(lane, 'Ghost', 'death');
-        startSpellCd(lane, 'Cleanse', 'death');
+        startSpellCd(lane, 'Heal', 'death', { at });
+        startSpellCd(lane, 'Barrier', 'death', { at });
+        startSpellCd(lane, 'Ghost', 'death', { at });
+        startSpellCd(lane, 'Cleanse', 'death', { at });
 
         // Mid Teleport is often burned into a death / dive — arm if ready
         if (lane.role === 'Mid') {
-          startSpellCd(lane, 'Teleport', 'death');
+          startSpellCd(lane, 'Teleport', 'death', { at });
         }
         // Support Exhaust often used into the fight that kills them
         if (lane.role === 'Support') {
-          startSpellCd(lane, 'Exhaust', 'death');
+          startSpellCd(lane, 'Exhaust', 'death', { at });
         }
 
         // Flash: only if currently ready (never restarts mid-CD).
         // Live Client has no cast events — death while Flash is up is still the
         // best available signal; press PageUp/PageDown to correct.
-        startSpellCd(lane, 'Flash', 'death');
+        startSpellCd(lane, 'Flash', 'death', { at });
       }
     }
   }
 
+  eventsPrimed = true;
   detectFocusSumsComingUp();
 }
 
@@ -424,7 +509,6 @@ export function markSpellUsed(
 /**
  * Toggle a spell timer: start CD if ready, clear if already counting down.
  * Used by Page Up / Page Down so a mis-press is undoable.
- * Falls back across roles if the preferred lane isn't tracked yet.
  */
 export function toggleSpellUsed(
   role: TrackedRole,
@@ -453,18 +537,9 @@ export function toggleSpellUsed(
     return { success: true as const, active: true };
   };
 
-  const order: TrackedRole[] =
-    role === 'Mid'
-      ? ['Mid', 'Bot', 'Support']
-      : role === 'Bot'
-        ? ['Bot', 'Support', 'Mid']
-        : ['Support', 'Bot', 'Mid'];
-
-  for (const r of order) {
-    const res = tryRole(r);
-    if (res) return res;
-  }
-  return { success: false, active: false };
+  // Only the lane the key is for. Falling back to another lane would start a
+  // timer the user can't see and didn't mean.
+  return tryRole(role) || { success: false, active: false };
 }
 
 function focusPrimaryLane(): EnemyLaneSpells | undefined {

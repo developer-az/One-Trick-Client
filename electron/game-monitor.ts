@@ -204,7 +204,14 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
     }));
 
     // Keep lane summoner timers current from live positions + kill events
-    ingestLivePlayers(enemies);
+    ingestLivePlayers(
+        enemyPlayers.map((p) => ({
+            championName: p.championName,
+            position: p.position,
+            summonerSpells: p.summonerSpells,
+            itemIds: (p.items || []).map((i) => i.itemID),
+        }))
+    );
     const nameToChampion = new Map<string, string>();
     for (const p of live?.allPlayers || []) {
         if (p.summonerName) nameToChampion.set(p.summonerName, p.championName);
@@ -217,13 +224,15 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         // Events sometimes use champion display names directly
         if (p.championName) nameToChampion.set(p.championName, p.championName);
     }
-    ingestLiveEvents(live?.events?.Events, nameToChampion);
+    ingestLiveEvents(live?.events?.Events, nameToChampion, live?.gameData?.gameTime);
 
     // Auto-copy ADC Flash/Heal/Barrier when they come back up. Clipboard writes
     // are a synchronous OS call — throttle so a flapping timer can never turn
     // into a write on every tick while a match is running.
-    const clip = consumeSummonerClipboard();
-    if (clip && Date.now() - lastClipboardWrite > CLIPBOARD_MIN_INTERVAL_MS) {
+    // Only take the pending text when we're allowed to write it, so a throttled
+    // tick doesn't swallow it.
+    const clip = Date.now() - lastClipboardWrite > CLIPBOARD_MIN_INTERVAL_MS ? consumeSummonerClipboard() : null;
+    if (clip) {
         lastClipboardWrite = Date.now();
         try {
             clipboard.writeText(clip);

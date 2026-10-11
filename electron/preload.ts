@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // App settings + diagnostics
     getAppSettings: () => ipcRenderer.invoke('app-settings-get'),
     setAppSettings: (patch: unknown) => ipcRenderer.invoke('app-settings-set', patch),
+    getMatchHistory: () => ipcRenderer.invoke('match-history-get'),
+    setSummonerSpells: (spellIds: [number, number]) => ipcRenderer.invoke('lcu-set-summoner-spells', spellIds),
     relaunchApp: () => ipcRenderer.invoke('app-relaunch'),
     getPerfStats: () => ipcRenderer.invoke('perf-stats'),
     reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),

@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
 import type { ViewId } from '../App';
+import { recordAgainst } from '../../logic/stats';
 import { ROLES, type DraftMember, type DraftState, type Role } from '../hooks';
 import { IconArrowRight, IconDraft } from '../icons';
 import type { Loadout } from './LoadoutView';
@@ -21,10 +22,11 @@ export const DraftView: React.FC<{
   champions: Champion[];
   profile: ChampionProfile;
   loadout: Loadout | null;
+  history?: MatchSummary[] | null;
   onManual: (side: 'ally' | 'enemy', role: Role, champion: Champion | null) => void;
   onClear: () => void;
   onNavigate: (view: ViewId) => void;
-}> = ({ draft, champions, profile, loadout, onManual, onClear, onNavigate }) => {
+}> = ({ draft, champions, profile, loadout, history, onManual, onClear, onNavigate }) => {
   const taken = useMemo(() => {
     const ids = new Set<string>();
     for (const r of ROLES) {
@@ -78,6 +80,7 @@ export const DraftView: React.FC<{
           members={draft.enemy}
           champions={champions}
           taken={taken}
+          history={history}
           onManual={onManual}
         />
       </div>
@@ -115,8 +118,9 @@ const TeamColumn: React.FC<{
   members: Record<Role, DraftMember | null>;
   champions: Champion[];
   taken: Set<string>;
+  history?: MatchSummary[] | null;
   onManual: (side: 'ally' | 'enemy', role: Role, champion: Champion | null) => void;
-}> = ({ title, tone, side, members, champions, taken, onManual }) => (
+}> = ({ title, tone, side, members, champions, taken, history, onManual }) => (
   <Card>
     <CardHeader title={title} action={<span className={`ot-dot ${tone === 'blue' ? '' : 'ot-tone-bad'}`} style={tone === 'blue' ? { background: 'var(--ot-blue)' } : undefined} />} />
     <div className="space-y-2">
@@ -138,6 +142,7 @@ const TeamColumn: React.FC<{
             <div className="flex gap-1.5">
               {m?.isLocal ? <Badge tone="gold">You</Badge> : null}
               {m?.hovering ? <Badge>Hovering</Badge> : null}
+              {side === 'enemy' && m?.champion && history ? <YourRecord history={history} enemyKey={Number(m.champion.key)} /> : null}
             </div>
           </div>
         );
@@ -248,3 +253,16 @@ const ChampList: React.FC<{ title: string; names: string[]; tone: 'teal' | 'red'
 function titleCase(s: string): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
+
+/** Your own record in past games against this champion (from match history). */
+const YourRecord: React.FC<{ history: MatchSummary[]; enemyKey: number }> = ({ history, enemyKey }) => {
+  const r = recordAgainst(history, enemyKey);
+  if (!r.games) return null;
+  return (
+    <span title={`Your games against this champion: ${r.wins} won, ${r.losses} lost`}>
+      <Badge tone={r.games < 5 ? 'muted' : r.low > 0.5 ? 'teal' : r.high < 0.5 ? 'red' : 'muted'}>
+        You {r.wins}–{r.losses}
+      </Badge>
+    </span>
+  );
+};

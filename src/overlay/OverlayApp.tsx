@@ -74,7 +74,7 @@ function NudgeGroup({
 }) {
   return (
     <div className="hud-nudge-group" title={`Nudge ${label} alignment`}>
-      <span className="text-[8px] uppercase tracking-wider opacity-70 mr-1">{label}</span>
+      <span className="text-[11px] uppercase tracking-wider opacity-70 mr-1">{label}</span>
       <button type="button" className="hud-nudge-btn" onClick={() => onNudge('dx', -2)}>←</button>
       <button type="button" className="hud-nudge-btn" onClick={() => onNudge('dx', 2)}>→</button>
       <button type="button" className="hud-nudge-btn" onClick={() => onNudge('dy', 2)}>↑</button>
@@ -530,7 +530,7 @@ export const OverlayApp: React.FC = () => {
   const actionLine = showAction ? (
     <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
       <div>{cues[0].label}</div>
-      {cues[0].rationale ? <div className="text-[8px] opacity-75">{cues[0].rationale}</div> : null}
+      {cues[0].rationale ? <div className="text-[11px] opacity-75">{cues[0].rationale}</div> : null}
     </div>
   ) : null;
 
@@ -584,7 +584,7 @@ export const OverlayApp: React.FC = () => {
         >
           Sync LoL
         </button>
-        <span className="px-1 text-[8px] tracking-wider opacity-50">
+        <span className="px-1 text-[11px] tracking-wider opacity-50">
           Match filled boxes to your League HUD / minimap
         </span>
       </div>
@@ -601,7 +601,7 @@ export const OverlayApp: React.FC = () => {
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
                 <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
-                <div className="hud-chrome-meta !text-[8px]">
+                <div className="hud-chrome-meta !text-[11px]">
                   {typeof state.gameTime === 'number' && state.gameTime > 0
                     ? formatGameTime(state.gameTime)
                     : 'Live'}
@@ -609,7 +609,7 @@ export const OverlayApp: React.FC = () => {
               </div>
               <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
                 <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
-                <p className="text-[8px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
+                <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
                   {hotkeyHint}
                 </p>
               </div>
@@ -662,7 +662,7 @@ export const OverlayApp: React.FC = () => {
                   />
                   <div className="min-w-0">
                     <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
-                    <div className="hud-chrome-meta !text-[8px]">{profile.shortLabel}</div>
+                    <div className="hud-chrome-meta !text-[11px]">{profile.shortLabel}</div>
                   </div>
                 </div>
                 <button type="button" onClick={() => setCollapsed(true)} className="hud-btn" title="Collapse rails">
@@ -670,7 +670,7 @@ export const OverlayApp: React.FC = () => {
                 </button>
               </div>
               <div className="relative z-10 px-2 py-1.5">
-                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
+                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[12px] !py-1">
                   Switch profile → {state.localPlayer?.championName || '?'}
                 </div>
               </div>
@@ -707,7 +707,7 @@ export const OverlayApp: React.FC = () => {
               />
               <div className="min-w-0">
                 <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
-                <div className="hud-chrome-meta !text-[8px]">
+                <div className="hud-chrome-meta !text-[11px]">
                   {profile.shortLabel}
                   {typeof state.gameTime === 'number' && state.gameTime > 0
                     ? ` · ${formatGameTime(state.gameTime)}`
@@ -737,7 +737,7 @@ export const OverlayApp: React.FC = () => {
           {!collapsed && (
             <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
               {!profileMatchesLocal ? (
-                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[10px] !py-1">
+                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[12px] !py-1">
                   Switch profile → {state.localPlayer?.championName || '?'}
                 </div>
               ) : null}

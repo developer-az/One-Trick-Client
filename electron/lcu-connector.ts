@@ -259,16 +259,7 @@ export const exportRunePage = async (runePage: ExportRunePagePayload): Promise<v
         return Array.isArray(pages) ? (pages as LCURunePage[]) : [];
     };
 
-    let pages = await readPages();
-
-    // Replace our own page if it already exists
-    for (const page of pages.filter((p) => p.name === runePage.name && p.id != null)) {
-        try {
-            await makeLCURequest('DELETE', `/lol-perks/v1/pages/${page.id}`, undefined, 6000);
-        } catch {
-            // Non-fatal: the create below will surface the real problem
-        }
-    }
+    const pages = await readPages();
 
     const body = {
         name: runePage.name,
@@ -278,35 +269,27 @@ export const exportRunePage = async (runePage: ExportRunePagePayload): Promise<v
         current: runePage.current !== false,
     };
 
-    const create = async () => makeLCURequest('POST', '/lol-perks/v1/pages', body, 8000);
+    // Update our own page in place when it exists, so it keeps its slot. The
+    // user's other pages are never deleted: if every slot is taken we stop and
+    // say so instead of picking a page to throw away.
+    const own = pages.find((p) => p.name === runePage.name && p.id != null && p.isEditable !== false);
+    const write = async () =>
+        own
+            ? makeLCURequest('PUT', `/lol-perks/v1/pages/${own.id}`, { ...body, id: own.id }, 8000)
+            : makeLCURequest('POST', '/lol-perks/v1/pages', body, 8000);
 
     try {
-        await create();
+        await write();
     } catch (firstError) {
         const message = firstError instanceof Error ? firstError.message : String(firstError);
-
-        // "Max pages reached" is the single most common export failure — free a
-        // slot by deleting the oldest page the client says we are allowed to
-        // delete, then try again.
-        const outOfSlots = /max|limit|slot/i.test(message);
-        if (outOfSlots) {
-            pages = await readPages();
-            const victim = pages
-                .filter((p) => p.isDeletable !== false && !p.current && !p.isActive)
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
-            if (victim?.id != null) {
-                await makeLCURequest('DELETE', `/lol-perks/v1/pages/${victim.id}`, undefined, 6000);
-                await create();
-            } else {
-                throw new Error(
-                    'Rune page limit reached and no page could be deleted — delete a rune page in the client and retry.'
-                );
-            }
-        } else {
-            // Token may have rotated (client restart) — reconnect once and retry.
-            await reconnectLCU();
-            await create();
+        if (/max|limit|slot/i.test(message)) {
+            throw new Error(
+                `All your rune page slots are full. Delete a page in the client, or rename one to "${runePage.name}" so One Trick can reuse it.`
+            );
         }
+        // Token may have rotated (client restart): reconnect once and retry.
+        await reconnectLCU();
+        await write();
     }
 
     // Verify: a 2xx from the client is not proof the page survived validation.
@@ -441,7 +424,12 @@ export const exportItemSet = async (build: ExportBuildPayload): Promise<void> =>
         (await makeLCURequest('GET', setsEndpoint, undefined, 8000)) as LCUItemSetsCollection | null;
 
     const existing = await readCollection();
-    const existingSets = Array.isArray(existing?.itemSets) ? existing!.itemSets! : [];
+    // The PUT below replaces the whole collection. Without a readable copy of
+    // the user's current sets, writing would delete them, so stop instead.
+    if (!existing || !Array.isArray(existing.itemSets)) {
+        throw new Error('Could not read your existing item sets from the client, so nothing was changed. Try again in a moment.');
+    }
+    const existingSets = existing.itemSets;
     // Only our own same-titled set is replaced — other profiles' sets (and the
     // user's own sets) stay untouched.
     const prior = existingSets.find((s) => s.title === setTitle);
@@ -461,7 +449,8 @@ export const exportItemSet = async (build: ExportBuildPayload): Promise<void> =>
         { id: '3340' }, // Stealth Ward (trinket)
     ]);
 
-    if (starter.length) blocks.push(block('Starting — keep Atlas (never sell)', starter));
+    const supportStart = starter.some((i) => i.id === '3865');
+    if (starter.length) blocks.push(block(supportStart ? 'Starting (keep World Atlas)' : 'Starting', starter));
     if (core.length) blocks.push(block('Core Items', core));
     if (boots.length) blocks.push(block('Boots (mid-tier complete)', boots));
     if (vision.length) blocks.push(block('Vision — pinks + sweeper', vision));
@@ -623,4 +612,27 @@ export const makeLCURequest = async (
         }
         throw error instanceof Error ? error : new Error(String(error));
     }
+};
+
+/**
+ * Set summoner spells in champ select. Flash stays on whichever key (D or F)
+ * the player already has it on, since that is muscle memory.
+ */
+export const setSummonerSpells = async (spellIds: unknown): Promise<void> => {
+    if (!Array.isArray(spellIds) || spellIds.length !== 2 || !spellIds.every((id) => Number.isInteger(id) && id > 0)) {
+        throw new Error('Expected two summoner spell ids');
+    }
+    await ensureLCUConnected();
+    const session = (await makeLCURequest('GET', '/lol-champ-select/v1/session', undefined, 5000)) as {
+        localPlayerCellId?: number;
+        myTeam?: Array<{ cellId?: number; spell1Id?: number; spell2Id?: number }>;
+    } | null;
+    const me = session?.myTeam?.find((m) => m.cellId === session.localPlayerCellId);
+    if (!me) throw new Error('Not in champ select');
+    let [a, b] = spellIds as [number, number];
+    const FLASH = 4;
+    if (me.spell2Id === FLASH && a === FLASH) [a, b] = [b, a];
+    if (me.spell1Id === FLASH && b === FLASH) [a, b] = [b, a];
+    if (me.spell1Id === a && me.spell2Id === b) return;
+    await makeLCURequest('PATCH', '/lol-champ-select/v1/session/my-selection', { spell1Id: a, spell2Id: b }, 5000);
 };

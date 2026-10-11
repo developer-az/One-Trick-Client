@@ -1,5 +1,5 @@
 import type { CatalogChampion, CatalogRole } from '../catalog/types';
-import { getCatalog, recommendationFor } from '../catalog/client';
+import { findChampionInCatalog, getCatalog, recommendationFor } from '../catalog/client';
 import { catalogItemsById } from '../catalog/client';
 import { recommendationToBuild, recommendationToRunes } from '../catalog/loadout';
 import type {
@@ -85,8 +85,10 @@ export function createGenericProfile(
   role: CatalogRole
 ): ChampionProfile {
   const bundle = getCatalog();
+  // Live Client names ("KaiSa", "Wukong", "NunuWillump") aren't always Data
+  // Dragon ids, so match by id or compact display name.
   const champion =
-    bundle?.champions.find((row) => row.id === championId) ||
+    findChampionInCatalog(bundle, { id: championId, name: championId }) ||
     ({
       id: championId,
       key: '0',
