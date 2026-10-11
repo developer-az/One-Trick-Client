@@ -207,10 +207,10 @@ function onFlashPrimary(): void {
 function onFlashSecondary(): void {
     const { secondary } = flashToggleRoles();
     if (getSummonerFocus() === 'mid') {
-        // Mid: PageDown toggles Ignite, then Teleport as fallback
+        // Mid: PageDown is the laner's other summoner (Ignite, else Teleport).
+        // PageUp already owns Flash, so it is never a fallback here.
         let res = toggleSpellUsed(secondary, 'Ignite');
         if (!res.success) res = toggleSpellUsed(secondary, 'Teleport');
-        if (!res.success) res = toggleSpellUsed(secondary, 'Flash');
         if (res.success) pushSummonerUpdate();
         return;
     }
@@ -483,6 +483,17 @@ app.whenReady().then(() => {
         } catch (error: unknown) {
             const err = error as { message?: string };
             console.error('Export Rune Page Error:', err.message || 'Unknown error');
+            return { success: false, error: err.message || 'Unknown error' };
+        }
+    });
+
+    ipcMain.handle('lcu-set-summoner-spells', async (_event, spellIds: unknown) => {
+        try {
+            const { setSummonerSpells } = await import('./lcu-connector');
+            await setSummonerSpells(spellIds);
+            return { success: true };
+        } catch (error: unknown) {
+            const err = error as { message?: string };
             return { success: false, error: err.message || 'Unknown error' };
         }
     });

@@ -43,6 +43,9 @@ jobs:
       - name: Overlay window bounds
         run: npm run verify:overlay-bounds
 
+      - name: Verify summoner timers
+        run: npm run verify:summoners
+
       - name: Build TypeScript
         run: npm run electron:build
 

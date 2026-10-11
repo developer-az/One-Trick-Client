@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
 import { IconDraft, IconGauge, IconHome, IconLoadout, IconMark, IconOverlay } from './icons';
-import { isDesktop, profileIdFor, ROLES, useCatalog, useDraft, useLeague, useProfile, useToasts } from './hooks';
+import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useDraft, useLeague, useProfile, useToasts } from './hooks';
 import { leagueStatus } from './status';
 import { Pill, Toasts } from './ui';
 import { HomeView } from './views/HomeView';
@@ -86,6 +86,20 @@ export const App: React.FC = () => {
       return null;
     }
   }, [enemies, allyAdc, allyPartner, profile]);
+
+  const { settings } = useAppSettings();
+  useAutoImport({
+    draft,
+    profile,
+    loadout,
+    settings,
+    onResult: (res, first) => {
+      // The first send per lobby and any failure are worth a toast; silent
+      // re-sends as enemies lock in would just be noise.
+      if (!res.ok) push({ tone: 'bad', title: `Auto-import: ${res.title}`, body: res.body });
+      else if (first) push({ tone: 'good', title: 'Runes and items imported', body: res.body });
+    },
+  });
 
   const selectChampion = (champion: Champion, role: CatalogRole) => setProfileId(profileIdFor(champion, role));
 

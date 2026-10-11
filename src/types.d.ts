@@ -30,6 +30,10 @@ declare global {
         hideDashboardInGame: boolean;
         /** Master switch for the in-game overlay. */
         overlayEnabled: boolean;
+        /** Send runes and the item set to the client on lock-in. */
+        autoImport: boolean;
+        /** Also set summoner spells on lock-in. */
+        autoSpells: boolean;
     }
 
     interface PerfProcessStat {
@@ -132,6 +136,7 @@ declare global {
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;
             relaunchApp?: () => Promise<void>;
             getPerfStats?: () => Promise<PerfStats>;
+            setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
             reportOverlayContent?: (hasContent: boolean) => void;
         };
     }

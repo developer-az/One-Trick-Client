@@ -3,8 +3,10 @@ import { getRuneIconUrl, getRuneMeta, getStyleMeta } from '../../data/runeServic
 import type { Build, DominanceMetrics, Item as BuildItem, MatchupAnalysis, RunePage } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
 import type { ViewId } from '../App';
+import { sendLoadout } from '../exporter';
 import { IconArrowRight, IconLoadout, IconUpload } from '../icons';
-import { Badge, Card, CardHeader, EmptyState, Item, type Toast } from '../ui';
+import { isDesktop, useAppSettings } from '../hooks';
+import { Badge, Card, CardHeader, EmptyState, Item, SettingRow, Switch, type Toast } from '../ui';
 
 export interface Loadout {
   build: Build;
@@ -43,6 +45,9 @@ export const LoadoutView: React.FC<{
             }
           />
         </Card>
+        <div className="mt-5 max-w-xl">
+          <AutoImportCard />
+        </div>
       </div>
     );
   }
@@ -50,45 +55,10 @@ export const LoadoutView: React.FC<{
   const { build, runes } = loadout;
 
   const exportToClient = async () => {
-    const api = window.electronAPI;
-    if (!api) return;
     setBusy(true);
-    try {
-      if (runes.selectedPerkIds.length !== 9) {
-        throw new Error(`Rune page is incomplete (${runes.selectedPerkIds.length} of 9 runes).`);
-      }
-      const runeRes = await api.exportRunePage({
-        name: profile.runePageName,
-        primaryStyleId: runes.primaryStyleId,
-        subStyleId: runes.subStyleId,
-        selectedPerkIds: [...runes.selectedPerkIds],
-        current: true,
-      });
-      if (!runeRes.success) throw new Error(runeRes.error || 'The client rejected the rune page.');
-
-      const itemRes = await api.exportItemSet({
-        starter: build.starter,
-        core: build.core,
-        boots: build.boots,
-        situational: build.situational,
-        buildPath: build.buildPath,
-        championKey: profile.championKey,
-        title: profile.itemSetTitle,
-      });
-      if (!itemRes?.success) {
-        onToast({ tone: 'bad', title: 'Runes sent, items failed', body: itemRes?.error || 'Item set export failed.' });
-        return;
-      }
-      onToast({
-        tone: 'good',
-        title: 'Sent to the League client',
-        body: `Rune page "${profile.runePageName}" and item set "${profile.itemSetTitle}".`,
-      });
-    } catch (error) {
-      onToast({ tone: 'bad', title: 'Export failed', body: (error as Error).message || 'Unknown error' });
-    } finally {
-      setBusy(false);
-    }
+    const res = await sendLoadout(profile, loadout);
+    setBusy(false);
+    onToast({ tone: res.ok ? 'good' : 'bad', title: res.title, body: res.body });
   };
 
   return (
@@ -116,9 +86,12 @@ export const LoadoutView: React.FC<{
       </div>
 
       <div className="grid gap-5 lg:grid-cols-5">
-        <Card className="lg:col-span-2">
-          <RunePanel runes={runes} />
-        </Card>
+        <div className="lg:col-span-2 space-y-5">
+          <Card>
+            <RunePanel runes={runes} />
+          </Card>
+          <AutoImportCard />
+        </div>
 
         <div className="lg:col-span-3 space-y-5">
           <Card>
@@ -272,5 +245,34 @@ const RunePanel: React.FC<{ runes: RunePage }> = ({ runes }) => {
         </>
       ) : null}
     </>
+  );
+};
+
+const AutoImportCard: React.FC = () => {
+  const { settings, update } = useAppSettings();
+  if (!isDesktop) return null;
+  return (
+    <Card>
+      <CardHeader title="Automatic import" />
+      <SettingRow
+        title="Send on lock-in"
+        hint="Runes and items go to the client when you lock in, and update if the enemy team changes. Only One Trick's own rune page is changed."
+        control={
+          <Switch label="Send on lock-in" checked={!!settings?.autoImport} disabled={!settings} onChange={(v) => update({ autoImport: v })} />
+        }
+      />
+      <SettingRow
+        title="Set summoner spells too"
+        hint="Flash stays on the key you already use."
+        control={
+          <Switch
+            label="Set summoner spells"
+            checked={!!settings?.autoSpells}
+            disabled={!settings || !settings.autoImport}
+            onChange={(v) => update({ autoSpells: v })}
+          />
+        }
+      />
+    </Card>
   );
 };
