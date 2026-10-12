@@ -19,7 +19,7 @@ function NavLinks({ className }: { className: string }) {
             <a
               href={siteHref(link.href)}
               aria-current={current ? 'page' : undefined}
-              className={current ? 'text-chrome-bright' : 'text-chrome-dim hover:text-chrome-bright'}
+              className={current ? 'text-chrome-gold' : 'text-chrome-dim hover:text-chrome-bright'}
             >
               {link.label}
             </a>
@@ -32,11 +32,11 @@ function NavLinks({ className }: { className: string }) {
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0b0c0e]/90 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-chrome-gold/20 bg-[#0b0c0e]/92 backdrop-blur">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-4 px-5 sm:px-8">
         <a href={siteHref('/')} className="flex items-center gap-2.5 text-chrome-bright no-underline">
-          <ChromeMark size={22} />
-          <span className="text-[15px] font-semibold tracking-tight">One Trick</span>
+          <ChromeMark size={22} className="text-chrome-gold" />
+          <span className="font-display text-[15px] font-medium tracking-[0.14em]">One Trick</span>
         </a>
         <div className="flex items-center gap-3">
           <nav aria-label="Primary" className="hidden md:block">
