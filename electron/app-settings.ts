@@ -13,6 +13,13 @@ export interface AppSettings {
     hideDashboardInGame: boolean;
     /** Master switch for the in-game overlay. */
     overlayEnabled: boolean;
+    /**
+     * Show the overlay only while Tab is held, so nothing covers League the
+     * rest of the time. Off by default: the overlay is meant to stay up.
+     */
+    overlayHoldToShow: boolean;
+    /** Keep the overlay out of screenshots, recordings and streams (like Discord/Cluely overlays). */
+    overlayHideFromCapture: boolean;
     /** Send runes and the item set to the client as soon as you lock in. */
     autoImport: boolean;
     /** Also set summoner spells on lock-in (keeps Flash on the key you use). */
@@ -23,6 +30,8 @@ const DEFAULTS: AppSettings = {
     gpuAcceleration: false,
     hideDashboardInGame: true,
     overlayEnabled: true,
+    overlayHoldToShow: false,
+    overlayHideFromCapture: true,
     autoImport: true,
     autoSpells: false,
 };

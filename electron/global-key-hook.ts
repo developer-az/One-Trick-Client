@@ -18,6 +18,8 @@ import path from 'path';
 export interface FlashKeyHandlers {
     onPrimary: () => void;
     onSecondary: () => void;
+    /** Tab went down (true) or up (false). Drives the hold-to-show overlay. */
+    onHold?: (down: boolean) => void;
 }
 
 export type KeyHookMode = 'native' | 'starting' | 'unavailable' | 'stopped';
@@ -105,6 +107,8 @@ function spawnHelper(): boolean {
             buffer = buffer.slice(nl + 1);
             if (line === 'P' || line === 'S') {
                 fire(line);
+            } else if (line === 'T' || line === 't') {
+                handlers?.onHold?.(line === 'T');
             } else if (line === 'R') {
                 mode = 'native';
                 lastError = null;
@@ -120,6 +124,8 @@ function spawnHelper(): boolean {
     });
     proc.on('exit', () => {
         if (child === proc) child = null;
+        // A helper that dies mid-hold would never send the key-up.
+        handlers?.onHold?.(false);
         if (stopping) {
             mode = 'stopped';
             return;
