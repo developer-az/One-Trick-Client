@@ -42,6 +42,10 @@ import {
     getGameResolution,
     broadcastOverlayMeta,
     overlaySlotFor,
+    setOverlayHold,
+    refreshOverlayVisibility,
+    refreshOverlayCaptureProtection,
+    holdToShowActive,
     hideOverlay,
     setOverlaySlotContent,
     getOverlayWindowStats,
@@ -56,6 +60,7 @@ import {
 } from './summoner-tracker';
 import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive, getKeyHookStatus } from './global-key-hook';
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
+import { overlayEnvironment } from './environment';
 
 process.env.DIST = path.join(__dirname, '../dist');
 process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(__dirname, '../public');
@@ -242,6 +247,7 @@ function registerFlashHotkeys(): void {
     const hookOk = startFlashKeyHook({
         onPrimary: onFlashPrimary,
         onSecondary: onFlashSecondary,
+        onHold: setOverlayHold,
     });
 
     if (hookOk && isFlashKeyHookActive()) {
@@ -400,6 +406,8 @@ app.whenReady().then(() => {
             if (!result.settings.overlayEnabled) hideOverlay();
             else if (isCurrentlyInGame()) showOverlay();
         }
+        if (before.overlayHoldToShow !== result.settings.overlayHoldToShow) refreshOverlayVisibility();
+        if (before.overlayHideFromCapture !== result.settings.overlayHideFromCapture) refreshOverlayCaptureProtection();
         return result;
     });
     ipcMain.handle('app-relaunch', () => {
@@ -420,7 +428,7 @@ app.whenReady().then(() => {
         }, 5000);
     }
 
-    ipcMain.handle('perf-stats', () => {
+    ipcMain.handle('perf-stats', async () => {
         const processes = app.getAppMetrics().map((m) => ({
             type: String(m.type),
             name: m.name || m.serviceName || String(m.type),
@@ -438,10 +446,12 @@ app.whenReady().then(() => {
             gpuAcceleration: getAppSettings().gpuAcceleration,
             gpuActive: gpuAccelerationAtLaunch(),
             hotkeys: getKeyHookStatus(),
+            overlayHold: holdToShowActive(),
             lcu: lcuSocket.summary(),
             inGame: monitor.inGame,
             livePollMs: monitor.livePollMs,
             liveReads: monitor.liveReads,
+            environment: await overlayEnvironment(),
         };
     });
 

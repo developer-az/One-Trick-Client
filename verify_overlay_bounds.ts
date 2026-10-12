@@ -1,4 +1,5 @@
 import { clusterOverlayWindows, letterboxGame, overlayScaleFromHud } from './electron/overlay-bounds';
+import { recordersFromTasklist } from './electron/environment';
 import { dualRailLayout, compactRightLayout } from './src/overlay/hudLayout';
 import { minimapScaleToSlider } from './electron/league-settings';
 
@@ -78,3 +79,9 @@ console.log('overlay windows contain their panels');
 assert(minimapScaleToSlider(1.83) === 61, `minimap 1.83 -> ${minimapScaleToSlider(1.83)}`);
 assert(minimapScaleToSlider(1) === 33 && minimapScaleToSlider(3) === 100, 'minimap default and max');
 console.log('minimap scale reads like the League slider');
+// Recorder detection reads `tasklist /fo csv /nh`.
+const recorders = recordersFromTasklist(
+  '"System","4","Services","0","1 K"\r\n"Medal.exe","100","Console","1","9 K"\r\n"MedalEncoder.exe","101","Console","1","9 K"\r\n"obs64.exe","5","Console","1","1 K"\r\n"League of Legends.exe","9","Console","1","1 K"'
+);
+assert(JSON.stringify(recorders) === JSON.stringify(['Medal', 'OBS']), `recorders: ${JSON.stringify(recorders)}`);
+console.log('recorder detection ok');

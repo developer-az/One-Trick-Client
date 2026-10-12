@@ -4,6 +4,7 @@ import path from 'path';
 import { readLeagueHudScales } from './league-settings';
 import { clusterOverlayWindows, type OverlayCluster } from './overlay-bounds';
 import { getAppSettings } from './app-settings';
+import { getKeyHookStatus } from './global-key-hook';
 
 export interface FrameCalibration {
     dx: number;
@@ -55,14 +56,65 @@ let userHidden = false;
  */
 const emptySlots = new Set<number>();
 
+/** Tab is held down (reported by the native key helper). */
+let holdDown = false;
+
 function lockedLayout(): boolean {
     return clickThrough && !alignMode;
 }
 
+/**
+ * Hold-to-show applies only when the key helper can see Tab; without it the
+ * overlay could never appear, so it falls back to always shown.
+ */
+export function holdToShowActive(): boolean {
+    return getAppSettings().overlayHoldToShow && getKeyHookStatus().mode === 'native';
+}
+
 function shouldShowWindow(win: BrowserWindow): boolean {
     if (userHidden || !getAppSettings().overlayEnabled) return false;
+    // Unlocked / align modes are for arranging panels: always visible.
     if (!lockedLayout()) return true;
+    if (holdToShowActive() && !holdDown) return false;
     return !emptySlots.has(win.webContents.id);
+}
+
+/** Tab down/up. Shows or hides the locked overlay windows in hold-to-show mode. */
+export function setOverlayHold(down: boolean): void {
+    if (holdDown === down) return;
+    holdDown = down;
+    for (const win of overlayWindows()) {
+        try {
+            syncWindowVisibility(win);
+            if (win.isVisible()) assertAlwaysOnTop(win);
+        } catch {
+            // ignore
+        }
+    }
+}
+
+/** Exclude overlay windows from screen capture (WDA_EXCLUDEFROMCAPTURE) when the setting is on. */
+function applyCaptureProtection(win: BrowserWindow): void {
+    try {
+        win.setContentProtection(getAppSettings().overlayHideFromCapture);
+    } catch {
+        // Older Windows builds without capture exclusion — ignore
+    }
+}
+
+export function refreshOverlayCaptureProtection(): void {
+    for (const win of overlayWindows()) applyCaptureProtection(win);
+}
+
+/** Re-apply visibility after a setting that affects it changes. */
+export function refreshOverlayVisibility(): void {
+    for (const win of overlayWindows()) {
+        try {
+            syncWindowVisibility(win);
+        } catch {
+            // ignore
+        }
+    }
 }
 
 function syncWindowVisibility(win: BrowserWindow): void {
@@ -197,6 +249,7 @@ function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
     // Hidden until its renderer reports something to draw.
     emptySlots.add(win.webContents.id);
     assertAlwaysOnTop(win);
+    applyCaptureProtection(win);
     win.setMenu(null);
     win.webContents.on('context-menu', (e) => {
         e.preventDefault();
@@ -507,6 +560,7 @@ export function createOverlayWindow(): BrowserWindow {
 
     emptySlots.add(overlayWin.webContents.id);
     assertAlwaysOnTop(overlayWin);
+    applyCaptureProtection(overlayWin);
 
     // Default: a fullscreen click-through surface, so the game is never blocked.
     setClickThrough(true);

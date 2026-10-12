@@ -90,8 +90,19 @@ export const PerformanceView: React.FC = () => {
         ? 'Checking'
         : stats.overlayWindows === 0
           ? 'None open'
-          : `${stats.overlayWindows} open, ${stats.overlayVisible ? 'showing' : 'hidden until needed'}`,
-      tone: 'muted',
+          : `${stats.overlayWindows} open, ${stats.overlayVisible ? 'showing' : stats.overlayHold ? 'hold Tab to show' : 'hidden until needed'}`,
+      tone: stats?.overlayVisible ? 'warn' : 'muted',
+    },
+    {
+      label: 'League display mode',
+      value: !stats?.environment.windowMode
+        ? 'Unknown'
+        : stats.environment.windowMode === 'borderless'
+          ? 'Borderless'
+          : stats.environment.windowMode === 'windowed'
+            ? 'Windowed'
+            : 'Fullscreen (overlay can’t show)',
+      tone: stats?.environment.windowMode === 'borderless' ? 'warn' : 'muted',
     },
     {
       label: 'Rendering',
@@ -131,6 +142,7 @@ export const PerformanceView: React.FC = () => {
             ))}
           </dl>
           {stats?.hotkeys.error ? <div className="ot-callout ot-callout-warn mt-3">{stats.hotkeys.error}</div> : null}
+          {stats ? <OverlayCostNote stats={stats} overlayOn={!!settings?.overlayEnabled} /> : null}
         </Card>
 
         <Card>
@@ -141,6 +153,18 @@ export const PerformanceView: React.FC = () => {
                 title="In-game overlay"
                 hint="Off means no windows over League at all."
                 control={<Switch label="In-game overlay" checked={settings.overlayEnabled} onChange={(v) => update({ overlayEnabled: v })} />}
+              />
+              <SettingRow
+                title="Only while holding Tab"
+                hint="A visible overlay costs frames in borderless. This keeps League uncovered except while you check the scoreboard."
+                control={
+                  <Switch
+                    label="Only while holding Tab"
+                    checked={settings.overlayHoldToShow}
+                    disabled={!settings.overlayEnabled}
+                    onChange={(v) => update({ overlayHoldToShow: v })}
+                  />
+                }
               />
               <SettingRow
                 title="Hide this window during matches"
@@ -207,3 +231,21 @@ const Stat: React.FC<{ label: string; value: string; hint: string }> = ({ label,
     <div className="text-sm ot-muted mt-1">{hint}</div>
   </Card>
 );
+
+/**
+ * Any window over a borderless game makes Windows composite every frame. That
+ * is cheap on most PCs, but on some (often with a screen recorder running) it
+ * has measured as ~170 -> ~20 FPS. Say so, with the fixes that work.
+ */
+const OverlayCostNote: React.FC<{ stats: PerfStats; overlayOn: boolean }> = ({ stats, overlayOn }) => {
+  const { windowMode, recorders } = stats.environment;
+  if (!overlayOn || windowMode !== 'borderless' || stats.overlayHold) return null;
+  const rec = recorders.length ? recorders.join(' and ') : null;
+  return (
+    <div className="ot-callout ot-callout-warn mt-3">
+      League is in borderless mode. On some PCs any window over a borderless game, even Task Manager, costs a lot of FPS
+      {rec ? `, especially with ${rec} running` : ''}. If your FPS drops with the overlay on, set League to Windowed at your
+      screen resolution{rec ? `, quit ${rec},` : ''} or turn on Only while holding Tab.
+    </div>
+  );
+};

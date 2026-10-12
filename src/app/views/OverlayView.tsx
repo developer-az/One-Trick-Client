@@ -162,6 +162,30 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
             }
           />
           <SettingRow
+            title="Only while holding Tab"
+            hint="Shows the overlay with the scoreboard and keeps League uncovered the rest of the time."
+            control={
+              <Switch
+                label="Only while holding Tab"
+                checked={!!settings?.overlayHoldToShow}
+                disabled={!settings || settings.overlayEnabled === false}
+                onChange={(v) => update({ overlayHoldToShow: v })}
+              />
+            }
+          />
+          <SettingRow
+            title="Hide from recordings"
+            hint="Keeps the overlay out of screenshots, clips and streams. You still see it."
+            control={
+              <Switch
+                label="Hide from recordings"
+                checked={settings?.overlayHideFromCapture !== false}
+                disabled={!settings || settings.overlayEnabled === false}
+                onChange={(v) => update({ overlayHideFromCapture: v })}
+              />
+            }
+          />
+          <SettingRow
             title="Show right now"
             hint={inGame ? 'Hide or show it for this match.' : 'Takes effect when a match starts.'}
             control={
