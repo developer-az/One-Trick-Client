@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
-import { IconDraft, IconGauge, IconHome, IconLoadout, IconMark, IconOverlay, IconStats } from './icons';
+import { IconDraft, IconGauge, IconHome, IconLoadout, IconOverlay, IconStats } from './icons';
+import { ChromeMark } from '../overlay/ChromeMark';
 import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useMatchHistory, useDraft, useLeague, useProfile, useToasts } from './hooks';
 import { leagueStatus } from './status';
 import { Pill, Toasts } from './ui';
@@ -111,7 +112,7 @@ export const App: React.FC = () => {
       <header className="ot-titlebar">
         <div className="ot-brand">
           <span className="ot-brand-mark">
-            <IconMark />
+            <ChromeMark size={19} />
           </span>
           One Trick
         </div>

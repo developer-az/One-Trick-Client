@@ -1,25 +1,30 @@
 /*
  * One Trick — dashboard design system.
  *
- * Dark, quiet surfaces with League-native accents: hextech gold for "yours",
- * teal for live state, red for enemies, blue for allies. Everything is static:
+ * Gothic chrome: ink-black surfaces, chrome silver for "yours", blood red as
+ * the signature ornament, Cinzel for display type. Teal stays live state,
+ * coral red stays enemies and losses, blue stays allies. Ornaments are thin
+ * static lines only, so the page reads clean. Everything is static:
  * no infinite animations, no backdrop blur, no filters (the dashboard may sit
  * next to a running game on a second monitor).
  */
 
 html:not(.overlay-root) {
-  --ot-bg: #0a0c10;
-  --ot-bg-raised: #0e1117;
-  --ot-surface: #12161d;
-  --ot-surface-2: #181d26;
-  --ot-surface-3: #1f2530;
-  --ot-border: rgba(255, 255, 255, 0.07);
-  --ot-border-strong: rgba(255, 255, 255, 0.13);
-  --ot-text: #e7e9ee;
-  --ot-text-2: #a7aebb;
-  --ot-text-3: #6d7584;
-  --ot-gold: #d6b46c;
-  --ot-gold-soft: rgba(214, 180, 108, 0.14);
+  --ot-bg: #08080a;
+  --ot-bg-raised: #0b0b0e;
+  --ot-surface: #111114;
+  --ot-surface-2: #17171b;
+  --ot-surface-3: #202026;
+  --ot-border: rgba(212, 216, 222, 0.08);
+  --ot-border-strong: rgba(212, 216, 222, 0.16);
+  --ot-text: #eceef2;
+  --ot-text-2: #a9adb6;
+  --ot-text-3: #6e727c;
+  --ot-gold: #d4d8de; /* chrome silver: "yours" */
+  --ot-gold-soft: rgba(212, 216, 222, 0.1);
+  --ot-blood: #b4243a;
+  --ot-blood-soft: rgba(180, 36, 58, 0.16);
+  --ot-chrome: linear-gradient(180deg, #f4f5f8 0%, #c9cdd4 45%, #8d939d 55%, #dfe2e7 100%);
   --ot-teal: #35d0ba;
   --ot-teal-soft: rgba(53, 208, 186, 0.13);
   --ot-red: #f0656a;
@@ -28,10 +33,10 @@ html:not(.overlay-root) {
   --ot-blue-soft: rgba(106, 166, 248, 0.13);
   --ot-amber: #f2b350;
   --ot-amber-soft: rgba(242, 179, 80, 0.13);
-  --ot-radius: 12px;
-  --ot-radius-sm: 8px;
+  --ot-radius: 6px;
+  --ot-radius-sm: 5px;
   --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-  --ot-font-display: 'Space Grotesk Variable', 'Inter Variable', 'Segoe UI', sans-serif;
+  --ot-font-display: 'Cinzel', 'Times New Roman', serif;
 
   font-family: var(--ot-font);
   font-weight: 450;
@@ -109,8 +114,8 @@ html:not(.overlay-root) ::selection {
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  background: linear-gradient(135deg, #2a2210, #15120a);
-  border: 1px solid rgba(214, 180, 108, 0.35);
+  background: radial-gradient(circle at 50% 35%, #1d1d23, #08080a);
+  border: 1px solid rgba(212, 216, 222, 0.35);
   color: var(--ot-gold);
 }
 
@@ -286,10 +291,10 @@ html:not(.overlay-root) ::selection {
 .ot-btn-primary {
   border-color: transparent;
   background: var(--ot-gold);
-  color: #1a1407;
+  color: #0b0b0e;
 }
 .ot-btn-primary:hover:not(:disabled) {
-  background: #e3c27d;
+  background: #eef0f3;
 }
 .ot-btn-ghost {
   border-color: transparent;
@@ -352,7 +357,7 @@ html:not(.overlay-root) ::selection {
 }
 .ot-switch[aria-checked='true']::after {
   transform: translateX(16px);
-  background: #1a1407;
+  background: #0b0b0e;
 }
 
 .ot-segment {
@@ -508,7 +513,7 @@ html:not(.overlay-root) ::selection {
 }
 .ot-portrait-ring-gold {
   border-color: var(--ot-gold);
-  box-shadow: 0 0 0 2px rgba(214, 180, 108, 0.25);
+  box-shadow: 0 0 0 2px rgba(212, 216, 222, 0.25);
 }
 .ot-portrait-ring-red {
   border-color: rgba(240, 101, 106, 0.6);
@@ -569,7 +574,7 @@ html:not(.overlay-root) ::selection {
   background: var(--ot-surface-2);
 }
 .ot-slot.is-local {
-  border-color: rgba(214, 180, 108, 0.5);
+  border-color: rgba(212, 216, 222, 0.5);
   background: linear-gradient(90deg, var(--ot-gold-soft), var(--ot-surface-2) 70%);
 }
 .ot-slot.is-empty {
@@ -632,8 +637,8 @@ html:not(.overlay-root) ::selection {
   height: 88%;
 }
 .ot-rune-keystone {
-  border-color: rgba(214, 180, 108, 0.6);
-  background: radial-gradient(circle at 50% 40%, #241d0f, var(--ot-bg));
+  border-color: rgba(212, 216, 222, 0.6);
+  background: radial-gradient(circle at 50% 40%, #1c1c22, var(--ot-bg));
 }
 
 .ot-step-arrow {
@@ -750,4 +755,146 @@ html:not(.overlay-root) ::selection {
 .ot-studio-embed .hud-studio-wrap {
   border-radius: var(--ot-radius-sm);
   border-color: var(--ot-border-strong);
+}
+
+/* ---------- Gothic layer ----------
+ * Thin static ornaments over the base system: Cinzel display type, chrome
+ * silver highlights, blood-red marks, bracketed card corners. No images, no
+ * animation, nothing that repaints on its own.
+ */
+
+.ot-main {
+  background:
+    radial-gradient(ellipse 80% 40% at 50% 0%, rgba(180, 36, 58, 0.07), transparent 70%),
+    var(--ot-bg-raised);
+}
+
+.ot-titlebar {
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, transparent, rgba(212, 216, 222, 0.22) 20%, rgba(180, 36, 58, 0.5) 50%, rgba(212, 216, 222, 0.22) 80%, transparent) 1;
+}
+.ot-brand {
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.ot-brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border-color: rgba(212, 216, 222, 0.3);
+  color: var(--ot-gold);
+}
+
+.ot-sidebar-label,
+html:not(.overlay-root) .uppercase.tracking-wide {
+  font-family: var(--ot-font-display);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+.ot-nav.is-active {
+  background: linear-gradient(90deg, var(--ot-blood-soft), var(--ot-surface-2) 65%);
+  box-shadow: inset 2px 0 0 var(--ot-blood);
+}
+.ot-nav.is-active svg {
+  color: var(--ot-gold);
+  opacity: 1;
+}
+
+.ot-page-header {
+  position: relative;
+  padding-bottom: 16px;
+}
+.ot-page-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(212, 216, 222, 0.35), rgba(180, 36, 58, 0.45) 30%, transparent 85%);
+}
+.ot-page-title {
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+  background: var(--ot-chrome);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ot-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ot-font-display);
+  font-size: 12.5px;
+  letter-spacing: 0.14em;
+  color: var(--ot-text-2);
+}
+.ot-card-title::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  transform: rotate(45deg);
+  background: var(--ot-blood);
+}
+.ot-card-heading {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.ot-stat-big {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+/* Bracketed corners: two hairline L-marks per card. */
+.ot-card::before,
+.ot-card::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+  border-color: rgba(212, 216, 222, 0.38);
+  border-style: solid;
+}
+.ot-card::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+  border-top-left-radius: var(--ot-radius);
+}
+.ot-card::after {
+  right: -1px;
+  bottom: -1px;
+  border-width: 0 1px 1px 0;
+  border-bottom-right-radius: var(--ot-radius);
+}
+
+.ot-btn-primary {
+  background: var(--ot-chrome);
+  color: #0b0b0e;
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.ot-btn-primary:hover:not(:disabled) {
+  background: var(--ot-chrome);
+  filter: brightness(1.08);
+}
+.ot-switch[aria-checked='true'] {
+  background: var(--ot-chrome);
+}
+.ot-switch[aria-checked='true']::after {
+  background: var(--ot-blood);
+}
+.ot-badge-gold {
+  border: 1px solid rgba(212, 216, 222, 0.22);
+}
+
+html:not(.overlay-root) ::selection {
+  background: var(--ot-blood-soft);
 }
