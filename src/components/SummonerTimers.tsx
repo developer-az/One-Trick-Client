@@ -117,7 +117,7 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
               alt={lane.championName}
             />
             <span
-              className={`font-mono uppercase tracking-wider text-chrome-dim ${compact ? 'text-[9px]' : 'text-[10px]'} w-14 shrink-0`}
+              className={`font-mono uppercase tracking-wider text-chrome-dim ${compact ? 'text-[11px]' : 'text-[12px]'} w-14 shrink-0`}
             >
               {lane.role}
             </span>
@@ -141,8 +141,8 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
                       e.preventDefault();
                       markSpell(lane.role, sp.name, true);
                     }}
-                    className={`hud-chip !py-0.5 ${compact ? '!text-[9px]' : '!text-[10px]'} cursor-pointer hover:opacity-100 ${
-                      ready ? 'hud-accent-green !text-chrome-bright' : '!text-chrome-dim opacity-80'
+                    className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100 ${
+                      ready ? 'hud-accent-green !text-chrome-bright' : 'is-down'
                     }`}
                   >
                     {sp.short} {ready ? 'UP' : formatCd(sp.remaining)}
@@ -157,13 +157,13 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className={`hud-chip !py-0.5 ${compact ? '!text-[9px]' : '!text-[10px]'} cursor-pointer hover:opacity-100`}
+          className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100`}
           title={midFocus ? 'Copy mid laner summoner timers' : 'Copy ADC summoner timers'}
         >
           {copied ? copiedLabel : copyLabel}
         </button>
         {!compact && (
-          <p className="text-[9px] font-mono text-chrome-dim/70 tracking-wide">
+          <p className="text-[11px] font-mono text-chrome-dim/70 tracking-wide">
             PgUp/Num9 ADC Flash · PgDn/Num3 Support Flash · click chip to toggle · Flash auto on first death only
           </p>
         )}

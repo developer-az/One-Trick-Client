@@ -51,6 +51,8 @@
     "verify:catalog": "npx --yes tsx verify_catalog.ts",
     "verify:layout": "npx --yes tsx verify_layout.ts",
     "verify:overlay-bounds": "npx --yes tsx verify_overlay_bounds.ts",
+    "verify:summoners": "npx --yes tsx verify_summoners.ts",
+    "verify:stats": "npx --yes tsx verify_stats.ts",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
@@ -65,6 +67,8 @@
     "build:keyhook": "node scripts/build-keyhook.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
     "axios": "^1.6.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

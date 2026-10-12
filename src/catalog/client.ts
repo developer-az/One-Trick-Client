@@ -1,6 +1,7 @@
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { buildCatalogBundle, buildRecommendation } from './buildCatalog';
+import { CHAMPION_POSITIONS } from '../logic/championPositions';
 import { roleFromChampionTags } from './roles';
 import { CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE } from './site';
 import type {
@@ -31,7 +32,19 @@ function notify(): void {
   listeners.forEach((listener) => listener());
 }
 
-function applyBundle(bundle: CatalogBundle): CatalogBundle {
+/** Catalog roles come from the curated position table when it knows the champion (CDragon never reports Jungle). */
+function withPositions(bundle: CatalogBundle): CatalogBundle {
+  return {
+    ...bundle,
+    champions: bundle.champions.map((c) => {
+      const known = CHAMPION_POSITIONS[c.id];
+      return known?.length ? { ...c, roles: [...known] } : c;
+    }),
+  };
+}
+
+function applyBundle(raw: CatalogBundle): CatalogBundle {
+  const bundle = withPositions(raw);
   cached = bundle;
   ingestChampionCatalog(bundle.champions);
   try {
@@ -56,6 +69,17 @@ function readLocalCache(): CatalogBundle | null {
   } catch {
     return null;
   }
+}
+
+/** Compare "16.10.1" vs "16.9.1" numerically — string comparison gets this backwards. */
+export function comparePatch(a: string | undefined, b: string | undefined): number {
+  const pa = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 export function catalogApiUrl(base: string, file: string): string {
@@ -134,13 +158,24 @@ export function recommendationFor(
   role: CatalogRole,
   bundle: CatalogBundle | null = cached
 ): CatalogRecommendation {
+  // Items are always rebuilt from the live item list: published recommendations
+  // can predate a scoring fix or a patch. Runes and spells come from CDragon's
+  // per-champion recommendations when the bundle has them.
   const existing = findRecommendation(bundle, champion.id, role);
-  if (existing) return existing;
-  return buildRecommendation({
+  const built = buildRecommendation({
     champion,
     role,
     items: bundle?.items || [],
+    rune: existing
+      ? {
+          primaryStyleId: existing.primaryStyleId,
+          subStyleId: existing.subStyleId,
+          selectedPerkIds: existing.selectedPerkIds,
+          summonerSpellIds: existing.summonerSpellIds,
+        }
+      : undefined,
   });
+  return bundle?.items?.length ? built : existing || built;
 }
 
 export function inferCatalogRole(champion: CatalogChampion | null, assigned?: CatalogRole | null): CatalogRole {
@@ -169,6 +204,16 @@ export async function warmCatalog(opts?: {
     }
   }
 
+  if (!cached) {
+    // First launch (or cleared cache): paint immediately from the bundled snapshot.
+    try {
+      const { SNAPSHOT_BUNDLE } = await import('./snapshot');
+      if (SNAPSHOT_BUNDLE?.champions?.length) applyBundle(SNAPSHOT_BUNDLE);
+    } catch {
+      /* snapshot missing from this build */
+    }
+  }
+
   const bases = [opts?.apiBase, localApiBase(), ...CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE].filter(
     (value, index, list): value is string => !!value && list.indexOf(value) === index
   );
@@ -177,7 +222,7 @@ export async function warmCatalog(opts?: {
     const staticBundle = await fetchStaticApi(base);
     if (staticBundle?.champions?.length) {
       const current = cached;
-      if (!current || staticBundle.manifest.patch >= current.manifest.patch) {
+      if (!current || comparePatch(staticBundle.manifest.patch, current.manifest.patch) >= 0) {
         applyBundle(staticBundle);
       }
       break;
@@ -188,7 +233,11 @@ export async function warmCatalog(opts?: {
     await warmDdragonVersion();
     const live = await buildCatalogBundle();
     const current = cached;
-    if (!current || live.manifest.patch >= current.manifest.patch || live.champions.length > current.champions.length) {
+    if (
+      !current ||
+      comparePatch(live.manifest.patch, current.manifest.patch) >= 0 ||
+      live.champions.length > current.champions.length
+    ) {
       applyBundle(live);
     }
   } catch {

@@ -1,0 +1,168 @@
+/*
+ * In-game overlay: same language as the dashboard (Inter / Space Grotesk,
+ * quiet dark surfaces, gold for "yours", teal live, red danger), tuned for
+ * reading at a glance over a moving game. Opaque enough to read on any map
+ * area; still no blur, filters or animation (they cost League frames).
+ */
+
+html.overlay-root {
+  --font-display: 'Space Grotesk Variable', 'Inter Variable', 'Segoe UI', sans-serif;
+  --font-body: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  --font-mono: 'Inter Variable', 'Segoe UI', sans-serif;
+  --ov-surface: rgba(11, 13, 18, 0.84);
+  --ov-border: rgba(255, 255, 255, 0.1);
+  --ov-text: #e7e9ee;
+  --ov-text-2: #a7aebb;
+  --ov-gold: #d6b46c;
+  --ov-teal: #35d0ba;
+  --ov-red: #f0656a;
+  --ov-amber: #f2b350;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+html.overlay-root .hud-overlay-panel {
+  background: var(--ov-surface);
+  border: 1px solid var(--ov-border);
+  border-left: 1px solid var(--ov-border);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  color: var(--ov-text);
+}
+
+html.overlay-root .hud-corner,
+html.overlay-root .hud-rail,
+html.overlay-root .hud-tick,
+html.overlay-root .hud-panel-mark {
+  display: none;
+}
+
+html.overlay-root .hud-chrome-header {
+  background: none;
+  border-bottom: 1px solid var(--ov-border);
+}
+
+html.overlay-root .hud-chrome-title {
+  font-family: var(--font-display);
+  font-size: 13px !important;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  text-shadow: none;
+  color: var(--ov-text);
+}
+
+html.overlay-root .hud-chrome-meta {
+  font-family: var(--font-body);
+  font-size: 12px !important;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ov-text-2);
+}
+
+html.overlay-root .hud-chip {
+  clip-path: none;
+  border-radius: 6px;
+  font-family: var(--font-body);
+  font-size: 12px !important;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 3px 8px !important;
+  color: var(--ov-text);
+  border-color: var(--ov-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+html.overlay-root .hud-chip.hud-accent-green {
+  border-color: rgba(53, 208, 186, 0.45);
+  background: rgba(53, 208, 186, 0.14);
+  opacity: 1;
+}
+html.overlay-root .hud-chip.is-down {
+  border-color: rgba(240, 101, 106, 0.5);
+  background: rgba(240, 101, 106, 0.16);
+  color: var(--ov-text);
+}
+
+html.overlay-root .font-mono {
+  font-family: var(--font-body);
+  letter-spacing: 0.02em;
+}
+
+html.overlay-root .hud-chrome-cue {
+  clip-path: none;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ov-text);
+  border-color: var(--ov-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+html.overlay-root .hud-chrome-cue--spike {
+  border-color: rgba(214, 180, 108, 0.5);
+  background: rgba(214, 180, 108, 0.12);
+  box-shadow: inset 3px 0 0 var(--ov-gold);
+}
+html.overlay-root .hud-chrome-cue--warn {
+  border-color: rgba(240, 101, 106, 0.5);
+  background: rgba(240, 101, 106, 0.12);
+  box-shadow: inset 3px 0 0 var(--ov-red);
+  color: var(--ov-text);
+}
+
+html.overlay-root .hud-ward,
+html.overlay-root .hud-gank {
+  clip-path: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  letter-spacing: 0;
+  line-height: 1.3;
+  background: var(--ov-surface);
+}
+html.overlay-root .hud-ward {
+  color: #bdeee4;
+  border-color: rgba(53, 208, 186, 0.35);
+}
+html.overlay-root .hud-ward--due {
+  color: var(--ov-text);
+  border-color: rgba(53, 208, 186, 0.7);
+  box-shadow: inset 3px 0 0 var(--ov-teal);
+}
+html.overlay-root .hud-ward-meta,
+html.overlay-root .hud-ward-why {
+  font-size: 11px;
+  letter-spacing: 0;
+}
+html.overlay-root .hud-gank-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+html.overlay-root .hud-gank-sq {
+  border-radius: 3px;
+}
+html.overlay-root .hud-gank--red {
+  color: var(--ov-text);
+  border-color: rgba(240, 101, 106, 0.6);
+  background: rgba(60, 16, 18, 0.85);
+}
+html.overlay-root .hud-gank--red .hud-gank-sq {
+  background: var(--ov-red);
+  box-shadow: none;
+}
+html.overlay-root .hud-gank--yellow {
+  color: var(--ov-text);
+  border-color: rgba(242, 179, 80, 0.55);
+  background: rgba(48, 36, 12, 0.85);
+}
+html.overlay-root .hud-gank--yellow .hud-gank-sq {
+  background: var(--ov-amber);
+}
+
+html.overlay-root .hud-buy-icon {
+  border-radius: 6px;
+}

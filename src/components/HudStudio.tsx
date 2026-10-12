@@ -3,7 +3,6 @@ import { getCatalog } from '../catalog/client';
 import { HudStudioCanvas } from '../overlay/HudStudioCanvas';
 import {
   HUD_LAYOUT_PRESETS,
-  applyModulesToLayout,
   normalizeHudLayout,
   removeSticker,
   storeHudLayout,
@@ -11,9 +10,6 @@ import {
   type HudLayout,
   type HudSticker,
 } from '../overlay/hudLayout';
-import { HUD_MODULE_IDS, HUD_MODULE_LABELS, type HudModules } from '../overlay/hudModules';
-import { ChromeMark } from '../overlay/ChromeMark';
-import { HudFrame } from './HudFrame';
 
 function downloadLayout(layout: HudLayout): void {
   const blob = new Blob([JSON.stringify(layout, null, 2)], { type: 'application/json' });
@@ -28,12 +24,10 @@ function downloadLayout(layout: HudLayout): void {
 export const HudStudio: React.FC<{
   layout: HudLayout;
   onLayoutChange: (next: HudLayout) => void;
-  modules: HudModules;
-  onModulesChange: (next: HudModules) => void;
   chromeColor: string;
   hudScale: number;
   mapScale: number;
-}> = ({ layout, onLayoutChange, modules, onModulesChange, chromeColor, hudScale, mapScale }) => {
+}> = ({ layout, onLayoutChange, chromeColor, hudScale, mapScale }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const catalog = getCatalog();
   const sampleChamps = useMemo(() => (catalog?.champions || []).slice(0, 8), [catalog]);
@@ -46,12 +40,6 @@ export const HudStudio: React.FC<{
     const normalized = normalizeHudLayout(next);
     storeHudLayout(normalized);
     onLayoutChange(normalized);
-  };
-
-  const toggleModule = (id: (typeof HUD_MODULE_IDS)[number]) => {
-    const nextModules = { ...modules, [id]: !modules[id] };
-    onModulesChange(nextModules);
-    commit(applyModulesToLayout(layout, nextModules));
   };
 
   const addSticker = (partial: Omit<HudSticker, 'id' | 'x' | 'y' | 'scale' | 'opacity'>) => {
@@ -67,33 +55,31 @@ export const HudStudio: React.FC<{
   };
 
   return (
-    <HudFrame accent="steel" label="HUD Studio" className="p-5">
-      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
-        <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-chrome-dim mb-1">Studio</p>
-          <h2 className="hud-heading text-xl text-chrome-bright">
-            <ChromeMark size={14} className="inline-block align-[-2px] mr-1.5 text-chrome-silver" />
-            Pin it on the Rift
-          </h2>
-          <p className="text-[10px] font-mono text-chrome-dim/75 mt-2 tracking-wide leading-relaxed max-w-xl">
-            Drag modules onto the letterboxed game plane. Stickers are chrome marks — no blur, no coach spam.
+    <section className="ot-card ot-card-pad">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div className="min-w-0">
+          <h2 className="ot-card-title">Layout</h2>
+          <p className="mt-1 text-sm ot-muted max-w-xl">
+            Drag panels to where you want them on screen. The frame is your game window at its real aspect ratio.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {HUD_LAYOUT_PRESETS.map((preset) => (
-            <button
-              key={preset.name}
-              type="button"
-              className={`hud-btn${layout.name === preset.name ? ' hud-btn--active' : ''}`}
-              onClick={() => commit({ ...preset })}
-            >
-              {preset.name}
-            </button>
-          ))}
-          <button type="button" className="hud-btn" onClick={() => downloadLayout(layout)}>
-            Export JSON
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="ot-segment" role="group" aria-label="Preset">
+            {HUD_LAYOUT_PRESETS.map((preset) => (
+              <button
+                key={preset.name}
+                type="button"
+                className={layout.name === preset.name ? 'is-active' : ''}
+                onClick={() => commit({ ...preset })}
+              >
+                {preset.name}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="ot-btn ot-btn-ghost ot-btn-sm" onClick={() => downloadLayout(layout)}>
+            Export
           </button>
-          <button type="button" className="hud-btn" onClick={() => fileRef.current?.click()}>
+          <button type="button" className="ot-btn ot-btn-ghost ot-btn-sm" onClick={() => fileRef.current?.click()}>
             Import
           </button>
           <input
@@ -127,38 +113,21 @@ export const HudStudio: React.FC<{
         />
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        {HUD_MODULE_IDS.map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={`hud-btn${modules[id] ? ' hud-btn--active' : ''}`}
-            onClick={() => toggleModule(id)}
-          >
-            {HUD_MODULE_LABELS[id]}
-          </button>
-        ))}
-      </div>
-
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <div className="mt-5 grid gap-5 md:grid-cols-2">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-chrome-dim mb-2">Stickers</p>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="hud-btn" onClick={() => addSticker({ kind: 'mark' })}>
-              Chrome mark
+          <div className="text-xs ot-faint uppercase tracking-wide mb-2">Add a sticker</div>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" className="ot-btn ot-btn-sm" onClick={() => addSticker({ kind: 'mark' })}>
+              Logo
             </button>
-            <button
-              type="button"
-              className="hud-btn"
-              onClick={() => addSticker({ kind: 'text', label: 'ONE TRICK' })}
-            >
+            <button type="button" className="ot-btn ot-btn-sm" onClick={() => addSticker({ kind: 'text', label: 'ONE TRICK' })}>
               Text
             </button>
             {sampleChamps.map((champ) => (
               <button
                 key={champ.id}
                 type="button"
-                className="hud-btn"
+                className="ot-btn ot-btn-sm"
                 onClick={() => addSticker({ kind: 'champ', championId: champ.id, label: champ.name })}
               >
                 {champ.name}
@@ -168,7 +137,7 @@ export const HudStudio: React.FC<{
               <button
                 key={item.id}
                 type="button"
-                className="hud-btn"
+                className="ot-btn ot-btn-sm"
                 onClick={() => addSticker({ kind: 'item', itemId: item.id, label: item.name })}
               >
                 {item.name}
@@ -177,17 +146,15 @@ export const HudStudio: React.FC<{
           </div>
         </div>
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-chrome-dim mb-2">Pinned</p>
+          <div className="text-xs ot-faint uppercase tracking-wide mb-2">On screen</div>
           {layout.stickers.length === 0 ? (
-            <p className="text-[11px] font-mono text-chrome-dim/70">No stickers yet.</p>
+            <p className="text-sm ot-muted">No stickers yet.</p>
           ) : (
             <ul className="space-y-1">
               {layout.stickers.map((sticker) => (
-                <li key={sticker.id} className="flex items-center justify-between gap-2 text-[11px] font-mono">
-                  <span className="truncate text-chrome-silver">
-                    {sticker.label || sticker.kind} · {Math.round(sticker.x * 100)}/{Math.round(sticker.y * 100)}
-                  </span>
-                  <button type="button" className="hud-btn" onClick={() => commit(removeSticker(layout, sticker.id))}>
+                <li key={sticker.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="truncate">{sticker.label || sticker.kind}</span>
+                  <button type="button" className="ot-btn ot-btn-ghost ot-btn-sm" onClick={() => commit(removeSticker(layout, sticker.id))}>
                     Remove
                   </button>
                 </li>
@@ -196,6 +163,6 @@ export const HudStudio: React.FC<{
           )}
         </div>
       </div>
-    </HudFrame>
+    </section>
   );
 };
