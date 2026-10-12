@@ -1,0 +1,12 @@
+---
+description: Do site and app work on a branch so it can be previewed before any commit or push.
+alwaysApply: true
+---
+
+# Branch before commit or push
+
+Do the work on a new branch off `main`. Do not edit `main` directly.
+
+Leave the changes uncommitted until the user explicitly asks to commit. Do not push, open a pull request, or merge until the user explicitly asks.
+
+The branch is how they preview the diff and the running site first. A local preview server is enough. Publishing to `main` or to a release tag happens only after they say to commit and push.

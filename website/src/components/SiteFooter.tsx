@@ -3,11 +3,12 @@ import { REPO_URL, siteHref } from '../lib/site'
 
 export function SiteFooter() {
   return (
-    <footer className="border-t border-white/10">
+    <footer className="border-t border-chrome-gold/20">
+      <div className="gold-rule" />
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 sm:flex-row sm:items-center sm:justify-between sm:px-8">
         <a href={siteHref('/')} className="flex items-center gap-2 text-chrome-silver no-underline">
-          <ChromeMark size={16} />
-          <span className="text-sm font-medium">One Trick</span>
+          <ChromeMark size={16} className="text-chrome-gold" />
+          <span className="font-display text-sm font-medium tracking-[0.14em]">One Trick</span>
         </a>
         <p className="max-w-md text-xs leading-relaxed text-chrome-dim">
           Unofficial fan tool. Not affiliated with Riot Games. League of Legends and Riot Games are

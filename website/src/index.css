@@ -60,6 +60,18 @@ body {
   );
 }
 
+.gold-rule {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(232, 184, 74, 0.55) 22%,
+    rgba(155, 28, 46, 0.75) 50%,
+    rgba(232, 184, 74, 0.55) 78%,
+    transparent
+  );
+}
+
 .btn-chrome {
   display: inline-flex;
   align-items: center;
@@ -132,10 +144,10 @@ body {
 
 .note {
   padding: 1rem 1.15rem;
-  border: 1px solid rgba(242, 244, 247, 0.1);
-  border-left: 3px solid #7d8cff;
+  border: 1px solid rgba(232, 184, 74, 0.16);
+  border-left: 3px solid rgba(232, 184, 74, 0.75);
   border-radius: 8px;
-  background: rgba(125, 140, 255, 0.06);
+  background: rgba(232, 184, 74, 0.05);
 }
 
 .hud-frame {
@@ -163,13 +175,13 @@ body {
 
 .hero-band {
   background:
-    radial-gradient(880px 420px at 8% -10%, rgba(140, 160, 220, 0.16), transparent 58%),
-    linear-gradient(180deg, #171a22 0%, #101218 62%, #0b0c0e 100%);
+    radial-gradient(680px 360px at 8% -8%, rgba(155, 28, 46, 0.28), transparent 62%),
+    radial-gradient(480px 260px at 92% 0%, rgba(232, 184, 74, 0.1), transparent 58%),
+    linear-gradient(180deg, #161310 0%, #100e0c 55%, #0c0d10 100%);
 }
 
 .feature-band {
   background: #0e0f12;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .btn-solid,
@@ -201,13 +213,13 @@ body {
 }
 
 .btn-line:hover {
-  border-color: rgba(242, 244, 247, 0.7);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(232, 184, 74, 0.55);
+  background: rgba(232, 184, 74, 0.05);
 }
 
 .btn-solid:focus-visible,
 .btn-line:focus-visible {
-  outline: 2px solid #b9c7ff;
+  outline: 2px solid #e8b84a;
   outline-offset: 3px;
 }
 
@@ -221,6 +233,8 @@ body {
 
 .docs h2 {
   margin-top: 2.25rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid rgba(232, 184, 74, 0.55);
   font-size: 1.35rem;
   font-weight: 600;
   letter-spacing: -0.02em;
@@ -256,13 +270,15 @@ body {
   margin-top: 0.45rem;
 }
 
-.docs a {
-  color: #b9c7ff;
+.docs a,
+.feature-link {
+  color: #e8b84a;
   text-underline-offset: 3px;
 }
 
-.docs a:hover {
-  color: #ffffff;
+.docs a:hover,
+.feature-link:hover {
+  color: #f6e2a8;
 }
 
 .docs strong {
@@ -293,9 +309,10 @@ body {
 .docs .note {
   margin-top: 1.5rem;
   padding: 0.95rem 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(232, 184, 74, 0.16);
+  border-left: 3px solid rgba(232, 184, 74, 0.75);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(232, 184, 74, 0.05);
 }
 
 .docs .note p {
