@@ -8,6 +8,7 @@ import {
   type CatalogRuneTree,
 } from './types';
 import { cdragonPositionToRole, roleFromChampionTags } from './roles';
+import { CHAMPION_POSITIONS } from '../logic/championPositions';
 
 const DDRAGON_VERSIONS = 'https://ddragon.leagueoflegends.com/api/versions.json';
 const CDRAGON_SUMMARY =
@@ -49,7 +50,18 @@ const FALLBACK_STARTER: Record<CatalogRole, string[]> = {
   Bot: ['1055', '2003'],
 };
 
-const SITUATIONAL_POOL = ['3156', '3026', '3139', '6695', '3143', '6662', '3814', '3179'];
+/** Answers to specific threats, per archetype: burst, healing, crowd control, armor or magic stacking. */
+const SITUATIONAL_BY_ARCHETYPE: Record<string, string[]> = {
+  marksman: ['3036', '3026', '3139', '6333', '3156'],
+  mage: ['3157', '3102', '3165', '3135'],
+  assassinAd: ['3814', '6695', '3156', '6333', '3026'],
+  assassinAp: ['3157', '3102', '3135', '3165'],
+  fighterAd: ['3053', '6333', '3156', '3026', '3075'],
+  fighterAp: ['3157', '3102', '3065', '4401'],
+  tank: ['3143', '4401', '3075', '6665', '3065'],
+  enchanter: ['3222', '3107', '3190', '3102'],
+  supportTank: ['3190', '3143', '4401', '3075', '3107'],
+};
 
 interface DDragonChampion {
   id: string;
@@ -117,16 +129,21 @@ function isLivePurchasable(item: DDragonItem): boolean {
   return item.gold?.purchasable !== false;
 }
 
+/** Summoner's Rift items use 4-digit ids; 6-digit ids are mode variants of the same item. */
+function riftItem(item: CatalogItem): boolean {
+  return item.purchasable && item.id.length <= 4;
+}
+
 function legendary(item: CatalogItem): boolean {
-  return item.purchasable && item.gold >= 2000 && item.into.length === 0 && !item.tags.includes('Boots');
+  return riftItem(item) && item.gold >= 2000 && item.into.length === 0 && !item.tags.includes('Boots');
 }
 
 function bootsCandidate(item: CatalogItem): boolean {
-  return item.purchasable && item.tags.includes('Boots') && item.gold >= 900 && item.gold <= 1600;
+  return riftItem(item) && item.tags.includes('Boots') && item.gold >= 900 && item.gold <= 1600;
 }
 
 function starterCandidate(item: CatalogItem, role: CatalogRole): boolean {
-  if (!item.purchasable || item.gold > 550) return false;
+  if (!riftItem(item) || item.gold > 550) return false;
   if (item.tags.includes('Trinket')) return false;
   if (role === 'Jungle') return item.tags.includes('Jungle') || item.id === '1101' || item.id === '1102' || item.id === '1103';
   if (role === 'Support') {
@@ -141,36 +158,102 @@ function starterCandidate(item: CatalogItem, role: CatalogRole): boolean {
   return item.tags.includes('Lane') || ['1054', '1055', '1056', '1082', '3070', '2003'].includes(item.id);
 }
 
-function tagScore(item: CatalogItem, tags: string[], role: CatalogRole): number {
+/**
+ * Item archetypes. Data Dragon tags items by the stats they give (Damage,
+ * SpellDamage, CriticalStrike...) and champions by class (Mage, Tank...), so a
+ * build needs a class -> stat weighting; comparing the two tag sets directly
+ * never matches. Weights are relative stat priorities per archetype.
+ */
+type StatWeights = Partial<Record<string, number>>;
+
+const ARCHETYPES: Record<string, StatWeights> = {
+  marksman: { CriticalStrike: 3, AttackSpeed: 2.5, Damage: 2, OnHit: 1.2, LifeSteal: 1, ArmorPenetration: 0.8 },
+  mage: { SpellDamage: 3, MagicPenetration: 2, AbilityHaste: 1.2, CooldownReduction: 1.2, Mana: 1 },
+  assassinAd: { Damage: 2.5, ArmorPenetration: 3, AbilityHaste: 1.2, CooldownReduction: 1.2, NonbootsMovement: 0.6 },
+  assassinAp: { SpellDamage: 3, MagicPenetration: 2.5, AbilityHaste: 1, CooldownReduction: 1, NonbootsMovement: 0.5 },
+  fighterAd: { Damage: 2, Health: 2, AbilityHaste: 1.8, CooldownReduction: 1.8, LifeSteal: 0.8, SpellVamp: 0.8, Armor: 0.4 },
+  fighterAp: { SpellDamage: 2.5, Health: 2, AbilityHaste: 1.2, CooldownReduction: 1.2, MagicPenetration: 1, SpellVamp: 1.5 },
+  tank: { Health: 3, Armor: 2, SpellBlock: 2, MagicResist: 2, AbilityHaste: 1, CooldownReduction: 1, Aura: 0.8 },
+  enchanter: { ManaRegen: 2.5, AbilityHaste: 2, CooldownReduction: 2, SpellDamage: 1.2, HealthRegen: 1.2, Aura: 0.5, Active: 0.5 },
+  supportTank: { Health: 3, Armor: 1.5, SpellBlock: 1.5, MagicResist: 1.5, Aura: 2, Active: 1.2, AbilityHaste: 1 },
+};
+
+/** Stat tags that are wasted on the wrong damage type. */
+const PHYSICAL_ONLY = ['CriticalStrike', 'ArmorPenetration', 'LifeSteal'];
+const MAGIC_ONLY = ['SpellDamage', 'MagicPenetration'];
+
+/**
+ * Champions that build ability power although Data Dragon's class tags and
+ * attack/magic ratings point to physical or "mixed".
+ */
+const BUILDS_AP = new Set([
+  'Akali', 'Diana', 'Ekko', 'Elise', 'Evelynn', 'Fizz', 'Gragas', 'Gwen', 'Kassadin', 'Katarina', 'Kayle',
+  'Kennen', 'Lillia', 'Mordekaiser', 'Nidalee', 'Rumble', 'Shyvana', 'Singed', 'Sylas', 'Teemo', 'Vladimir',
+]);
+
+export function buildsMagic(champion: Pick<CatalogChampion, 'id' | 'tags' | 'damageType'>): boolean {
+  if (BUILDS_AP.has(champion.id)) return true;
+  return champion.damageType === 'Magic' || (champion.damageType === 'Mixed' && champion.tags.includes('Mage'));
+}
+
+export function archetypeFor(tags: string[], damageType: CatalogChampion['damageType'], role: CatalogRole): string {
+  const [primary] = tags;
+  const magic = damageType === 'Magic';
+  if (role === 'Support') {
+    if (tags.includes('Tank') || primary === 'Fighter') return 'supportTank';
+    if (primary === 'Mage') return 'mage';
+    return 'enchanter';
+  }
+  switch (primary) {
+    case 'Marksman':
+      return magic ? 'mage' : 'marksman';
+    case 'Mage':
+      return 'mage';
+    case 'Assassin':
+      return magic ? 'assassinAp' : 'assassinAd';
+    case 'Tank':
+      return 'tank';
+    case 'Fighter':
+      return magic ? 'fighterAp' : 'fighterAd';
+    case 'Support':
+      return magic ? 'mage' : 'tank';
+    default:
+      return magic ? 'mage' : 'fighterAd';
+  }
+}
+
+export function itemFit(item: CatalogItem, archetype: string, damageType: CatalogChampion['damageType']): number {
+  const weights = ARCHETYPES[archetype] || {};
   let score = 0;
-  for (const tag of tags) {
-    if (item.tags.includes(tag)) score += 4;
-  }
-  if (role === 'Support' && (item.tags.includes('GoldPer') || item.name.includes('Atlas'))) score += 6;
-  if (role === 'Jungle' && item.tags.includes('Jungle')) score += 6;
-  if (role === 'Mid' && (item.tags.includes('SpellDamage') || item.tags.includes('Mana'))) score += 2;
-  if ((role === 'Bot' || role === 'Top') && item.tags.includes('Damage')) score += 2;
-  if (item.tags.includes('ArmorPen') || item.tags.includes('SpellVamp') || item.tags.includes('LifeSteal')) {
-    score += 1;
-  }
+  for (const tag of item.tags) score += weights[tag] || 0;
+  // An item built around the other damage type is mostly wasted.
+  if (damageType === 'Magic' && item.tags.some((t) => PHYSICAL_ONLY.includes(t)) && !item.tags.some((t) => MAGIC_ONLY.includes(t))) score -= 3;
+  if (damageType === 'Physical' && item.tags.some((t) => MAGIC_ONLY.includes(t)) && !item.tags.some((t) => PHYSICAL_ONLY.includes(t) || t === 'Damage')) score -= 3;
+  // Mana-regeneration auras are support items; carries and bruisers skip them.
+  if (item.tags.includes('ManaRegen') && archetype !== 'enchanter' && archetype !== 'supportTank') score -= 2.5;
+  // Gold-per and jungle items belong to their own roles.
+  if (item.tags.includes('GoldPer') || item.tags.includes('Jungle')) score -= 10;
   return score;
 }
 
-function pickBoots(items: CatalogItem[], tags: string[], role: CatalogRole): string {
+const ARCHETYPE_BOOTS: Record<string, string[]> = {
+  marksman: ['3006'],
+  mage: ['3020'],
+  assassinAd: ['3158', '3047'],
+  assassinAp: ['3020'],
+  fighterAd: ['3047', '3111'],
+  fighterAp: ['3111', '3020'],
+  tank: ['3047', '3111'],
+  enchanter: ['3158'],
+  supportTank: ['3047', '3111'],
+};
+
+function pickBoots(items: CatalogItem[], archetype: string, role: CatalogRole): string {
   const boots = items.filter(bootsCandidate);
-  if (tags.includes('Mage') || tags.includes('Support')) {
-    const mage = boots.find((i) => i.id === '3020' || i.id === '3158' || i.id === '3009');
-    if (mage) return mage.id;
+  for (const id of ARCHETYPE_BOOTS[archetype] || []) {
+    if (boots.some((b) => b.id === id)) return id;
   }
-  if (tags.includes('Marksman') || tags.includes('Assassin')) {
-    const swift = boots.find((i) => i.id === '3006' || i.id === '3009');
-    if (swift) return swift.id;
-  }
-  if (tags.includes('Tank')) {
-    const tank = boots.find((i) => i.id === '3047' || i.id === '3111');
-    if (tank) return tank.id;
-  }
-  return boots.sort((a, b) => tagScore(b, tags, role) - tagScore(a, tags, role))[0]?.id || FALLBACK_BOOTS[role];
+  return FALLBACK_BOOTS[role];
 }
 
 function pickStarters(items: CatalogItem[], role: CatalogRole): string[] {
@@ -183,19 +266,23 @@ function pickStarters(items: CatalogItem[], role: CatalogRole): string[] {
   return pool.slice(0, 2).map((item) => item.id);
 }
 
-function pickCore(items: CatalogItem[], tags: string[], role: CatalogRole): string[] {
+function pickCore(items: CatalogItem[], archetype: string, damageType: CatalogChampion['damageType']): string[] {
+  const seen = new Set<string>();
   return items
     .filter(legendary)
-    .map((item) => ({ item, score: tagScore(item, tags, role) }))
+    .map((item) => ({ item, score: itemFit(item, archetype, damageType) }))
     .filter((row) => row.score > 0)
-    .sort((a, b) => b.score - a.score || b.item.gold - a.item.gold)
+    .sort((a, b) => b.score - a.score || b.item.gold - a.item.gold || a.item.id.localeCompare(b.item.id))
+    .filter((row) => (seen.has(row.item.name) ? false : (seen.add(row.item.name), true)))
     .slice(0, 3)
     .map((row) => row.item.id);
 }
 
-function pickSituational(items: CatalogItem[]): string[] {
+function pickSituational(items: CatalogItem[], archetype: string, core: string[]): string[] {
   const byId = new Map(items.map((item) => [item.id, item]));
-  return SITUATIONAL_POOL.filter((id) => byId.get(id)?.purchasable).slice(0, 4);
+  return (SITUATIONAL_BY_ARCHETYPE[archetype] || [])
+    .filter((id) => byId.get(id)?.purchasable && !core.includes(id))
+    .slice(0, 4);
 }
 
 function defaultPerkIds(role: CatalogRole): {
@@ -245,9 +332,11 @@ export function buildRecommendation(args: {
   const { champion, role, items, rune } = args;
   const fallback = defaultPerkIds(role);
   const starter = pickStarters(items, role);
-  const core = pickCore(items, champion.tags, role);
-  const boots = pickBoots(items, champion.tags, role);
-  const situational = pickSituational(items);
+  const damage = buildsMagic(champion) ? 'Magic' : 'Physical';
+  const archetype = archetypeFor(champion.tags, damage, role);
+  const core = pickCore(items, archetype, damage);
+  const boots = pickBoots(items, archetype, role);
+  const situational = pickSituational(items, archetype, core);
   return {
     championId: champion.id,
     role,
@@ -300,7 +389,8 @@ export async function buildCatalogBundle(): Promise<CatalogBundle> {
     const rolesFromCdragon = (summary?.roles || [])
       .map((role) => cdragonPositionToRole(role))
       .filter((role): role is CatalogRole => !!role);
-    const roles = rolesFromCdragon.length ? rolesFromCdragon : [roleFromChampionTags(champ.tags)];
+    const known = CHAMPION_POSITIONS[champ.id];
+    const roles = known?.length ? known : rolesFromCdragon.length ? rolesFromCdragon : [roleFromChampionTags(champ.tags)];
     return {
       id: champ.id,
       key: champ.key,

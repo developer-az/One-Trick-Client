@@ -1,6 +1,7 @@
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { buildCatalogBundle, buildRecommendation } from './buildCatalog';
+import { CHAMPION_POSITIONS } from '../logic/championPositions';
 import { roleFromChampionTags } from './roles';
 import { CATALOG_API_BASES, DEFAULT_CATALOG_API_BASE } from './site';
 import type {
@@ -31,7 +32,19 @@ function notify(): void {
   listeners.forEach((listener) => listener());
 }
 
-function applyBundle(bundle: CatalogBundle): CatalogBundle {
+/** Catalog roles come from the curated position table when it knows the champion (CDragon never reports Jungle). */
+function withPositions(bundle: CatalogBundle): CatalogBundle {
+  return {
+    ...bundle,
+    champions: bundle.champions.map((c) => {
+      const known = CHAMPION_POSITIONS[c.id];
+      return known?.length ? { ...c, roles: [...known] } : c;
+    }),
+  };
+}
+
+function applyBundle(raw: CatalogBundle): CatalogBundle {
+  const bundle = withPositions(raw);
   cached = bundle;
   ingestChampionCatalog(bundle.champions);
   try {
@@ -145,13 +158,24 @@ export function recommendationFor(
   role: CatalogRole,
   bundle: CatalogBundle | null = cached
 ): CatalogRecommendation {
+  // Items are always rebuilt from the live item list: published recommendations
+  // can predate a scoring fix or a patch. Runes and spells come from CDragon's
+  // per-champion recommendations when the bundle has them.
   const existing = findRecommendation(bundle, champion.id, role);
-  if (existing) return existing;
-  return buildRecommendation({
+  const built = buildRecommendation({
     champion,
     role,
     items: bundle?.items || [],
+    rune: existing
+      ? {
+          primaryStyleId: existing.primaryStyleId,
+          subStyleId: existing.subStyleId,
+          selectedPerkIds: existing.selectedPerkIds,
+          summonerSpellIds: existing.summonerSpellIds,
+        }
+      : undefined,
   });
+  return bundle?.items?.length ? built : existing || built;
 }
 
 export function inferCatalogRole(champion: CatalogChampion | null, assigned?: CatalogRole | null): CatalogRole {

@@ -13,12 +13,18 @@ export interface AppSettings {
     hideDashboardInGame: boolean;
     /** Master switch for the in-game overlay. */
     overlayEnabled: boolean;
+    /** Send runes and the item set to the client as soon as you lock in. */
+    autoImport: boolean;
+    /** Also set summoner spells on lock-in (keeps Flash on the key you use). */
+    autoSpells: boolean;
 }
 
 const DEFAULTS: AppSettings = {
     gpuAcceleration: false,
     hideDashboardInGame: true,
     overlayEnabled: true,
+    autoImport: true,
+    autoSpells: false,
 };
 
 let current: AppSettings | null = null;

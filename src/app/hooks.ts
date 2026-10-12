@@ -16,10 +16,13 @@ import {
   parseGenericProfileId,
   storeProfileId,
   AUTHORED_PROFILES,
+  type ChampionProfile,
   type ProfileId,
 } from '../logic/profiles';
 import type { OverlayBotSummoner } from '../overlay/overlayLogic';
 import type { Toast } from './ui';
+import { sendLoadout, type ExportResult } from './exporter';
+import type { Loadout } from './views/LoadoutView';
 
 export const isDesktop = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -386,27 +389,152 @@ export function useToasts() {
 
 /* ------------------------------------------------------------- app settings */
 
-export function useAppSettings() {
-  const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [restartRequired, setRestartRequired] = useState(false);
+// One copy for the whole renderer, so a switch flipped on one screen is seen
+// everywhere (auto-import reads it from the shell).
+let settingsCache: AppSettings | null = null;
+let restartPending = false;
+const settingsListeners = new Set<() => void>();
+const emitSettings = () => settingsListeners.forEach((l) => l());
+let settingsLoad: Promise<void> | null = null;
 
+export function useAppSettings() {
+  const [, force] = useState(0);
   useEffect(() => {
-    let cancelled = false;
-    void window.electronAPI?.getAppSettings?.().then((next) => {
-      if (!cancelled) setSettings(next);
-    });
+    const listener = () => force((n) => n + 1);
+    settingsListeners.add(listener);
+    if (!settingsCache && !settingsLoad) {
+      settingsLoad = Promise.resolve(window.electronAPI?.getAppSettings?.()).then((next) => {
+        if (next) {
+          settingsCache = next;
+          emitSettings();
+        }
+      });
+    }
     return () => {
-      cancelled = true;
+      settingsListeners.delete(listener);
     };
   }, []);
 
   const update = useCallback((patch: Partial<AppSettings>) => {
-    setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
+    if (settingsCache) settingsCache = { ...settingsCache, ...patch };
+    emitSettings();
     void window.electronAPI?.setAppSettings?.(patch).then((res) => {
-      setSettings(res.settings);
-      if (res.restartRequired) setRestartRequired(true);
+      settingsCache = res.settings;
+      if (res.restartRequired) restartPending = true;
+      emitSettings();
     });
   }, []);
 
-  return { settings, update, restartRequired };
+  return { settings: settingsCache, update, restartRequired: restartPending };
+}
+
+/* -------------------------------------------------------------- auto import */
+
+/**
+ * Sends runes and items to the client once you lock in, and again whenever
+ * the enemy team changes after that. Waits for picks to settle first so a
+ * fast enemy lock-in sequence becomes one export, not five.
+ */
+export function useAutoImport(args: {
+  draft: DraftState;
+  profile: ChampionProfile;
+  loadout: Loadout | null;
+  settings: AppSettings | null;
+  onResult: (res: ExportResult, first: boolean) => void;
+}) {
+  const { draft, profile, loadout, settings, onResult } = args;
+  const lastKey = useRef('');
+  const spellsDone = useRef(false);
+  const onResultRef = useRef(onResult);
+  useEffect(() => {
+    onResultRef.current = onResult;
+  });
+
+  const enabled = !!settings?.autoImport && draft.live && draft.localLocked && !!loadout;
+  const enemyKey = ROLES.map((r) => draft.enemy[r]?.champion?.id || '-').join(',');
+  const key = enabled ? `${profile.id}|${enemyKey}|${loadout!.runes.selectedPerkIds.join('.')}` : '';
+  const autoSpells = !!settings?.autoSpells;
+
+  useEffect(() => {
+    if (!draft.live) {
+      lastKey.current = '';
+      spellsDone.current = false;
+    }
+  }, [draft.live]);
+
+  useEffect(() => {
+    if (!key || key === lastKey.current || !loadout) return;
+    const timer = window.setTimeout(() => {
+      const first = lastKey.current === '';
+      lastKey.current = key;
+      const withSpells = autoSpells && !spellsDone.current;
+      void sendLoadout(profile, loadout, { spells: withSpells }).then((res) => {
+        if (res.ok && withSpells) spellsDone.current = true;
+        onResultRef.current(res, first);
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [key, loadout, profile, autoSpells]);
+}
+
+/* ------------------------------------------------------------ match history */
+
+interface HistoryState {
+  games: MatchSummary[] | null;
+  loading: boolean;
+  error: string | null;
+  loadedAt: number;
+}
+let historyState: HistoryState = { games: null, loading: false, error: null, loadedAt: 0 };
+const historyListeners = new Set<() => void>();
+function setHistory(next: Partial<HistoryState>) {
+  historyState = { ...historyState, ...next };
+  historyListeners.forEach((l) => l());
+}
+
+function loadHistory() {
+  const api = window.electronAPI;
+  if (!api?.getMatchHistory || historyState.loading) return;
+  setHistory({ loading: true, error: null });
+  void api
+    .getMatchHistory()
+    .then((res) =>
+      setHistory({
+        loading: false,
+        games: res.success ? res.games : historyState.games,
+        error: res.success ? null : res.error || 'Could not read match history',
+        loadedAt: Date.now(),
+      })
+    )
+    .catch((e: Error) => setHistory({ loading: false, error: e.message }));
+}
+
+/**
+ * Your recent games, shared by every screen. Loads when first needed while the
+ * client is connected and not in a match, and again after each match ends.
+ */
+export function useMatchHistory(league: LeagueState, wanted: boolean) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const l = () => force((n) => n + 1);
+    historyListeners.add(l);
+    return () => {
+      historyListeners.delete(l);
+    };
+  }, []);
+
+  const connected = league.lcu?.state === 'connected';
+  const inGame = league.inGame;
+  const wasInGame = useRef(inGame);
+  useEffect(() => {
+    // A finished match adds a game, so the cached list is stale.
+    if (wasInGame.current && !inGame) historyState = { ...historyState, loadedAt: 0 };
+    wasInGame.current = inGame;
+    if (!wanted || !connected || inGame) return;
+    // Otherwise the list only changes when a game ends.
+    if (historyState.games && Date.now() - historyState.loadedAt < 10 * 60_000) return;
+    loadHistory();
+  }, [wanted, connected, inGame]);
+
+  return { ...historyState, reload: loadHistory };
 }
