@@ -1,5 +1,6 @@
 import { clusterOverlayWindows, letterboxGame, overlayScaleFromHud } from './electron/overlay-bounds';
 import { dualRailLayout, compactRightLayout } from './src/overlay/hudLayout';
+import { minimapScaleToSlider } from './electron/league-settings';
 
 function assert(condition: unknown, message: string): void {
   if (!condition) throw new Error(message);
@@ -72,3 +73,8 @@ for (const cluster of dualClusters) {
   }
 }
 console.log('overlay windows contain their panels');
+
+// League saves Minimap Scale as slider × 0.03: in-game 61 is MinimapScale=1.83.
+assert(minimapScaleToSlider(1.83) === 61, `minimap 1.83 -> ${minimapScaleToSlider(1.83)}`);
+assert(minimapScaleToSlider(1) === 33 && minimapScaleToSlider(3) === 100, 'minimap default and max');
+console.log('minimap scale reads like the League slider');
