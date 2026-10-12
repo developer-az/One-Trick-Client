@@ -283,16 +283,27 @@ function applyClusterToWindow(win: BrowserWindow, cluster: OverlayCluster, click
     syncWindowVisibility(win);
 }
 
-function applyLockedClusters(): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
-    const display = screen.getDisplayMatching(overlayWin.getBounds()) || screen.getPrimaryDisplay();
-    const clusters = clusterOverlayWindows({
+/** The display the overlay lives on. Window placement and slot metadata must agree on it. */
+function overlayDisplay(): Electron.Display {
+    if (overlayWin && !overlayWin.isDestroyed()) {
+        return screen.getDisplayMatching(overlayWin.getBounds()) || screen.getPrimaryDisplay();
+    }
+    return screen.getPrimaryDisplay();
+}
+
+function lockedClusters(display: Electron.Display): OverlayCluster[] {
+    return clusterOverlayWindows({
         widgets: widgetsFromSettings(),
         display: display.bounds,
         gameWidth,
         gameHeight,
         hudScale,
     });
+}
+
+function applyLockedClusters(): void {
+    if (!overlayWin || overlayWin.isDestroyed()) return;
+    const clusters = lockedClusters(overlayDisplay());
     if (!clusters.length) {
         destroyExtraWindows();
         overlayWin.hide();
@@ -847,23 +858,67 @@ export function getGameResolution(): { gameWidth: number; gameHeight: number } {
     return { gameWidth, gameHeight };
 }
 
+export interface OverlaySlot {
+    id: string;
+    originX: number;
+    originY: number;
+    moduleIds: readonly string[];
+    stickerIds: readonly string[];
+    mode: 'locked' | 'compact' | 'align';
+}
+
+function slotsFor(windows: BrowserWindow[], display: Electron.Display): OverlaySlot[] {
+    const clusters = clickThrough && !alignMode ? lockedClusters(display) : [];
+    return windows.map((_win, index) => {
+        const cluster = clusters[index];
+        return cluster
+            ? {
+                  id: cluster.id,
+                  originX: cluster.x - display.bounds.x,
+                  originY: cluster.y - display.bounds.y,
+                  moduleIds: cluster.moduleIds,
+                  stickerIds: cluster.stickerIds,
+                  mode: 'locked' as const,
+              }
+            : {
+                  id: alignMode ? 'align' : 'compact',
+                  originX: 0,
+                  originY: 0,
+                  moduleIds: HUD_MODULE_IDS,
+                  stickerIds: [],
+                  mode: alignMode ? ('align' as const) : ('compact' as const),
+              };
+    });
+}
+
+/**
+ * Slot and display size for one overlay renderer. The renderer also asks for
+ * this on mount: the 'overlay-meta' push on did-finish-load can arrive before
+ * React has subscribed, and a window without its slot used to paint every
+ * module (the same panel twice on screen).
+ */
+export function overlaySlotFor(webContentsId: number): {
+    slot: OverlaySlot | null;
+    displayWidth: number;
+    displayHeight: number;
+} {
+    const display = overlayDisplay();
+    const windows = overlayWindows();
+    const index = windows.findIndex((win) => win.webContents.id === webContentsId);
+    return {
+        slot: index >= 0 ? slotsFor(windows, display)[index] : null,
+        displayWidth: display.bounds.width,
+        displayHeight: display.bounds.height,
+    };
+}
+
 export function broadcastOverlayMeta(): void {
-    const display = screen.getPrimaryDisplay();
+    const display = overlayDisplay();
     const windows = overlayWindows();
     if (!windows.length) return;
-    const clusters =
-        clickThrough && !alignMode
-            ? clusterOverlayWindows({
-                  widgets: widgetsFromSettings(),
-                  display: display.bounds,
-                  gameWidth,
-                  gameHeight,
-                  hudScale,
-              })
-            : [];
+    const slots = slotsFor(windows, display);
     windows.forEach((win, index) => {
         if (win.isDestroyed()) return;
-        const cluster = clusters[index];
         win.webContents.send('overlay-meta', {
             visible: !userHidden && win.isVisible(),
             clickThrough,
@@ -879,23 +934,7 @@ export function broadcastOverlayMeta(): void {
             hudLayout,
             displayWidth: display.bounds.width,
             displayHeight: display.bounds.height,
-            slot: cluster
-                ? {
-                      id: cluster.id,
-                      originX: cluster.x - display.bounds.x,
-                      originY: cluster.y - display.bounds.y,
-                      moduleIds: cluster.moduleIds,
-                      stickerIds: cluster.stickerIds,
-                      mode: 'locked' as const,
-                  }
-                : {
-                      id: alignMode ? 'align' : 'compact',
-                      originX: 0,
-                      originY: 0,
-                      moduleIds: HUD_MODULE_IDS,
-                      stickerIds: [],
-                      mode: alignMode ? ('align' as const) : ('compact' as const),
-                  },
+            slot: slots[index],
         });
     });
 }

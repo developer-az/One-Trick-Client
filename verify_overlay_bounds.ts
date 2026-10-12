@@ -59,3 +59,16 @@ console.log('overlay bounds ok', {
   dual: dualClusters.map((c) => `${c.id} ${c.width}x${c.height} @${c.x},${c.y} [${c.moduleIds.join(',')}]`),
   compact: `${compactClusters[0].width}x${compactClusters[0].height} @${compactClusters[0].x}`,
 });
+
+// The renderer paints a module's box from its x (left edge) rightwards, for
+// every anchor. Each window must contain the boxes it owns.
+for (const cluster of dualClusters) {
+  for (const id of cluster.moduleIds) {
+    const el = dual.elements.find((e) => e.id === id)!;
+    const left = el.x * 1920;
+    const top = el.y * 1080;
+    assert(cluster.x <= left && left + 220 <= cluster.x + cluster.width, `${id} box [${left}, ${left + 220}] fits its window`);
+    assert(cluster.y <= top, `${id} top ${top} is inside its window`);
+  }
+}
+console.log('overlay windows contain their panels');
