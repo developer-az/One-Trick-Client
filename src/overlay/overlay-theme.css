@@ -1,19 +1,21 @@
 /*
- * In-game overlay: same language as the dashboard (Inter / Space Grotesk,
- * quiet dark surfaces, gold for "yours", teal live, red danger), tuned for
+ * In-game overlay: same gothic language as the dashboard (Cinzel titles over
+ * Inter text, ink surfaces, chrome silver for "yours", blood-red marks, teal
+ * live, red danger), tuned for
  * reading at a glance over a moving game. Opaque enough to read on any map
  * area; still no blur, filters or animation (they cost League frames).
  */
 
 html.overlay-root {
-  --font-display: 'Space Grotesk Variable', 'Inter Variable', 'Segoe UI', sans-serif;
+  --font-display: 'Cinzel', 'Times New Roman', serif;
   --font-body: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif;
   --font-mono: 'Inter Variable', 'Segoe UI', sans-serif;
-  --ov-surface: rgba(11, 13, 18, 0.84);
-  --ov-border: rgba(255, 255, 255, 0.1);
+  --ov-surface: rgba(9, 9, 11, 0.86);
+  --ov-border: rgba(212, 216, 222, 0.14);
   --ov-text: #e7e9ee;
   --ov-text-2: #a7aebb;
-  --ov-gold: #d6b46c;
+  --ov-gold: #d4d8de;
+  --ov-blood: #b4243a;
   --ov-teal: #35d0ba;
   --ov-red: #f0656a;
   --ov-amber: #f2b350;
@@ -25,9 +27,29 @@ html.overlay-root .hud-overlay-panel {
   background: var(--ov-surface);
   border: 1px solid var(--ov-border);
   border-left: 1px solid var(--ov-border);
-  border-radius: 10px;
+  border-radius: 5px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   color: var(--ov-text);
+}
+/* Bracketed corners, as on dashboard cards. */
+html.overlay-root .hud-overlay-panel::before,
+html.overlay-root .hud-overlay-panel::after {
+  content: '';
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  border: 0 solid rgba(212, 216, 222, 0.45);
+}
+html.overlay-root .hud-overlay-panel::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+}
+html.overlay-root .hud-overlay-panel::after {
+  right: -1px;
+  bottom: -1px;
+  border-width: 0 1px 1px 0;
 }
 
 html.overlay-root .hud-corner,
@@ -44,9 +66,9 @@ html.overlay-root .hud-chrome-header {
 
 html.overlay-root .hud-chrome-title {
   font-family: var(--font-display);
-  font-size: 13px !important;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-size: 12.5px !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: none;
   text-shadow: none;
   color: var(--ov-text);
@@ -91,7 +113,7 @@ html.overlay-root .font-mono {
 
 html.overlay-root .hud-chrome-cue {
   clip-path: none;
-  border-radius: 6px;
+  border-radius: 4px;
   padding: 6px 9px;
   font-size: 13px;
   line-height: 1.35;
@@ -100,9 +122,9 @@ html.overlay-root .hud-chrome-cue {
   background: rgba(255, 255, 255, 0.04);
 }
 html.overlay-root .hud-chrome-cue--spike {
-  border-color: rgba(214, 180, 108, 0.5);
-  background: rgba(214, 180, 108, 0.12);
-  box-shadow: inset 3px 0 0 var(--ov-gold);
+  border-color: rgba(212, 216, 222, 0.5);
+  background: rgba(212, 216, 222, 0.12);
+  box-shadow: inset 3px 0 0 var(--ov-blood);
 }
 html.overlay-root .hud-chrome-cue--warn {
   border-color: rgba(240, 101, 106, 0.5);
