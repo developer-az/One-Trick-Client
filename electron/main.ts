@@ -41,6 +41,7 @@ import {
     resetCalibration,
     getGameResolution,
     broadcastOverlayMeta,
+    overlaySlotFor,
     hideOverlay,
     setOverlaySlotContent,
     getOverlayWindowStats,
@@ -659,10 +660,11 @@ app.whenReady().then(() => {
         return { success: true, calibration: result };
     });
 
-    ipcMain.handle('overlay-get-status', () => {
+    ipcMain.handle('overlay-get-status', (event) => {
         const res = getGameResolution();
         return {
             success: true,
+            ...overlaySlotFor(event.sender.id),
             visible: !isOverlayUserHidden(),
             clickThrough: isClickThrough(),
             alignMode: isAlignMode(),

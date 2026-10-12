@@ -460,7 +460,9 @@ export const OverlayApp: React.FC = () => {
     };
   }, [gameGeo, slot]);
 
-  const slotHasModule = (id: string): boolean => !slot || slot.mode !== 'locked' || slot.moduleIds.includes(id);
+  // Until the main process says which slot this window is, draw nothing: with
+  // no slot every window would paint every module (the doubled panels bug).
+  const slotHasModule = (id: string): boolean => !!slot && (slot.mode !== 'locked' || slot.moduleIds.includes(id));
   const slotStickers =
     slot?.mode === 'locked'
       ? hudLayout.stickers.filter((sticker) => slot.stickerIds.includes(sticker.id))
@@ -471,7 +473,7 @@ export const OverlayApp: React.FC = () => {
   // until there is something worth showing.
   const lockedSlot = slot?.mode === 'locked';
   const slotHasContent = (() => {
-    if (!state.inGame) return false;
+    if (!state.inGame || !slot) return false;
     if (!lockedSlot) return true;
     if (slotStickers.length > 0) return true;
     const liveName = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -494,7 +496,7 @@ export const OverlayApp: React.FC = () => {
     window.electronAPI?.reportOverlayContent?.(slotHasContent);
   }, [slotHasContent]);
 
-  if (!state.inGame) {
+  if (!state.inGame || !slot) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
 

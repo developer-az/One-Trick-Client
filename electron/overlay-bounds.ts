@@ -81,21 +81,30 @@ export function letterboxGame(
     };
 }
 
+/**
+ * Where the renderer actually paints a widget (see layoutStyle in
+ * src/overlay/hudLayout.ts): x/y is always the unscaled box's top-left corner,
+ * and the anchor only picks the transform origin for scale(). Treating 'tr' as
+ * "x is the right edge" put the right rail's window to the left of its panels,
+ * which then drew clipped at the window's edge.
+ */
 function placedRect(widget: OverlayWidget & { yNorm: number }, geo: OverlayLetterbox, hudScale: number): OverlayRect {
-    const scale = overlayScaleFromHud(hudScale) * (Number.isFinite(widget.scale) ? Math.max(0.4, widget.scale as number) : 1);
-    const size = widget.kind === 'sticker' ? STICKER_SIZE : MODULE_SIZE[widget.id] || { w: 220, h: 120 };
-    const w = Math.round(size.w * scale);
-    const h = Math.round(size.h * scale);
+    const base = widget.kind === 'sticker' ? STICKER_SIZE : MODULE_SIZE[widget.id] || { w: 220, h: 120 };
+    const widgetScale = Number.isFinite(widget.scale) ? Math.max(0.4, widget.scale as number) : 1;
+    // Over-estimating is safe (a few transparent pixels); under-estimating clips.
+    const scale = widgetScale * Math.max(1, overlayScaleFromHud(hudScale));
+    const w = Math.round(base.w * scale);
+    const h = Math.round(base.h * scale);
     const left = geo.offsetX + widget.xNorm * geo.gameViewW;
     const top = geo.offsetY + widget.yNorm * geo.gameViewH;
-    const anchor = widget.anchor || (widget.xNorm >= 0.5 ? 'tr' : 'tl');
+    const anchor = widget.anchor || 'tl';
     let x = left;
     let y = top;
-    if (anchor === 'tr' || anchor === 'br') x = left - w;
-    if (anchor === 'bl' || anchor === 'br') y = top - h;
+    if (anchor === 'tr' || anchor === 'br') x = left + base.w - w;
+    if (anchor === 'bl' || anchor === 'br') y = top + base.h - h;
     if (anchor === 'center') {
-        x = left - w / 2;
-        y = top - h / 2;
+        x = left + (base.w - w) / 2;
+        y = top + (base.h - h) / 2;
     }
     return {
         x: Math.round(x),
