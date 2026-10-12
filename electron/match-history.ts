@@ -34,6 +34,8 @@ interface RawParticipant {
     participantId?: number;
     championId?: number;
     teamId?: number;
+    spell1Id?: number;
+    spell2Id?: number;
     stats?: {
         win?: boolean;
         kills?: number;
@@ -58,12 +60,17 @@ interface RawGame {
 export const RIFT_QUEUES = new Set([400, 420, 430, 440, 480, 490]);
 /** Games shorter than this were remakes. */
 const MIN_DURATION_SEC = 300;
+const SMITE = 11;
 
 export function roleOf(p: RawParticipant | undefined): MatchSummary['role'] {
     const lane = (p?.timeline?.lane || '').toUpperCase();
     const role = (p?.timeline?.role || '').toUpperCase();
+    const spells = [p?.spell1Id, p?.spell2Id];
+    // Smite is the one reliable jungle signal. Riot's lane guess calls a
+    // roaming support (Pyke, Bard) "JUNGLE" when they leave lane early.
+    if (spells.includes(SMITE)) return 'Jungle';
     if (lane === 'TOP') return 'Top';
-    if (lane === 'JUNGLE') return 'Jungle';
+    if (lane === 'JUNGLE') return spells.some((x) => x) ? null : 'Jungle';
     if (lane === 'MIDDLE' || lane === 'MID') return 'Mid';
     if (lane === 'BOTTOM' || lane === 'BOT') {
         if (role === 'DUO_SUPPORT') return 'Support';
@@ -160,7 +167,10 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
     const puuid = me?.puuid || null;
 
     const games: RawGame[] = [];
-    // The client serves at most 20 games per request.
+    const seen = new Set<number>();
+    // The client serves at most 20 games per request. Some client builds
+    // ignore begIndex and return the same page again, so games are keyed by
+    // id and paging stops once a page brings nothing new.
     for (let beg = 0; beg < count; beg += 20) {
         const end = Math.min(count, beg + 20) - 1;
         const res = (await makeLCURequest(
@@ -170,8 +180,10 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
             10000
         )) as { games?: { games?: RawGame[] } } | null;
         const page = res?.games?.games || [];
-        games.push(...page);
-        if (page.length < end - beg + 1) break;
+        const fresh = page.filter((g) => g.gameId && !seen.has(g.gameId));
+        for (const g of fresh) seen.add(g.gameId!);
+        games.push(...fresh);
+        if (!fresh.length || page.length < end - beg + 1) break;
     }
 
     const out = games
