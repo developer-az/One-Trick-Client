@@ -56,4 +56,7 @@ assert(near(champs[0].kda, 6), `kda ${champs[0].kda}`);
 const vsLux = recordAgainst(games, 99);
 assert(vsLux.games === 2 && vsLux.wins === 1, 'record vs Lux');
 assert(recordAgainst(games, 51, { championId: 80 }).games === 1, 'record vs Cait on Pantheon');
+// Smite decides jungle; a smiteless "JUNGLE" lane guess (roaming Pyke) is not jungle.
+assert(roleOf({ spell1Id: 4, spell2Id: 11, timeline: { lane: 'TOP', role: 'SOLO' } }) === 'Jungle', 'smite = jungle');
+assert(roleOf({ spell1Id: 4, spell2Id: 14, timeline: { lane: 'JUNGLE', role: 'NONE' } }) === null, 'roaming support is not jungle');
 console.log('verify:stats ok');
