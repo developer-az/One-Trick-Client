@@ -13,6 +13,7 @@
  *   E <code>     SetWindowsHookEx failed with GetLastError() == code; exits 1
  *   P            primary key went down   (PageUp, Numpad 9, NumLock-off Numpad 9)
  *   S            secondary key went down (PageDown, Numpad 3, NumLock-off Numpad 3)
+ *   T / t        Tab went down / came back up (hold-to-show overlay)
  *
  * The helper exits as soon as its stdin closes, so it can never outlive the app.
  *
@@ -65,7 +66,20 @@ static LRESULT CALLBACK keyboard_proc(int code, WPARAM wParam, LPARAM lParam) {
         const KBDLLHOOKSTRUCT *k = (const KBDLLHOOKSTRUCT *)lParam;
         DWORD vk = k->vkCode & 0xFF;
         char kind = classify(vk);
-        if (kind) {
+        if (vk == VK_TAB) {
+            /* Hold-to-show needs both edges; auto-repeat is still filtered. */
+            if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+                if (!g_down[vk]) {
+                    g_down[vk] = TRUE;
+                    PostThreadMessage(g_writer_thread_id, WM_KEYHOOK_EVENT, (WPARAM)'T', 0);
+                }
+            } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+                if (g_down[vk]) {
+                    g_down[vk] = FALSE;
+                    PostThreadMessage(g_writer_thread_id, WM_KEYHOOK_EVENT, (WPARAM)'t', 0);
+                }
+            }
+        } else if (kind) {
             if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
                 if (!g_down[vk]) {
                     g_down[vk] = TRUE;
