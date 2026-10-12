@@ -42,6 +42,9 @@ import {
     getGameResolution,
     broadcastOverlayMeta,
     overlaySlotFor,
+    setOverlayHold,
+    refreshOverlayVisibility,
+    holdToShowActive,
     hideOverlay,
     setOverlaySlotContent,
     getOverlayWindowStats,
@@ -242,6 +245,7 @@ function registerFlashHotkeys(): void {
     const hookOk = startFlashKeyHook({
         onPrimary: onFlashPrimary,
         onSecondary: onFlashSecondary,
+        onHold: setOverlayHold,
     });
 
     if (hookOk && isFlashKeyHookActive()) {
@@ -400,6 +404,7 @@ app.whenReady().then(() => {
             if (!result.settings.overlayEnabled) hideOverlay();
             else if (isCurrentlyInGame()) showOverlay();
         }
+        if (before.overlayHoldToShow !== result.settings.overlayHoldToShow) refreshOverlayVisibility();
         return result;
     });
     ipcMain.handle('app-relaunch', () => {
@@ -438,6 +443,7 @@ app.whenReady().then(() => {
             gpuAcceleration: getAppSettings().gpuAcceleration,
             gpuActive: gpuAccelerationAtLaunch(),
             hotkeys: getKeyHookStatus(),
+            overlayHold: holdToShowActive(),
             lcu: lcuSocket.summary(),
             inGame: monitor.inGame,
             livePollMs: monitor.livePollMs,

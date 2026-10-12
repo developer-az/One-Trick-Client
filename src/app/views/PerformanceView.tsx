@@ -90,8 +90,8 @@ export const PerformanceView: React.FC = () => {
         ? 'Checking'
         : stats.overlayWindows === 0
           ? 'None open'
-          : `${stats.overlayWindows} open, ${stats.overlayVisible ? 'showing' : 'hidden until needed'}`,
-      tone: 'muted',
+          : `${stats.overlayWindows} open, ${stats.overlayVisible ? 'showing' : stats.overlayHold ? 'hold Tab to show' : 'hidden until needed'}`,
+      tone: stats?.overlayVisible ? 'warn' : 'muted',
     },
     {
       label: 'Rendering',
@@ -141,6 +141,18 @@ export const PerformanceView: React.FC = () => {
                 title="In-game overlay"
                 hint="Off means no windows over League at all."
                 control={<Switch label="In-game overlay" checked={settings.overlayEnabled} onChange={(v) => update({ overlayEnabled: v })} />}
+              />
+              <SettingRow
+                title="Only while holding Tab"
+                hint="A visible overlay costs frames in borderless. This keeps League uncovered except while you check the scoreboard."
+                control={
+                  <Switch
+                    label="Only while holding Tab"
+                    checked={settings.overlayHoldToShow}
+                    disabled={!settings.overlayEnabled}
+                    onChange={(v) => update({ overlayHoldToShow: v })}
+                  />
+                }
               />
               <SettingRow
                 title="Hide this window during matches"

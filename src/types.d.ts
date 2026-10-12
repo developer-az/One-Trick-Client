@@ -30,6 +30,8 @@ declare global {
         hideDashboardInGame: boolean;
         /** Master switch for the in-game overlay. */
         overlayEnabled: boolean;
+        /** Show the overlay only while Tab is held, so nothing covers League otherwise. */
+        overlayHoldToShow: boolean;
         /** Send runes and the item set to the client on lock-in. */
         autoImport: boolean;
         /** Also set summoner spells on lock-in. */
@@ -68,6 +70,8 @@ declare global {
         gpuAcceleration: boolean;
         gpuActive: boolean;
         hotkeys: { mode: string; error: string | null };
+        /** Hold-to-show is on and the key helper can see Tab. */
+        overlayHold: boolean;
         lcu: LcuStatus;
         inGame: boolean;
         livePollMs: number | null;
