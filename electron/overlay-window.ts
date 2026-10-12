@@ -93,6 +93,19 @@ export function setOverlayHold(down: boolean): void {
     }
 }
 
+/** Exclude overlay windows from screen capture (WDA_EXCLUDEFROMCAPTURE) when the setting is on. */
+function applyCaptureProtection(win: BrowserWindow): void {
+    try {
+        win.setContentProtection(getAppSettings().overlayHideFromCapture);
+    } catch {
+        // Older Windows builds without capture exclusion — ignore
+    }
+}
+
+export function refreshOverlayCaptureProtection(): void {
+    for (const win of overlayWindows()) applyCaptureProtection(win);
+}
+
 /** Re-apply visibility after a setting that affects it changes. */
 export function refreshOverlayVisibility(): void {
     for (const win of overlayWindows()) {
@@ -236,6 +249,7 @@ function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
     // Hidden until its renderer reports something to draw.
     emptySlots.add(win.webContents.id);
     assertAlwaysOnTop(win);
+    applyCaptureProtection(win);
     win.setMenu(null);
     win.webContents.on('context-menu', (e) => {
         e.preventDefault();
@@ -546,6 +560,7 @@ export function createOverlayWindow(): BrowserWindow {
 
     emptySlots.add(overlayWin.webContents.id);
     assertAlwaysOnTop(overlayWin);
+    applyCaptureProtection(overlayWin);
 
     // Default: a fullscreen click-through surface, so the game is never blocked.
     setClickThrough(true);

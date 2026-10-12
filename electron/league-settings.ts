@@ -8,7 +8,18 @@ export interface LeagueHudScales {
   height: number;
   globalScale: number;
   minimapScale: number;
+  /** League's display mode from [General] WindowMode (0 fullscreen, 1 windowed, 2 borderless). */
+  windowMode: LeagueWindowMode;
   source: string;
+}
+
+export type LeagueWindowMode = 'fullscreen' | 'windowed' | 'borderless' | null;
+
+function windowModeFrom(raw: string | undefined): LeagueWindowMode {
+  if (raw === '0') return 'fullscreen';
+  if (raw === '1') return 'windowed';
+  if (raw === '2') return 'borderless';
+  return null;
 }
 
 const CANDIDATE_CFG = [
@@ -58,6 +69,7 @@ function scalesFromVals(vals: Record<string, string>, source: string): LeagueHud
     height: Number.isFinite(height) ? height : 1080,
     globalScale,
     minimapScale,
+    windowMode: windowModeFrom(vals.WindowMode),
     source,
   };
 }

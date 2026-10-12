@@ -32,6 +32,8 @@ declare global {
         overlayEnabled: boolean;
         /** Show the overlay only while Tab is held, so nothing covers League otherwise. */
         overlayHoldToShow: boolean;
+        /** Keep the overlay out of screenshots, recordings and streams. */
+        overlayHideFromCapture: boolean;
         /** Send runes and the item set to the client on lock-in. */
         autoImport: boolean;
         /** Also set summoner spells on lock-in. */
@@ -72,6 +74,8 @@ declare global {
         hotkeys: { mode: string; error: string | null };
         /** Hold-to-show is on and the key helper can see Tab. */
         overlayHold: boolean;
+        /** League's display mode and screen recorders running right now. */
+        environment: { windowMode: 'fullscreen' | 'windowed' | 'borderless' | null; recorders: string[] };
         lcu: LcuStatus;
         inGame: boolean;
         livePollMs: number | null;

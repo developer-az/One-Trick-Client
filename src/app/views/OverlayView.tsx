@@ -174,6 +174,18 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
             }
           />
           <SettingRow
+            title="Hide from recordings"
+            hint="Keeps the overlay out of screenshots, clips and streams. You still see it."
+            control={
+              <Switch
+                label="Hide from recordings"
+                checked={settings?.overlayHideFromCapture !== false}
+                disabled={!settings || settings.overlayEnabled === false}
+                onChange={(v) => update({ overlayHideFromCapture: v })}
+              />
+            }
+          />
+          <SettingRow
             title="Show right now"
             hint={inGame ? 'Hide or show it for this match.' : 'Takes effect when a match starts.'}
             control={
