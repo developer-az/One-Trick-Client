@@ -16,6 +16,64 @@ declare global {
     type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
+    interface LcuStatus {
+        state: 'searching' | 'connecting' | 'connected';
+        phase: string | null;
+        summonerName: string | null;
+        connectedAt: number | null;
+    }
+
+    interface AppSettings {
+        /** GPU compositing for One Trick's own windows. Off keeps the GPU for League. */
+        gpuAcceleration: boolean;
+        /** Hide the dashboard to the tray while a match runs. */
+        hideDashboardInGame: boolean;
+        /** Master switch for the in-game overlay. */
+        overlayEnabled: boolean;
+        /** Send runes and the item set to the client on lock-in. */
+        autoImport: boolean;
+        /** Also set summoner spells on lock-in. */
+        autoSpells: boolean;
+    }
+
+    interface MatchSummary {
+        gameId: number;
+        at: number;
+        durationSec: number;
+        queueId: number;
+        championId: number;
+        win: boolean;
+        kills: number;
+        deaths: number;
+        assists: number;
+        cs: number;
+        role: 'Top' | 'Jungle' | 'Mid' | 'Bot' | 'Support' | null;
+        enemies?: number[];
+        laneOpponent?: number | null;
+    }
+
+    interface PerfProcessStat {
+        type: string;
+        name: string;
+        cpu: number;
+        memoryMb: number;
+    }
+
+    interface PerfStats {
+        processes: PerfProcessStat[];
+        totalCpu: number;
+        totalMemoryMb: number;
+        overlayWindows: number;
+        overlayVisible: boolean;
+        gpuAcceleration: boolean;
+        gpuActive: boolean;
+        hotkeys: { mode: string; error: string | null };
+        lcu: LcuStatus;
+        inGame: boolean;
+        livePollMs: number | null;
+        liveReads: number;
+    }
+
     interface Window {
         electronAPI?: {
             connectLCU: () => Promise<{ success: boolean; credentials?: { port: string; token: string; protocol: string }; error?: string }>;
@@ -84,6 +142,19 @@ declare global {
             onOverlayUpdate: (callback: (payload: unknown) => void) => (() => void) | void;
             onOverlayMeta: (callback: (payload: unknown) => void) => (() => void) | void;
             onOverlayVisibilityChanged: (callback: (payload: { visible: boolean }) => void) => (() => void) | void;
+
+            getLcuStatus?: () => Promise<LcuStatus>;
+            onLcuStatus?: (callback: (payload: LcuStatus) => void) => () => void;
+            getChampSelect?: () => Promise<{ session: unknown | null }>;
+            onChampSelect?: (callback: (session: unknown | null) => void) => () => void;
+
+            getAppSettings?: () => Promise<AppSettings>;
+            setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;
+            relaunchApp?: () => Promise<void>;
+            getPerfStats?: () => Promise<PerfStats>;
+            getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
+            setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
+            reportOverlayContent?: (hasContent: boolean) => void;
         };
     }
 }

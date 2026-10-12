@@ -43,6 +43,12 @@ jobs:
       - name: Overlay window bounds
         run: npm run verify:overlay-bounds
 
+      - name: Verify summoner timers
+        run: npm run verify:summoners
+
+      - name: Verify match stats
+        run: npm run verify:stats
+
       - name: Build TypeScript
         run: npm run electron:build
 
@@ -51,6 +57,12 @@ jobs:
 
       - name: Check for TypeScript errors
         run: npx tsc --noEmit
+
+      - name: Build keyboard hotkey helper
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-x86-64
+          npm run build:keyhook
 
 
 

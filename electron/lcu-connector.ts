@@ -8,7 +8,7 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-let credentials: { port: string; token: string; protocol: string } | null = null;
+let credentials: LcuCredentials | null = null;
 
 // Reused across every request — creating a new https.Agent per call (as this
 // previously did) means a fresh TLS context/socket pool on every single LCU
@@ -16,29 +16,79 @@ let credentials: { port: string; token: string; protocol: string } | null = null
 // avoidable socket churn competing with the game for CPU.
 const lcuHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
 
-const LOCKFILE_CANDIDATES = [
-    path.join('C:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join('D:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join('E:', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Riot Games', 'League of Legends', 'lockfile'),
-    path.join(process.env.LOCALAPPDATA || '', 'Riot Games', 'League of Legends', 'lockfile'),
+export interface LcuCredentials {
+    port: string;
+    token: string;
+    protocol: string;
+    /** pid of LeagueClient — changes on every client restart. */
+    pid?: number;
+}
+
+// Literal roots: path.join('C:', 'Riot Games') is drive-relative on Windows.
+const DEFAULT_INSTALL_DIRS = [
+    'C:\\Riot Games\\League of Legends',
+    'D:\\Riot Games\\League of Legends',
+    'E:\\Riot Games\\League of Legends',
+    path.join(process.env['ProgramFiles'] || 'C:\\Program Files', 'Riot Games', 'League of Legends'),
 ];
 
-function parseLockfile(raw: string): { port: string; token: string; protocol: string } | null {
+/**
+ * Riot's own installer metadata records where League actually lives, so custom
+ * install folders work without PowerShell process scanning.
+ */
+const RIOT_PRODUCT_SETTINGS = path.join(
+    process.env['ProgramData'] || 'C:\\ProgramData',
+    'Riot Games',
+    'Metadata',
+    'league_of_legends.live',
+    'league_of_legends.live.product_settings.yaml'
+);
+
+let installDirs: string[] | null = null;
+
+async function discoverInstallDirs(): Promise<string[]> {
+    if (installDirs) return installDirs;
+    const dirs: string[] = [];
+    try {
+        const raw = await fs.promises.readFile(RIOT_PRODUCT_SETTINGS, 'utf8');
+        const match = raw.match(/product_install_full_path:\s*"?([^"\r\n]+)"?/);
+        if (match?.[1]) dirs.push(path.normalize(match[1].trim()));
+    } catch {
+        // Not installed in the default Riot layout — fall back to common folders.
+    }
+    for (const dir of DEFAULT_INSTALL_DIRS) {
+        if (!dirs.includes(dir)) dirs.push(dir);
+    }
+    installDirs = dirs;
+    return dirs;
+}
+
+/** Remember a folder learned from the process command line for future lockfile reads. */
+function rememberInstallDir(dir: string): void {
+    const normalized = path.normalize(dir);
+    installDirs = [normalized, ...(installDirs || []).filter((d) => d !== normalized)];
+}
+
+function parseLockfile(raw: string): LcuCredentials | null {
     // Format: LeagueClient:pid:port:password:https
     const parts = raw.trim().split(':');
     if (parts.length < 5) return null;
+    const pid = Number(parts[1]);
     const port = parts[2];
     const token = parts[3];
     const protocol = parts[4] || 'https';
     if (!/^\d+$/.test(port) || !token) return null;
-    return { port, token, protocol };
+    return { port, token, protocol, pid: Number.isFinite(pid) ? pid : undefined };
 }
 
-async function connectViaLockfile(): Promise<{ port: string; token: string; protocol: string } | null> {
-    for (const lockPath of LOCKFILE_CANDIDATES) {
+/**
+ * The lockfile exists only while the League client runs, so reading it is both
+ * the cheapest "is the client open?" probe and the credential source.
+ */
+export async function readLockfileCredentials(): Promise<LcuCredentials | null> {
+    for (const dir of await discoverInstallDirs()) {
         try {
-            const raw = await fs.promises.readFile(lockPath, 'utf8');
+            const raw = await fs.promises.readFile(path.join(dir, 'lockfile'), 'utf8');
             const parsed = parseLockfile(raw);
             if (parsed) return parsed;
         } catch {
@@ -48,36 +98,55 @@ async function connectViaLockfile(): Promise<{ port: string; token: string; prot
     return null;
 }
 
-/** Slow fallback — PowerShell+CIM can stall the machine for seconds. Prefer lockfile. */
-async function connectViaPowerShell(): Promise<{ port: string; token: string; protocol: string }> {
+let lastPowerShellProbe = 0;
+/** PowerShell + CIM can stall a machine for seconds; never run it more than once a minute. */
+const POWERSHELL_MIN_INTERVAL_MS = 60000;
+
+/** Slow fallback for unusual installs. Only used on explicit connect requests. */
+async function connectViaPowerShell(): Promise<LcuCredentials> {
+    const now = Date.now();
+    if (now - lastPowerShellProbe < POWERSHELL_MIN_INTERVAL_MS) {
+        throw new Error('League client not found — open the League client and try again');
+    }
+    lastPowerShellProbe = now;
     const command = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"name = 'LeagueClientUx.exe'\\" | Select-Object -ExpandProperty CommandLine"`;
     const { stdout } = await execAsync(command, { timeout: 8000, windowsHide: true });
     if (!stdout?.trim()) {
-        throw new Error('League Client not found — open the League client and try again');
+        throw new Error('League client not found — open the League client and try again');
     }
     const portMatch = stdout.match(/--app-port=([0-9]*)/);
     const tokenMatch = stdout.match(/--remoting-auth-token=([\w-]*)/);
+    const dirMatch = stdout.match(/--install-directory=([^"]+?)(?:"|\s--)/);
+    if (dirMatch?.[1]) rememberInstallDir(dirMatch[1].trim());
     if (!portMatch || !tokenMatch) {
-        throw new Error('Could not parse LCU credentials from process command line');
+        throw new Error('Could not parse League client credentials from its command line');
     }
     return { port: portMatch[1], token: tokenMatch[1], protocol: 'https' };
 }
 
-export const connectToLCU = async (): Promise<{ port: string; token: string; protocol: string }> => {
-    const fromLock = await connectViaLockfile();
+export function getLcuCredentials(): LcuCredentials | null {
+    return credentials;
+}
+
+export function setLcuCredentials(next: LcuCredentials | null): void {
+    credentials = next;
+}
+
+/**
+ * Resolve credentials. `allowSlowProbe` permits the PowerShell fallback and is
+ * only set for user-initiated connects, never from background loops.
+ */
+export const connectToLCU = async (allowSlowProbe = false): Promise<LcuCredentials> => {
+    const fromLock = await readLockfileCredentials();
     if (fromLock) {
         credentials = fromLock;
         return credentials;
     }
-    try {
+    if (process.platform === 'win32' && allowSlowProbe) {
         credentials = await connectViaPowerShell();
         return credentials;
-    } catch (error) {
-        console.log('LCU not found or error:', error);
-        throw error instanceof Error
-            ? error
-            : new Error('League Client not found — open the League client and try again');
     }
+    throw new Error('League client not found — open the League client and try again');
 };
 
 /** Refresh credentials before write ops — tokens rotate when the client restarts. */
@@ -190,16 +259,7 @@ export const exportRunePage = async (runePage: ExportRunePagePayload): Promise<v
         return Array.isArray(pages) ? (pages as LCURunePage[]) : [];
     };
 
-    let pages = await readPages();
-
-    // Replace our own page if it already exists
-    for (const page of pages.filter((p) => p.name === runePage.name && p.id != null)) {
-        try {
-            await makeLCURequest('DELETE', `/lol-perks/v1/pages/${page.id}`, undefined, 6000);
-        } catch {
-            // Non-fatal: the create below will surface the real problem
-        }
-    }
+    const pages = await readPages();
 
     const body = {
         name: runePage.name,
@@ -209,35 +269,27 @@ export const exportRunePage = async (runePage: ExportRunePagePayload): Promise<v
         current: runePage.current !== false,
     };
 
-    const create = async () => makeLCURequest('POST', '/lol-perks/v1/pages', body, 8000);
+    // Update our own page in place when it exists, so it keeps its slot. The
+    // user's other pages are never deleted: if every slot is taken we stop and
+    // say so instead of picking a page to throw away.
+    const own = pages.find((p) => p.name === runePage.name && p.id != null && p.isEditable !== false);
+    const write = async () =>
+        own
+            ? makeLCURequest('PUT', `/lol-perks/v1/pages/${own.id}`, { ...body, id: own.id }, 8000)
+            : makeLCURequest('POST', '/lol-perks/v1/pages', body, 8000);
 
     try {
-        await create();
+        await write();
     } catch (firstError) {
         const message = firstError instanceof Error ? firstError.message : String(firstError);
-
-        // "Max pages reached" is the single most common export failure — free a
-        // slot by deleting the oldest page the client says we are allowed to
-        // delete, then try again.
-        const outOfSlots = /max|limit|slot/i.test(message);
-        if (outOfSlots) {
-            pages = await readPages();
-            const victim = pages
-                .filter((p) => p.isDeletable !== false && !p.current && !p.isActive)
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
-            if (victim?.id != null) {
-                await makeLCURequest('DELETE', `/lol-perks/v1/pages/${victim.id}`, undefined, 6000);
-                await create();
-            } else {
-                throw new Error(
-                    'Rune page limit reached and no page could be deleted — delete a rune page in the client and retry.'
-                );
-            }
-        } else {
-            // Token may have rotated (client restart) — reconnect once and retry.
-            await reconnectLCU();
-            await create();
+        if (/max|limit|slot/i.test(message)) {
+            throw new Error(
+                `All your rune page slots are full. Delete a page in the client, or rename one to "${runePage.name}" so One Trick can reuse it.`
+            );
         }
+        // Token may have rotated (client restart): reconnect once and retry.
+        await reconnectLCU();
+        await write();
     }
 
     // Verify: a 2xx from the client is not proof the page survived validation.
@@ -372,7 +424,12 @@ export const exportItemSet = async (build: ExportBuildPayload): Promise<void> =>
         (await makeLCURequest('GET', setsEndpoint, undefined, 8000)) as LCUItemSetsCollection | null;
 
     const existing = await readCollection();
-    const existingSets = Array.isArray(existing?.itemSets) ? existing!.itemSets! : [];
+    // The PUT below replaces the whole collection. Without a readable copy of
+    // the user's current sets, writing would delete them, so stop instead.
+    if (!existing || !Array.isArray(existing.itemSets)) {
+        throw new Error('Could not read your existing item sets from the client, so nothing was changed. Try again in a moment.');
+    }
+    const existingSets = existing.itemSets;
     // Only our own same-titled set is replaced — other profiles' sets (and the
     // user's own sets) stay untouched.
     const prior = existingSets.find((s) => s.title === setTitle);
@@ -392,7 +449,8 @@ export const exportItemSet = async (build: ExportBuildPayload): Promise<void> =>
         { id: '3340' }, // Stealth Ward (trinket)
     ]);
 
-    if (starter.length) blocks.push(block('Starting — keep Atlas (never sell)', starter));
+    const supportStart = starter.some((i) => i.id === '3865');
+    if (starter.length) blocks.push(block(supportStart ? 'Starting (keep World Atlas)' : 'Starting', starter));
     if (core.length) blocks.push(block('Core Items', core));
     if (boots.length) blocks.push(block('Boots (mid-tier complete)', boots));
     if (vision.length) blocks.push(block('Vision — pinks + sweeper', vision));
@@ -554,4 +612,27 @@ export const makeLCURequest = async (
         }
         throw error instanceof Error ? error : new Error(String(error));
     }
+};
+
+/**
+ * Set summoner spells in champ select. Flash stays on whichever key (D or F)
+ * the player already has it on, since that is muscle memory.
+ */
+export const setSummonerSpells = async (spellIds: unknown): Promise<void> => {
+    if (!Array.isArray(spellIds) || spellIds.length !== 2 || !spellIds.every((id) => Number.isInteger(id) && id > 0)) {
+        throw new Error('Expected two summoner spell ids');
+    }
+    await ensureLCUConnected();
+    const session = (await makeLCURequest('GET', '/lol-champ-select/v1/session', undefined, 5000)) as {
+        localPlayerCellId?: number;
+        myTeam?: Array<{ cellId?: number; spell1Id?: number; spell2Id?: number }>;
+    } | null;
+    const me = session?.myTeam?.find((m) => m.cellId === session.localPlayerCellId);
+    if (!me) throw new Error('Not in champ select');
+    let [a, b] = spellIds as [number, number];
+    const FLASH = 4;
+    if (me.spell2Id === FLASH && a === FLASH) [a, b] = [b, a];
+    if (me.spell1Id === FLASH && b === FLASH) [a, b] = [b, a];
+    if (me.spell1Id === a && me.spell2Id === b) return;
+    await makeLCURequest('PATCH', '/lol-champ-select/v1/session/my-selection', { spell1Id: a, spell2Id: b }, 5000);
 };

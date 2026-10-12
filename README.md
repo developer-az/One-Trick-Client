@@ -105,13 +105,23 @@ Manual enemy picks still work when LCU is unavailable (Demo mode).
 | Align HUD / minimap frames | Unlock → **Align** (enable **Frames** first) |
 | Match League scales | **Sync LoL** or HUD / Map sliders |
 
-### Display mode (FPS)
+### Game impact (FPS)
+
+One Trick is built to cost League nothing while you play:
+
+- **No mouse hook.** PageUp / PageDown come from `onetrick-keys.exe`, a ~20 KB helper with a keyboard-only hook on its own thread.
+- **No client polling.** League Client state (phase, champ select) arrives over the client's WebSocket. In a match the only regular work is one Live Client read every 2.5 s (8 s when the overlay is hidden).
+- **Overlay on demand.** Overlay windows stay hidden until they have something to show, and **Performance → In-game overlay** turns them off entirely.
+- **GPU left to League.** One Trick renders on the CPU by default. **Performance → Use GPU for One Trick** turns hardware acceleration back on (restart needed).
+- **Dashboard parks in the tray** during matches so it never draws.
+
+The **Performance** tab shows One Trick's live CPU and memory per process, the overlay window count, the hotkey mode and the polling rate.
 
 Set League **Video → Display Mode** to **Borderless**. Exclusive Fullscreen forces expensive recomposition under an always-on-top overlay.
 
 ### Hotkeys while League has focus
 
-PageUp / PageDown use a system keyboard hook (`uiohook-napi`), not Electron’s accelerator registry alone.
+PageUp / PageDown use `onetrick-keys.exe` (`native/keyhook/keyhook.c`), a keyboard-only low-level hook in its own process. It never sees the mouse. Build it with `npm run build:keyhook` (needs MinGW-w64; CI builds it for releases).
 
 If keys still do nothing: **run One Trick as Administrator** whenever League is elevated — Windows UIPI blocks hooks across that privilege gap.
 
@@ -190,12 +200,9 @@ npx tsc --noEmit
 
 ### Performance validation
 
-- Run `npx electron scripts/perf-harness.mjs`
-- Confirm transition burst and steady-state CPU stay within expected budget
-- In live match, tune only high-impact paths:
-  - polling cadence
-  - overlay update frequency
-  - renderer workload while main window is parked
+- Compare League FPS with One Trick closed, open with defaults, and with each **Performance** switch
+- In a match, the **Performance** tab should show: game data reads every 2.5 s, hotkeys "Keyboard-only hook active", rendering on CPU
+- `ONETRICK_DEBUG=1` logs overlay window visibility and polling every 5 s
 
 ### Layout
 
@@ -213,7 +220,7 @@ One-Trick-Client/
 
 ### Stack
 
-React 19 · TypeScript 5.9 · Vite 7 · Electron 39 · Tailwind CSS 3.4 · Data Dragon · LCU · Live Client API · uiohook-napi
+React 19 · TypeScript 5.9 · Vite 7 · Electron 39 · Tailwind CSS 3.4 · Data Dragon · LCU · Live Client API · LCU WebSocket · native keyboard hook helper
 
 ---
 

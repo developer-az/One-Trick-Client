@@ -1,168 +1,170 @@
 /**
- * Windows-capable global key capture via libuiohook (uiohook-napi).
+ * Global PageUp / PageDown (and Numpad 9 / 3) capture while League has focus.
  *
- * Electron `globalShortcut` only fires when the OS delivers RegisterHotKey to
- * the app — fullscreen / elevated League often never does. A WH_KEYBOARD_LL
- * style hook (what uiohook uses on Windows) sees keydowns system-wide.
+ * Uses `onetrick-keys.exe` (native/keyhook/keyhook.c): a tiny helper process
+ * with a keyboard-only WH_KEYBOARD_LL hook on its own thread. It replaces
+ * uiohook-napi, which also installed a system-wide WH_MOUSE_LL hook and pushed
+ * every mouse movement through Electron's main thread for the whole match.
  *
  * Caveat (UIPI): if League runs elevated and One Trick does not, Windows will
  * not deliver keys from the elevated process to a lower-integrity hook. Run
  * One Trick as admin in that case (or don't elevate League).
  */
-
-export type FlashKeyAction = 'primary' | 'secondary';
+import { app } from 'electron';
+import { spawn, type ChildProcess } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 export interface FlashKeyHandlers {
     onPrimary: () => void;
     onSecondary: () => void;
 }
 
-let started = false;
+export type KeyHookMode = 'native' | 'starting' | 'unavailable' | 'stopped';
+
+let child: ChildProcess | null = null;
 let handlers: FlashKeyHandlers | null = null;
-let keydownListener: ((e: { keycode: number }) => void) | null = null;
+let mode: KeyHookMode = 'stopped';
+let lastError: string | null = null;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
+let restartAttempts = 0;
+let stopping = false;
 let lastFireAt = 0;
-const DEBOUNCE_MS = 180;
+const DEBOUNCE_MS = 150;
+const MAX_RESTARTS = 5;
 
-/** Match UiohookKey constants without importing until runtime (optional native). */
-const KEY = {
-    PageUp: 3657,
-    PageDown: 3665,
-    Numpad9: 73,
-    Numpad3: 81,
-    /** Numpad PageUp / PageDown when NumLock is off */
-    NumpadPageUp: 3657, // same scancode path as PageUp on many layouts
-    NumpadPageDown: 3665,
-} as const;
+function helperPath(): string | null {
+    const candidates = app.isPackaged
+        ? [path.join(process.resourcesPath, 'onetrick-keys.exe')]
+        : [
+              path.join(__dirname, '../native/bin/onetrick-keys.exe'),
+              path.join(process.cwd(), 'native/bin/onetrick-keys.exe'),
+          ];
+    for (const candidate of candidates) {
+        try {
+            if (fs.existsSync(candidate)) return candidate;
+        } catch {
+            // try next
+        }
+    }
+    return null;
+}
 
-function fire(action: FlashKeyAction): void {
+function fire(kind: 'P' | 'S'): void {
     if (!handlers) return;
     const now = Date.now();
     if (now - lastFireAt < DEBOUNCE_MS) return;
     lastFireAt = now;
-    if (action === 'primary') handlers.onPrimary();
+    if (kind === 'P') handlers.onPrimary();
     else handlers.onSecondary();
 }
 
+function scheduleRestart(): void {
+    if (stopping || restartTimer || restartAttempts >= MAX_RESTARTS) {
+        if (restartAttempts >= MAX_RESTARTS) mode = 'unavailable';
+        return;
+    }
+    restartAttempts += 1;
+    restartTimer = setTimeout(() => {
+        restartTimer = null;
+        spawnHelper();
+    }, 1000 * restartAttempts);
+}
+
+function spawnHelper(): boolean {
+    if (process.platform !== 'win32') {
+        mode = 'unavailable';
+        lastError = 'Global hotkeys need Windows';
+        return false;
+    }
+    const exe = helperPath();
+    if (!exe) {
+        mode = 'unavailable';
+        lastError = 'Hotkey helper (onetrick-keys.exe) is missing from this build';
+        return false;
+    }
+
+    mode = 'starting';
+    let proc: ChildProcess;
+    try {
+        proc = spawn(exe, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+    } catch (error) {
+        mode = 'unavailable';
+        lastError = error instanceof Error ? error.message : String(error);
+        return false;
+    }
+    child = proc;
+
+    let buffer = '';
+    proc.stdout?.setEncoding('ascii');
+    proc.stdout?.on('data', (chunk: string) => {
+        buffer += chunk;
+        let nl = buffer.indexOf('\n');
+        while (nl !== -1) {
+            const line = buffer.slice(0, nl).trim();
+            buffer = buffer.slice(nl + 1);
+            if (line === 'P' || line === 'S') {
+                fire(line);
+            } else if (line === 'R') {
+                mode = 'native';
+                lastError = null;
+                restartAttempts = 0;
+            } else if (line.startsWith('E')) {
+                lastError = `Windows refused the keyboard hook (${line.slice(1).trim()})`;
+            }
+            nl = buffer.indexOf('\n');
+        }
+    });
+    proc.on('error', (error) => {
+        lastError = error.message;
+    });
+    proc.on('exit', () => {
+        if (child === proc) child = null;
+        if (stopping) {
+            mode = 'stopped';
+            return;
+        }
+        mode = 'starting';
+        scheduleRestart();
+    });
+    return true;
+}
+
 /**
- * Start the low-level keyboard hook and bind flash toggle keys.
- * Safe to call repeatedly — updates handlers and ensures the hook is running.
+ * Start (or keep) the hotkey helper. Safe to call repeatedly: later calls only
+ * swap handlers. Returns false when the native path is unavailable so callers
+ * can fall back to Electron's globalShortcut.
  */
 export function startFlashKeyHook(next: FlashKeyHandlers): boolean {
     handlers = next;
-
-    if (process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux') {
-        console.warn('[keys] Unsupported platform for uiohook-napi');
-        return false;
-    }
-
-    try {
-        // Lazy require so electron:build / non-Windows CI can still typecheck
-        // if the native binary is missing for a given arch.
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { uIOhook, UiohookKey } = require('uiohook-napi') as {
-            uIOhook: {
-                on: (event: string, listener: (e: { keycode: number }) => void) => void;
-                off: (event: string, listener: (e: { keycode: number }) => void) => void;
-                start: () => void;
-                stop: () => void;
-            };
-            UiohookKey: {
-                PageUp: number;
-                PageDown: number;
-                Numpad9: number;
-                Numpad3: number;
-                NumpadPageUp?: number;
-                NumpadPageDown?: number;
-            };
-        };
-
-        const pageUp = UiohookKey?.PageUp ?? KEY.PageUp;
-        const pageDown = UiohookKey?.PageDown ?? KEY.PageDown;
-        const num9 = UiohookKey?.Numpad9 ?? KEY.Numpad9;
-        const num3 = UiohookKey?.Numpad3 ?? KEY.Numpad3;
-        // NumLock-off numpad PageUp/PageDown use distinct extended codes
-        const numPageUp = UiohookKey?.NumpadPageUp ?? (0xee00 | 0x0049);
-        const numPageDown = UiohookKey?.NumpadPageDown ?? (0xee00 | 0x0051);
-        const primaryCodes = new Set([pageUp, num9, numPageUp]);
-        const secondaryCodes = new Set([pageDown, num3, numPageDown]);
-
-        if (keydownListener) {
-            try {
-                uIOhook.off('keydown', keydownListener);
-            } catch {
-                // ignore
-            }
-        }
-
-        keydownListener = (e: { keycode: number }) => {
-            const code = e.keycode;
-            if (primaryCodes.has(code)) {
-                fire('primary');
-                return;
-            }
-            if (secondaryCodes.has(code)) {
-                fire('secondary');
-            }
-        };
-
-        uIOhook.on('keydown', keydownListener);
-
-        if (!started) {
-            uIOhook.start();
-            started = true;
-            console.log(
-                '[keys] Low-level keyboard hook started (PageUp/PageDown + Numpad9/3). ' +
-                    'If League is Run as Administrator, run One Trick elevated too.'
-            );
-        } else {
-            // Mid-match rebind: restart the hook — Windows occasionally drops LL hooks
-            try {
-                uIOhook.stop();
-                uIOhook.start();
-            } catch {
-                // ignore restart failures; listeners remain registered
-            }
-        }
-        return true;
-    } catch (error: unknown) {
-        const err = error as { message?: string };
-        console.warn(
-            '[keys] Failed to start uiohook-napi keyboard hook:',
-            err.message || error,
-            '— falling back to Electron globalShortcut (often fails while League has focus).'
-        );
-        return false;
-    }
+    stopping = false;
+    if (child && !child.killed) return true;
+    return spawnHelper();
 }
 
 export function stopFlashKeyHook(): void {
+    stopping = true;
     handlers = null;
-    if (!started) return;
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { uIOhook } = require('uiohook-napi') as {
-            uIOhook: {
-                off: (event: string, listener: (e: { keycode: number }) => void) => void;
-                stop: () => void;
-            };
-        };
-        if (keydownListener) {
-            try {
-                uIOhook.off('keydown', keydownListener);
-            } catch {
-                // ignore
-            }
-            keydownListener = null;
-        }
-        uIOhook.stop();
-    } catch (error: unknown) {
-        const err = error as { message?: string };
-        console.warn('[keys] Failed to stop keyboard hook:', err.message || error);
-    } finally {
-        started = false;
+    if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
     }
+    if (child) {
+        try {
+            child.stdin?.end();
+            child.kill();
+        } catch {
+            // ignore
+        }
+        child = null;
+    }
+    mode = 'stopped';
 }
 
 export function isFlashKeyHookActive(): boolean {
-    return started;
+    return mode === 'native' || mode === 'starting';
+}
+
+export function getKeyHookStatus(): { mode: KeyHookMode; error: string | null } {
+    return { mode, error: lastError };
 }

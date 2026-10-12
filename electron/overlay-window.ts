@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
 import { clusterOverlayWindows, type OverlayCluster } from './overlay-bounds';
+import { getAppSettings } from './app-settings';
 
 export interface FrameCalibration {
     dx: number;
@@ -47,6 +48,43 @@ function setOverlayThrottling(enabled: boolean): void {
 
 let clickThrough = true;
 let userHidden = false;
+/**
+ * webContents ids of locked overlay windows whose slot has nothing to draw.
+ * Those stay hidden: an empty transparent window still sits over League's swap
+ * chain and keeps DWM compositing the game.
+ */
+const emptySlots = new Set<number>();
+
+function lockedLayout(): boolean {
+    return clickThrough && !alignMode;
+}
+
+function shouldShowWindow(win: BrowserWindow): boolean {
+    if (userHidden || !getAppSettings().overlayEnabled) return false;
+    if (!lockedLayout()) return true;
+    return !emptySlots.has(win.webContents.id);
+}
+
+function syncWindowVisibility(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    const want = shouldShowWindow(win);
+    if (want && !win.isVisible()) win.showInactive();
+    else if (!want && win.isVisible()) win.hide();
+}
+
+/** Renderer reports whether its slot has content (see OverlayApp). */
+export function setOverlaySlotContent(webContentsId: number, hasContent: boolean): void {
+    if (hasContent) emptySlots.delete(webContentsId);
+    else emptySlots.add(webContentsId);
+    for (const win of overlayWindows()) {
+        if (win.webContents.id === webContentsId) syncWindowVisibility(win);
+    }
+}
+
+export function getOverlayWindowStats(): { windows: number; visible: number } {
+    const wins = overlayWindows();
+    return { windows: wins.length, visible: wins.filter((w) => w.isVisible()).length };
+}
 let hudScale = 20;
 /** Default ~MinimapScale 1.0 (was 88 ≈ 1.82 — caused huge map frame vs HUD). */
 let mapScale = 33;
@@ -156,6 +194,8 @@ function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
             backgroundThrottling: false,
         },
     });
+    // Hidden until its renderer reports something to draw.
+    emptySlots.add(win.webContents.id);
     assertAlwaysOnTop(win);
     win.setMenu(null);
     win.webContents.on('context-menu', (e) => {
@@ -240,9 +280,7 @@ function applyClusterToWindow(win: BrowserWindow, cluster: OverlayCluster, click
     win.setMovable(false);
     win.setFocusable(false);
     win.setIgnoreMouseEvents(clickPass);
-    if (!win.isVisible() && !userHidden) {
-        win.showInactive();
-    }
+    syncWindowVisibility(win);
 }
 
 function applyLockedClusters(): void {
@@ -343,9 +381,20 @@ function loadSettings(): void {
     }
 }
 
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Debounced async write — sliders and nudges never block the main thread on disk. */
 function persistSettings(preferLeagueCfg: boolean): void {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+        persistTimer = null;
+        writeSettingsNow(preferLeagueCfg);
+    }, 250);
+}
+
+function writeSettingsNow(preferLeagueCfg: boolean): void {
     try {
-        fs.writeFileSync(
+        void fs.promises.writeFile(
             settingsPath(),
             JSON.stringify({
                 hudScale,
@@ -358,7 +407,7 @@ function persistSettings(preferLeagueCfg: boolean): void {
                 preferLeagueCfg,
             }),
             'utf8'
-        );
+        ).catch((error) => console.warn('[overlay] Failed to save settings:', error));
     } catch (error) {
         console.warn('[overlay] Failed to save settings:', error);
     }
@@ -445,6 +494,7 @@ export function createOverlayWindow(): BrowserWindow {
         },
     });
 
+    emptySlots.add(overlayWin.webContents.id);
     assertAlwaysOnTop(overlayWin);
 
     // Default: a fullscreen click-through surface, so the game is never blocked.
@@ -462,8 +512,8 @@ export function createOverlayWindow(): BrowserWindow {
         if (clickThrough && !alignMode) {
             try {
                 for (const win of overlayWindows()) {
-                    assertAlwaysOnTop(win);
-                    if (!win.isVisible()) win.showInactive();
+                    syncWindowVisibility(win);
+                    if (win.isVisible()) assertAlwaysOnTop(win);
                 }
             } catch {
                 // ignore
@@ -506,8 +556,8 @@ export function keepOverlayOnTop(): void {
     if (userHidden) return;
     for (const win of overlayWindows()) {
         try {
-            if (!win.isVisible()) win.showInactive();
-            if (!win.isAlwaysOnTop()) assertAlwaysOnTop(win);
+            syncWindowVisibility(win);
+            if (win.isVisible() && !win.isAlwaysOnTop()) assertAlwaysOnTop(win);
         } catch {
             // ignore
         }
@@ -515,7 +565,7 @@ export function keepOverlayOnTop(): void {
 }
 
 export function showOverlay(): void {
-    if (userHidden) return;
+    if (userHidden || !getAppSettings().overlayEnabled) return;
 
     const win = createOverlayWindow();
     setOverlayThrottling(false);
@@ -538,6 +588,7 @@ export function hideOverlay(): void {
 }
 
 export function destroyOverlay(): void {
+    emptySlots.clear();
     destroyExtraWindows();
     if (overlayWin && !overlayWin.isDestroyed()) {
         overlayWin.destroy();
