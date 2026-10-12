@@ -4,7 +4,7 @@
 
 **Windows League overlay + web HUD studio — authored Pyke / Pantheon / Yone, live catalog for every champion**
 
-[![Version](https://img.shields.io/badge/version-1.4.1-green.svg)](https://github.com/developer-az/One-Trick-Client/releases/tag/v1.4.1)
+[![Version](https://img.shields.io/github/v/release/developer-az/One-Trick-Client?label=version)](https://github.com/developer-az/One-Trick-Client/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.2-blue)](https://react.dev/)

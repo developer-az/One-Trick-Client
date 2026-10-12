@@ -121,7 +121,7 @@ jobs:
         run: npm run electron:build
 
       - name: Build Electron App
-        run: npx electron-builder --publish never --win
+        run: npx electron-builder --publish never --win zip nsis
 
       - name: List release files
         shell: pwsh
