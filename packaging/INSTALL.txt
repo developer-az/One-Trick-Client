@@ -1,0 +1,9 @@
+One Trick
+
+1. Keep this whole folder. Documents\One Trick is a good place.
+2. Run OneTrick.exe.
+3. If Windows says it protected your PC, choose More info, then Run anyway.
+   This folder is the program. It does not install system-wide, and it does not need a certificate.
+
+Start League of Legends, then One Trick.
+Set League's display mode to Borderless.

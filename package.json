@@ -24,17 +24,35 @@
     "nodeGypRebuild": false,
     "win": {
       "icon": "build/icon.ico",
+      "executableName": "OneTrick",
+      "requestedExecutionLevel": "asInvoker",
+      "artifactName": "One.Trick.${version}.${ext}",
       "target": [
-        "nsis",
-        "portable"
+        "zip",
+        "nsis"
       ],
       "signAndEditExecutable": false
     },
     "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "One Trick",
+      "uninstallDisplayName": "One Trick",
+      "artifactName": "One.Trick.Setup.${version}.${ext}",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico"
     },
+    "extraFiles": [
+      {
+        "from": "packaging/INSTALL.txt",
+        "to": "INSTALL.txt"
+      }
+    ],
     "extraResources": [
       {
         "from": "native/bin/onetrick-keys.exe",

@@ -92,9 +92,14 @@ jobs:
           if (-not $pkg.build) { throw "Missing build config in package.json" }
           if ($pkg.build.win.signAndEditExecutable -ne $false) { throw "win.signAndEditExecutable must remain false" }
           if (-not (Test-Path "build/icon.ico")) { throw "Missing build/icon.ico" }
+          if (-not (Test-Path "packaging/INSTALL.txt")) { throw "Missing packaging/INSTALL.txt" }
+          if (-not $pkg.build.extraFiles) { throw "build.extraFiles must ship INSTALL.txt" }
           $targets = @($pkg.build.win.target)
+          if (-not ($targets -contains "zip")) { throw "win.target must include zip" }
           if (-not ($targets -contains "nsis")) { throw "win.target must include nsis" }
-          if (-not ($targets -contains "portable")) { throw "win.target must include portable" }
+          if ($pkg.build.win.requestedExecutionLevel -ne "asInvoker") { throw "win.requestedExecutionLevel must remain asInvoker" }
+          if ($pkg.build.nsis.perMachine -ne $false) { throw "nsis.perMachine must remain false" }
+          if ($pkg.build.nsis.allowElevation -ne $false) { throw "nsis.allowElevation must remain false" }
           if (-not $pkg.build.nsis.installerIcon -or -not $pkg.build.nsis.uninstallerIcon -or -not $pkg.build.nsis.installerHeaderIcon) {
             throw "NSIS icon metadata is incomplete"
           }
@@ -116,7 +121,7 @@ jobs:
         run: npm run electron:build
 
       - name: Build Electron App
-        run: npx electron-builder --publish never --win nsis
+        run: npx electron-builder --publish never --win
 
       - name: List release files
         shell: pwsh
@@ -139,9 +144,9 @@ jobs:
         shell: pwsh
         run: |
           $installer = Get-ChildItem -Path "release" -Filter "*.exe" -Recurse | Where-Object { $_.Name -match "Setup" }
-          $portable = Get-ChildItem -Path "release" -Filter "*.exe" -Recurse | Where-Object { $_.Name -notmatch "Setup" }
+          $zip = Get-ChildItem -Path "release" -Filter "*.zip" -Recurse | Where-Object { $_.Name -notmatch "blockmap" }
           if (-not $installer) { throw "Missing NSIS setup executable" }
-          if (-not $portable) { throw "Missing portable executable" }
+          if (-not $zip) { throw "Missing zip archive" }
           $blockmaps = Get-ChildItem -Path "release" -Filter "*.exe.blockmap" -Recurse
           if (-not $blockmaps) { throw "Missing blockmap artifacts" }
 
@@ -152,12 +157,13 @@ jobs:
           path: |
             release/*.exe
             release/*.exe.blockmap
+            release/*.zip
 
       - name: Publish Release
         uses: ncipollo/release-action@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          artifacts: "release/*.exe,release/*.exe.blockmap"
+          artifacts: "release/*.zip,release/*.exe,release/*.exe.blockmap"
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
           replacesArtifacts: true
@@ -170,7 +176,10 @@ jobs:
             **One Trick ${{ github.ref_name }}** — production release.
 
             ### Install
-            - Download **One.Trick.Setup** from Assets below
+            - Download the **One.Trick zip** from Assets below
+            - Extract it, keep the folder (Documents is fine), and run **OneTrick.exe**
+            - Windows may ask once on first launch. Choose **More info**, then **Run anyway**
+            - Optional: **One.Trick.Setup** adds a Start menu shortcut for the current user and does not request administrator
             - Use **Borderless** display mode in League
             - Open the League client, connect in One Trick, then export in champ select
             - Overlay HUD modules: Sums, Gank, Vision, Buy, Action (Frames off by default)

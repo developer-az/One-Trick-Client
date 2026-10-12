@@ -31,4 +31,4 @@ npm run preview
 - **Vercel (canonical)** — import the repo, set Root Directory to `website`, framework Vite, project name `one-trick-client`. Production URL: https://one-trick-client.vercel.app/
 - **GitHub Pages** — optional mirror only. Workflow: [`.github/workflows/pages.yml`](../.github/workflows/pages.yml).
 
-Download buttons resolve the newest **full** (non-prerelease) Windows `.exe` from the GitHub Releases API at runtime (Setup preferred), falling back to the newest published build if needed. Repo: `developer-az/One-Trick-Client`.
+Download buttons resolve the newest **full** (non-prerelease) Windows build from the GitHub Releases API at runtime (zip preferred, setup exe as fallback). Docs: `/download/`, `/getting-started/`, `/overlay/`, `/troubleshooting/`, `/about/`. Repo: `developer-az/One-Trick-Client`.

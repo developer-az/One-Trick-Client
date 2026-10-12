@@ -20,9 +20,8 @@ export function HudPreview({
   size = 'hero',
 }: Props) {
   return (
-    <figure className={`relative mx-auto w-full ${SIZE[size]} animate-drift`}>
+    <figure className={`relative mx-auto w-full ${SIZE[size]}`}>
       <div className="hud-shot clip-panel relative overflow-hidden">
-        <div className="absolute inset-x-0 top-0 z-[1] h-px bg-gradient-to-r from-transparent via-chrome-silver/55 to-transparent animate-pulse-line" />
         <img
           src={src}
           alt={alt}
@@ -32,7 +31,7 @@ export function HudPreview({
           {...(size === 'hero' ? { fetchPriority: 'high' as const } : {})}
         />
       </div>
-      <figcaption className="mt-3 font-mono text-[10px] uppercase tracking-[0.2em] text-chrome-dim">
+      <figcaption className="mt-3 text-sm text-chrome-dim">
         {caption}
       </figcaption>
     </figure>

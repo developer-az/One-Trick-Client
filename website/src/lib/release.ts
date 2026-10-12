@@ -2,11 +2,14 @@ const REPO = 'developer-az/One-Trick-Client'
 export const RELEASES_URL = `https://github.com/${REPO}/releases`
 export const REPO_URL = `https://github.com/${REPO}`
 
+export type ReleaseKind = 'zip' | 'setup'
+
 export type ReleaseInfo = {
   tag: string
   name: string
   downloadUrl: string
   assetName: string
+  kind: ReleaseKind
   prerelease: boolean
 }
 
@@ -24,15 +27,20 @@ type GhRelease = {
   assets: GhAsset[]
 }
 
-function pickExe(assets: GhAsset[]): GhAsset | undefined {
-  const exes = assets.filter(
-    (a) => a.name.toLowerCase().endsWith('.exe') && !a.name.toLowerCase().includes('blockmap')
-  )
+function pickDownload(assets: GhAsset[]): GhAsset | undefined {
+  const files = assets.filter((a) => !a.name.toLowerCase().includes('blockmap'))
+  const named = files.filter((a) => isOneTrickAsset(a.name))
+  const pool = named.length > 0 ? named : files
   return (
-    exes.find((a) => /setup/i.test(a.name)) ||
-    exes.find((a) => !/portable/i.test(a.name)) ||
-    exes[0]
+    pool.find((a) => a.name.toLowerCase().endsWith('.zip')) ||
+    pool.find((a) => /setup/i.test(a.name) && a.name.toLowerCase().endsWith('.exe')) ||
+    pool.find((a) => a.name.toLowerCase().endsWith('.exe') && !/portable/i.test(a.name)) ||
+    pool.find((a) => a.name.toLowerCase().endsWith('.exe'))
   )
+}
+
+function kindOf(name: string): ReleaseKind {
+  return name.toLowerCase().endsWith('.zip') ? 'zip' : 'setup'
 }
 
 function toInfo(data: GhRelease, asset: GhAsset): ReleaseInfo {
@@ -41,6 +49,7 @@ function toInfo(data: GhRelease, asset: GhAsset): ReleaseInfo {
     name: data.name || data.tag_name,
     downloadUrl: asset.browser_download_url,
     assetName: asset.name,
+    kind: kindOf(asset.name),
     prerelease: !!data.prerelease,
   }
 }
@@ -66,8 +75,8 @@ function isOneTrickAsset(name: string): boolean {
 
 /**
  * Prefer the newest One Trick full Windows build.
+ * The zip is the download. A per-user setup exe is the fallback.
  * Historical Pyke Dominator tags (1.2 / 1.3) and empty 2025 tags are ignored.
- * Falls back to the newest published prerelease with an .exe if no stable build exists.
  */
 export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
   try {
@@ -82,7 +91,7 @@ export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
     let bestPre: ReleaseInfo | null = null
     for (const data of list) {
       if (data.draft) continue
-      const asset = pickExe(data.assets || [])
+      const asset = pickDownload(data.assets || [])
       if (!asset) continue
       const info = toInfo(data, asset)
       const oneTrick = isOneTrickAsset(asset.name)

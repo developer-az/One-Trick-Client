@@ -25,6 +25,11 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         studio: resolve(__dirname, 'studio/index.html'),
+        download: resolve(__dirname, 'download/index.html'),
+        gettingStarted: resolve(__dirname, 'getting-started/index.html'),
+        overlay: resolve(__dirname, 'overlay/index.html'),
+        troubleshooting: resolve(__dirname, 'troubleshooting/index.html'),
+        about: resolve(__dirname, 'about/index.html'),
       },
     },
   },

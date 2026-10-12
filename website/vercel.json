@@ -4,7 +4,17 @@
   "framework": "vite",
   "rewrites": [
     { "source": "/studio", "destination": "/studio/index.html" },
-    { "source": "/studio/", "destination": "/studio/index.html" }
+    { "source": "/studio/", "destination": "/studio/index.html" },
+    { "source": "/download", "destination": "/download/index.html" },
+    { "source": "/download/", "destination": "/download/index.html" },
+    { "source": "/getting-started", "destination": "/getting-started/index.html" },
+    { "source": "/getting-started/", "destination": "/getting-started/index.html" },
+    { "source": "/overlay", "destination": "/overlay/index.html" },
+    { "source": "/overlay/", "destination": "/overlay/index.html" },
+    { "source": "/troubleshooting", "destination": "/troubleshooting/index.html" },
+    { "source": "/troubleshooting/", "destination": "/troubleshooting/index.html" },
+    { "source": "/about", "destination": "/about/index.html" },
+    { "source": "/about/", "destination": "/about/index.html" }
   ],
   "headers": [
     {

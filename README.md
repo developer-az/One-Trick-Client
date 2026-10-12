@@ -66,8 +66,15 @@ Authored doctrine: **Pyke Support**, **Pantheon Support**, **Yone Mid**. Every o
 ### From a release (recommended)
 
 1. Open the [**latest release**](https://github.com/developer-az/One-Trick-Client/releases)
-2. Download **`One.Trick.Setup.*.exe`**
-3. Launch with the League Client open (or start League afterward — it reconnects)
+2. Download the **zip** (`One.Trick.*.zip`)
+3. Extract it and keep the folder somewhere permanent, such as Documents
+4. Run **`OneTrick.exe`** with the League Client open (or start League afterward — it reconnects)
+
+Windows may show “Windows protected your PC” the first time you open a new build. Choose **More info**, then **Run anyway**. The app is open source and is not published in the Microsoft Store, so a new file has no store reputation yet. You do not need to approve an administrator install.
+
+`One.Trick.Setup` is optional. It installs for the current user, adds a Start menu shortcut, and does not request administrator.
+
+A paid code-signing certificate is not required. [ReplayBook](https://www.fraxiinus.dev/ReplayBook/getting-started/download/) ships the same way: a zip, extract, run the exe. SmartScreen can still warn once on a brand-new file, because reputation follows that file, not the project name. The warning to avoid is an installer from an unknown publisher asking to change the PC. The zip never does that.
 
 ### From source
 
@@ -149,7 +156,7 @@ If keys still do nothing: **run One Trick as Administrator** whenever League is 
 npm run dev                 # Web UI only
 npm run dev:electron:win    # Desktop + Vite
 npm run build               # Web production build
-npm run dist                # NSIS + portable → release/
+npm run dist                # zip + per-user setup → release/
 npm run website:dev         # Marketing site
 npm run website:build
 npm run lint
@@ -166,7 +173,7 @@ Use this gate before tagging any `v*` release.
 
 ### Acceptance criteria
 
-- `npm run dist` succeeds and generates both installer + portable outputs
+- `npm run dist` succeeds and generates both the zip and the per-user setup
 - App startup works and LCU connect/export works in client
 - Overlay + hotkeys work in live match:
   - `PageUp` / `PageDown`
@@ -190,7 +197,7 @@ npx tsc --noEmit
 
 ### Pre-release regression checklist
 
-- Installer and portable launch on Windows
+- Zip extract-and-run, and the per-user setup, both launch on Windows
 - Overlay show/hide, click-through, align mode, and **Sync LoL** all work
 - In-game FPS impact checked with overlay **on** and **off**
 - Admin/elevation hotkey behavior verified (UIPI edge case)
