@@ -55,6 +55,11 @@ let userHidden = false;
  * chain and keeps DWM compositing the game.
  */
 const emptySlots = new Set<number>();
+/** Delay before an occupied window is allowed to hide, so one empty frame cannot blank the HUD. */
+const emptyGrace = new Map<number, ReturnType<typeof setTimeout>>();
+const EMPTY_HIDE_GRACE_MS = 8_000;
+const RENDERER_RELOAD_MIN_MS = 5_000;
+const lastRendererReload = new WeakMap<BrowserWindow, number>();
 
 /** Tab is held down (reported by the native key helper). */
 let holdDown = false;
@@ -126,11 +131,99 @@ function syncWindowVisibility(win: BrowserWindow): void {
 
 /** Renderer reports whether its slot has content (see OverlayApp). */
 export function setOverlaySlotContent(webContentsId: number, hasContent: boolean): void {
-    if (hasContent) emptySlots.delete(webContentsId);
-    else emptySlots.add(webContentsId);
+    const pending = emptyGrace.get(webContentsId);
+    if (hasContent) {
+        if (pending) {
+            clearTimeout(pending);
+            emptyGrace.delete(webContentsId);
+        }
+        emptySlots.delete(webContentsId);
+        syncSlotVisibility(webContentsId);
+        return;
+    }
+    // Already hidden, or already waiting out a blip.
+    if (emptySlots.has(webContentsId) || pending) return;
+    const timer = setTimeout(() => {
+        emptyGrace.delete(webContentsId);
+        emptySlots.add(webContentsId);
+        syncSlotVisibility(webContentsId);
+    }, EMPTY_HIDE_GRACE_MS);
+    emptyGrace.set(webContentsId, timer);
+}
+
+function syncSlotVisibility(webContentsId: number): void {
     for (const win of overlayWindows()) {
+        if (win.isDestroyed()) continue;
         if (win.webContents.id === webContentsId) syncWindowVisibility(win);
     }
+}
+
+function forgetSlot(webContentsId: number): void {
+    const pending = emptyGrace.get(webContentsId);
+    if (pending) clearTimeout(pending);
+    emptyGrace.delete(webContentsId);
+    emptySlots.delete(webContentsId);
+}
+
+function reloadOverlayRenderer(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    const now = Date.now();
+    const previous = lastRendererReload.get(win) ?? 0;
+    if (now - previous < RENDERER_RELOAD_MIN_MS) return;
+    lastRendererReload.set(win, now);
+    console.warn('[overlay] reloading renderer');
+    const url = getOverlayUrl();
+    const load = url.startsWith('http') ? win.loadURL(url) : win.loadFile(url);
+    void load.catch((error: unknown) => {
+        console.warn('[overlay] renderer reload failed', error);
+    });
+}
+
+function armOverlayRenderer(win: BrowserWindow): void {
+    const contentsId = win.webContents.id;
+    win.on('closed', () => forgetSlot(contentsId));
+    win.webContents.on('render-process-gone', () => {
+        console.warn('[overlay] renderer exited');
+        reloadOverlayRenderer(win);
+    });
+    win.webContents.on('unresponsive', () => {
+        console.warn('[overlay] renderer unresponsive');
+        reloadOverlayRenderer(win);
+    });
+    win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+        if (!isMainFrame || errorCode === -3) return;
+        console.warn(`[overlay] load failed (${errorCode} ${errorDescription})`);
+        reloadOverlayRenderer(win);
+    });
+}
+
+/**
+ * Bring a crashed or fully hidden overlay back while a match is running.
+ * Does not re-bind mouse passthrough — that path freezes the cursor over League.
+ */
+export function healOverlayWindows(): void {
+    if (userHidden || !getAppSettings().overlayEnabled) return;
+    if (holdToShowActive() && !holdDown) return;
+    for (const win of overlayWindows()) {
+        try {
+            if (win.webContents.isCrashed()) reloadOverlayRenderer(win);
+        } catch {
+            // ignore
+        }
+    }
+    const wins = overlayWindows();
+    if (!wins.length) return;
+    const anyVisible = wins.some((win) => {
+        try {
+            return win.isVisible();
+        } catch {
+            return false;
+        }
+    });
+    if (anyVisible) return;
+    // Empty slots are hidden on purpose. Forcing show here would just hide them again.
+    const allEmpty = wins.every((win) => emptySlots.has(win.webContents.id));
+    if (!allEmpty) showOverlay();
 }
 
 export function getOverlayWindowStats(): { windows: number; visible: number } {
@@ -254,6 +347,7 @@ function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
     win.webContents.on('context-menu', (e) => {
         e.preventDefault();
     });
+    armOverlayRenderer(win);
     const url = getOverlayUrl();
     if (url.startsWith('http')) {
         win.loadURL(url);
@@ -571,6 +665,7 @@ export function createOverlayWindow(): BrowserWindow {
     overlayWin.webContents.on('context-menu', (e) => {
         e.preventDefault();
     });
+    armOverlayRenderer(overlayWin);
     overlayWin.on('blur', () => {
         // Never tear down on blur — just re-assert topmost while supposed to be visible
         if (userHidden || !overlayWin || overlayWin.isDestroyed()) return;
@@ -653,6 +748,8 @@ export function hideOverlay(): void {
 }
 
 export function destroyOverlay(): void {
+    for (const timer of emptyGrace.values()) clearTimeout(timer);
+    emptyGrace.clear();
     emptySlots.clear();
     destroyExtraWindows();
     if (overlayWin && !overlayWin.isDestroyed()) {

@@ -47,6 +47,10 @@ jobs:
 
       - name: Verify match stats
         run: npm run verify:stats
+
+      - name: Overlay stays up for the whole match
+        run: npm run verify:match
+
       - name: Build TypeScript
         run: npm run electron:build
 

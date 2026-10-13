@@ -89,6 +89,7 @@ function NudgeGroup({
 
 export const OverlayApp: React.FC = () => {
   const [state, setState] = useState<OverlayState>({ inGame: false });
+  const [clockSec, setClockSec] = useState(0);
   const [champions, setChampions] = useState<Champion[]>([]);
   const [clickThrough, setClickThrough] = useState(true);
   const [alignMode, setAlignMode] = useState(false);
@@ -119,6 +120,20 @@ export const OverlayApp: React.FC = () => {
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
   const profile = useMemo(() => getProfile(profileId), [profileId]);
+
+  useEffect(() => {
+    const base = state.gameTime ?? 0;
+    const at = state.timestamp ?? Date.now();
+    const locked = slot?.mode === 'locked';
+    const wantsClock = state.inGame && base > 0 && (!locked || slot.moduleIds.includes('sums'));
+    if (!wantsClock) return;
+    const tick = (): void => {
+      setClockSec(base + Math.max(0, (Date.now() - at) / 1000));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [state.inGame, state.gameTime, state.timestamp, slot]);
 
   useEffect(() => {
     const onResize = () => setViewport({ vw: window.innerWidth, vh: window.innerHeight });
@@ -478,12 +493,12 @@ export const OverlayApp: React.FC = () => {
     if (slotStickers.length > 0) return true;
     const liveName = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
     const mismatch = !!liveName && liveName !== profile.championId.toLowerCase().replace(/[^a-z]/g, '');
-    const sumsOn =
+    const sumsModuleOn =
       hudModules.sums &&
-      (state.enemyBotSummoners?.length ?? 0) > 0 &&
+      slotHasModule('sums') &&
       layoutElement(hudLayout, 'sums')?.visible !== false;
     return (
-      (sumsOn && slotHasModule('sums')) ||
+      sumsModuleOn ||
       (hudModules.gank && !!gankStatus && slotHasModule('gank')) ||
       (mismatch && slotHasModule('gank')) ||
       (hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
@@ -506,6 +521,10 @@ export const OverlayApp: React.FC = () => {
 
   const showFrames = alignMode || (hudModules.frames && !compactPanel);
   const showSumsRail = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
+  const sumsModuleOn =
+    hudModules.sums &&
+    slotHasModule('sums') &&
+    layoutElement(hudLayout, 'sums')?.visible !== false;
   const showSums = showSumsRail;
   const showGank = hudModules.gank && !!gankStatus;
   const showVision = hudModules.vision && !!wardStatus;
@@ -595,7 +614,7 @@ export const OverlayApp: React.FC = () => {
       {!compactPanel && !collapsed && (
         <>
           <OverlayStickers stickers={slotStickers} geo={paintGeo} />
-          {showSumsRail && slotHasModule('sums') && layoutElement(hudLayout, 'sums')?.visible !== false && (
+          {sumsModuleOn && (
           <div
             className="hud-overlay-scale hud-overlay-scale--left w-[220px]"
             style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo)}
@@ -604,13 +623,17 @@ export const OverlayApp: React.FC = () => {
               <div className="hud-chrome-header !py-1 !px-2">
                 <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
                 <div className="hud-chrome-meta !text-[11px]">
-                  {typeof state.gameTime === 'number' && state.gameTime > 0
-                    ? formatGameTime(state.gameTime)
-                    : 'Live'}
+                  {clockSec > 0 ? formatGameTime(clockSec) : 'Live'}
                 </div>
               </div>
               <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
-                <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
+                {showSumsRail ? (
+                  <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
+                ) : (
+                  <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide">
+                    Sums show as spells are tracked
+                  </p>
+                )}
                 <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
                   {hotkeyHint}
                 </p>
@@ -711,9 +734,7 @@ export const OverlayApp: React.FC = () => {
                 <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
                 <div className="hud-chrome-meta !text-[11px]">
                   {profile.shortLabel}
-                  {typeof state.gameTime === 'number' && state.gameTime > 0
-                    ? ` · ${formatGameTime(state.gameTime)}`
-                    : ''}
+                  {clockSec > 0 ? ` · ${formatGameTime(clockSec)}` : ''}
                 </div>
               </div>
             </div>

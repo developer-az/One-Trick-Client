@@ -1,6 +1,15 @@
 import { makeLCURequest } from './lcu-connector';
 import { lcuSocket } from './lcu-socket';
-import { fetchLiveClientData, findLocalPlayer, type LiveClientAllGameData } from './live-client';
+import {
+    fetchLiveClientData,
+    fetchLiveGameClock,
+    findLocalPlayer,
+    type LiveClientAllGameData,
+} from './live-client';
+import {
+    isInGamePhase,
+    shouldEndMatch,
+} from './match-lifecycle';
 import {
     showOverlay,
     hideOverlay,
@@ -12,6 +21,7 @@ import {
     getOverlayWindow,
     syncScalesFromLeague,
     keepOverlayOnTop,
+    healOverlayWindows,
 } from './overlay-window';
 import {
     ingestChampSelectTeam,
@@ -32,13 +42,11 @@ import { getAppSettings } from './app-settings';
  * Nothing here polls the League client. The only timer is the Live Client
  * read, and it runs only while a match is in progress (or, when the client
  * can't be found at all, as a slow probe for a running game).
+ *
+ * A dropped client socket or a few failed Live Client reads must not hide the
+ * HUD. The overlay stays up until the post-game phase sticks or the game
+ * process has been gone for a long time. See match-lifecycle.ts.
  */
-
-/** True terminal phases — only these end a match immediately. */
-const MATCH_OVER_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
-
-/** Gameflow phases where an active match (including Practice Tool) is running. */
-const IN_GAME_PHASES = new Set(['InProgress', 'GameStart', 'Reconnect']);
 
 /** In-game: overlay owns the hot path; ~2.5s keeps cues/wards fresh without thrashing. */
 const POLL_INGAME_MS = 2500;
@@ -48,8 +56,6 @@ const POLL_INGAME_HIDDEN_MS = 8000;
 const POLL_PROBE_MS = 5000;
 /** Clipboard is a synchronous OS call — never more than once per this window. */
 const CLIPBOARD_MIN_INTERVAL_MS = 20000;
-/** Live Client must fail this many consecutive reads before a match is considered over. */
-const END_GAME_STRIKES_NEEDED = 4;
 /** Re-assert always-on-top at most this often (DWM churn = FPS loss). */
 const KEEP_ON_TOP_MIN_MS = 20000;
 
@@ -68,12 +74,17 @@ let monitorStarted = false;
 let liveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastChampSelectEnemies: CachedEnemy[] = [];
 let inGame = false;
-/** Consecutive Live Client failures while we believe a match is running. */
-let endGameStrikes = 0;
 let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOverlayFingerprint = '';
 let currentPollMs = POLL_INGAME_MS;
 let liveReadsTotal = 0;
+/** Last time allgamedata or gamestats proved the game process is up. */
+let lastLiveProofAt = 0;
+/** Last game clock accepted from a successful Live Client read. */
+let trustedGameTime = 0;
+/** Phase string we are timing, so a one-event flap cannot end the match. */
+let trackedPhase = '';
+let phaseSince = 0;
 let onGameStateChange: ((active: boolean) => void) | null = null;
 /** Optional hook so main can re-bind PageUp/PageDown when a match starts. */
 let onMatchStartHotkeys: (() => void) | null = null;
@@ -319,7 +330,71 @@ function resetMatchCaches(): void {
     lastOverlayFingerprint = '';
     lastGoodPayload = null;
     lastKeepOnTopAt = 0;
+    lastLiveProofAt = 0;
+    trustedGameTime = 0;
     resetSummonerTracker();
+}
+
+function phaseHoldMs(phase: string | null): number {
+    const key = phase ?? '';
+    if (key !== trackedPhase) {
+        trackedPhase = key;
+        phaseSince = Date.now();
+    }
+    return phaseSince ? Date.now() - phaseSince : 0;
+}
+
+function considerMatchEnd(liveGameTime: number | null): void {
+    if (!inGame) return;
+    const phase = lcuSocket.phase;
+    const silenceMs = lastLiveProofAt > 0 ? Date.now() - lastLiveProofAt : 0;
+    if (
+        shouldEndMatch({
+            phase,
+            liveSilenceMs: silenceMs,
+            phaseHeldMs: phaseHoldMs(phase),
+            liveGameTime,
+            trustedGameTime,
+        })
+    ) {
+        endGameSession();
+    }
+}
+
+function noteLiveClock(gameTime: number): void {
+    lastLiveProofAt = Date.now();
+    if (Number.isFinite(gameTime) && gameTime > trustedGameTime) {
+        trustedGameTime = gameTime;
+    }
+}
+
+function holdLastBoard(overlayHidden: boolean, gameTime?: number): void {
+    if (!lastGoodPayload || overlayHidden) return;
+    const elapsedSec = Math.max(0, (Date.now() - (lastGoodPayload.timestamp || Date.now())) / 1000);
+    const nextTime =
+        typeof gameTime === 'number' && Number.isFinite(gameTime)
+            ? gameTime
+            : (lastGoodPayload.gameTime || 0) + elapsedSec;
+    const advanced = {
+        ...lastGoodPayload,
+        gameTime: nextTime,
+        timestamp: Date.now(),
+    };
+    lastGoodPayload = advanced;
+    const fp = overlayFingerprint(advanced);
+    if (fp === lastOverlayFingerprint) return;
+    lastOverlayFingerprint = fp;
+    sendOverlayUpdate(advanced);
+}
+
+function ensureOverlayShown(): void {
+    if (isOverlayUserHidden() || !getAppSettings().overlayEnabled) return;
+    if (!getOverlayWindow()) {
+        createOverlayWindow();
+        showOverlay();
+    }
+    healOverlayWindows();
+    maybeKeepOverlayOnTop();
 }
 
 function maybeKeepOverlayOnTop(): void {
@@ -332,7 +407,7 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(): void {
     console.info('[match] started');
     inGame = true;
-    endGameStrikes = 0;
+    lastLiveProofAt = Date.now();
     if (destroyOverlayTimer) {
         clearTimeout(destroyOverlayTimer);
         destroyOverlayTimer = null;
@@ -356,7 +431,6 @@ function endGameSession(): void {
     if (!inGame) return;
     console.info('[match] ended');
     inGame = false;
-    endGameStrikes = 0;
     resetMatchCaches();
     hideOverlay();
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
@@ -380,7 +454,7 @@ function endGameSession(): void {
 /** Should the Live Client be read at all right now, and how often? */
 function liveCadence(): number | null {
     const phase = lcuSocket.phase;
-    if (inGame || (phase && IN_GAME_PHASES.has(phase))) {
+    if (inGame || isInGamePhase(phase)) {
         return isOverlayUserHidden() ? POLL_INGAME_HIDDEN_MS : POLL_INGAME_MS;
     }
     // No client to tell us about matches: probe slowly so a running game is still found.
@@ -417,21 +491,22 @@ async function liveTick(): Promise<void> {
         const overlayHidden = isOverlayUserHidden();
 
         if (live) {
-            if (phase && MATCH_OVER_PHASES.has(phase)) return;
+            const gameTime = live.gameData?.gameTime ?? 0;
             const wasInGame = inGame;
             if (!wasInGame) beginMatch();
-            endGameStrikes = 0;
+            // Decide before noteLiveClock updates the trusted clock, so an
+            // advancing game cannot look frozen on the same tick.
+            considerMatchEnd(gameTime);
+            if (!inGame) return;
+            noteLiveClock(gameTime);
 
-            if (wasInGame && !overlayHidden) {
-                // Self-heal: window was destroyed mid-match — bring it back
-                if (!getOverlayWindow() && getAppSettings().overlayEnabled) {
-                    createOverlayWindow();
-                    showOverlay();
-                }
-                maybeKeepOverlayOnTop();
-            }
+            if (!overlayHidden) ensureOverlayShown();
 
             const payload = buildOverlayPayload(live, phase);
+            // Prefer the trusted clock if this payload came back with a stale 0.
+            if ((payload.gameTime || 0) < trustedGameTime) {
+                payload.gameTime = trustedGameTime;
+            }
             lastGoodPayload = payload;
             if (overlayHidden) {
                 // Slim ping so the main window stays parked as "in match"
@@ -446,39 +521,41 @@ async function liveTick(): Promise<void> {
             return;
         }
 
-        if (!inGame) return;
-
-        // Live Client blip — hold the last good board (never wipe items/jungle/wards),
-        // advance the clock locally, and count strikes so a real end still ends.
-        endGameStrikes += 1;
-        const clientSaysInGame = !!phase && IN_GAME_PHASES.has(phase);
-        if (endGameStrikes >= END_GAME_STRIKES_NEEDED && !clientSaysInGame) {
-            endGameSession();
+        // allgamedata timed out or 404'd. The cheap clock is enough to prove
+        // the match is still going, and it does not count as silence.
+        const clock = await fetchLiveGameClock();
+        liveReadsTotal += 1;
+        if (clock) {
+            if (!inGame) beginMatch();
+            considerMatchEnd(clock.gameTime);
+            if (!inGame) return;
+            noteLiveClock(clock.gameTime);
+            if (!overlayHidden) {
+                ensureOverlayShown();
+                holdLastBoard(false, clock.gameTime);
+            }
             return;
         }
-        if (lastGoodPayload && !overlayHidden) {
-            const advanced = {
-                ...lastGoodPayload,
-                gameTime: (lastGoodPayload.gameTime || 0) + currentPollMs / 1000,
-                timestamp: Date.now(),
-            };
-            lastGoodPayload = advanced;
-            const fp = overlayFingerprint(advanced);
-            if (fp !== lastOverlayFingerprint) {
-                lastOverlayFingerprint = fp;
-                sendOverlayUpdate(advanced);
-            }
-        }
+
+        if (!inGame) return;
+
+        // Both reads failed. Keep the last board on screen. Only a real end
+        // (terminal phase that sticks, or a long silence with no in-game phase)
+        // takes the overlay down — a few seconds of timeouts must not.
+        considerMatchEnd(null);
+        if (!inGame) return;
+        if (!overlayHidden) ensureOverlayShown();
+        holdLastBoard(overlayHidden);
     } finally {
         tickInFlight = false;
     }
 }
 
 function onPhase(phase: string | null): void {
-    if (phase && MATCH_OVER_PHASES.has(phase)) {
-        endGameSession();
-    }
-    if (phase && IN_GAME_PHASES.has(phase) && !liveTimer) {
+    // Start the hold timer. The next live tick decides, so a phase label is
+    // never judged without a chance to see whether the game clock is moving.
+    phaseHoldMs(phase);
+    if (isInGamePhase(phase) && !liveTimer) {
         // Read immediately rather than waiting a full interval after loading.
         void liveTick().finally(scheduleLive);
         return;
