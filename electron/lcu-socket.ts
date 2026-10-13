@@ -19,6 +19,7 @@ import {
     setLcuCredentials,
     type LcuCredentials,
 } from './lcu-connector';
+import { isInGamePhase } from './match-lifecycle';
 
 /** WAMP opcodes used by the LCU. */
 const WAMP_SUBSCRIBE = 5;
@@ -32,6 +33,8 @@ const EVENTS = {
 
 const DISCOVERY_INTERVAL_MS = 3000;
 const RECONNECT_DELAY_MS = 2000;
+/** Missing lockfile this many probes in a row before an in-game phase is forgotten. */
+const LOCKFILE_MISSES_BEFORE_CLEAR = 3;
 
 export type LcuConnectionState = 'searching' | 'connecting' | 'connected';
 
@@ -59,6 +62,7 @@ class LcuSocket extends EventEmitter {
     private champSelectValue: unknown | null = null;
     private summonerName: string | null = null;
     private connectedAt: number | null = null;
+    private lockfileMisses = 0;
 
     override emit<K extends keyof LcuEvents>(event: K, ...args: LcuEvents[K]): boolean {
         return super.emit(event, ...args);
@@ -142,9 +146,16 @@ class LcuSocket extends EventEmitter {
         const creds = await readLockfileCredentials();
         if (!creds) {
             this.setState('searching');
+            this.lockfileMisses += 1;
+            // One failed lockfile read is not "the game ended". Clear a sticky
+            // in-game phase only after the client has actually stayed gone.
+            if (!isInGamePhase(this.phaseValue) || this.lockfileMisses >= LOCKFILE_MISSES_BEFORE_CLEAR) {
+                this.setPhase(null);
+            }
             this.scheduleDiscovery();
             return;
         }
+        this.lockfileMisses = 0;
         this.open(creds);
     }
 
@@ -178,7 +189,12 @@ class LcuSocket extends EventEmitter {
             this.connectedAt = null;
             this.summonerName = null;
             setLcuCredentials(null);
-            this.setPhase(null);
+            // A dropped socket is not a phase change. While a match is running the
+            // client sends nothing, so this socket goes idle and dies mid-game.
+            // Forgetting InProgress here is what used to take the overlay down
+            // after a few Live Client timeouts. Hydrate() overwrites the phase
+            // on the next successful connect.
+            if (!isInGamePhase(this.phaseValue)) this.setPhase(null);
             if (this.champSelectValue !== null) this.setChampSelect(null);
             this.setState('searching');
             this.scheduleDiscovery(RECONNECT_DELAY_MS);
@@ -247,9 +263,13 @@ class LcuSocket extends EventEmitter {
         const payload = msg[2] as { data?: unknown; eventType?: string } | undefined;
         const deleted = payload?.eventType === 'Delete';
         switch (name) {
-            case EVENTS.phase:
-                this.setPhase(!deleted && typeof payload?.data === 'string' ? payload.data : null);
+            case EVENTS.phase: {
+                const next = !deleted && typeof payload?.data === 'string' ? payload.data : null;
+                // A Delete while InProgress is a socket hiccup, not the scoreboard.
+                if (deleted && isInGamePhase(this.phaseValue)) break;
+                this.setPhase(next);
                 break;
+            }
             case EVENTS.champSelect:
                 this.setChampSelect(deleted ? null : payload?.data ?? null);
                 break;

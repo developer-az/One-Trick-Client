@@ -64,11 +64,20 @@ export interface LiveClientAllGameData {
     gameData: LiveClientGameData;
 }
 
+export interface LiveGameClock {
+    gameTime: number;
+    gameMode?: string;
+}
+
+/**
+ * Full board. Timeout stays short so a stuck read cannot freeze the main
+ * process; a miss is not "game over" — the caller falls back to the clock.
+ */
 export async function fetchLiveClientData(): Promise<LiveClientAllGameData | null> {
     try {
         const response = await axios.get(`${LIVE_CLIENT_BASE}/allgamedata`, {
             httpsAgent,
-            timeout: 1500,
+            timeout: 2200,
             validateStatus: (status) => status < 500,
         });
 
@@ -78,7 +87,31 @@ export async function fetchLiveClientData(): Promise<LiveClientAllGameData | nul
 
         return response.data as LiveClientAllGameData;
     } catch {
-        // Game client not running or not in an active match
+        // Game client busy, or not in an active match. Caller probes the clock next.
+        return null;
+    }
+}
+
+/**
+ * Cheap liveness read. allgamedata is large and times out in fights; gamestats
+ * is enough to prove the match is still running and to keep the HUD clock honest.
+ */
+export async function fetchLiveGameClock(): Promise<LiveGameClock | null> {
+    try {
+        const response = await axios.get(`${LIVE_CLIENT_BASE}/gamestats`, {
+            httpsAgent,
+            timeout: 1000,
+            validateStatus: (status) => status < 500,
+        });
+        if (response.status !== 200 || !response.data || typeof response.data !== 'object') return null;
+        const body = response.data as { gameTime?: unknown; gameMode?: unknown };
+        const gameTime = typeof body.gameTime === 'number' ? body.gameTime : Number(body.gameTime);
+        if (!Number.isFinite(gameTime) || gameTime < 0) return null;
+        return {
+            gameTime,
+            gameMode: typeof body.gameMode === 'string' ? body.gameMode : undefined,
+        };
+    } catch {
         return null;
     }
 }
