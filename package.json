@@ -1,14 +1,14 @@
 {
   "name": "pyke-dominator",
   "private": true,
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
     "type": "git",
     "url": "https://github.com/developer-az/One-Trick-Client.git"
   },
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/electron/main.js",
   "build": {
     "appId": "com.onetrick.app",
     "productName": "One Trick",
