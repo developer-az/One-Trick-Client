@@ -54,6 +54,16 @@ declare global {
         role: 'Top' | 'Jungle' | 'Mid' | 'Bot' | 'Support' | null;
         enemies?: number[];
         laneOpponent?: number | null;
+        allies?: number[];
+        lanePartner?: number | null;
+    }
+
+    interface PlayRecapEntry {
+        gameTime: number;
+        kind: 'blunder' | 'brilliant' | 'enemy';
+        label: string;
+        detail: string;
+        hint?: string;
     }
 
     interface PerfProcessStat {
@@ -80,6 +90,7 @@ declare global {
         inGame: boolean;
         livePollMs: number | null;
         liveReads: number;
+        lastEndReason?: string | null;
     }
 
     interface Window {
@@ -160,6 +171,7 @@ declare global {
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;
             relaunchApp?: () => Promise<void>;
             getPerfStats?: () => Promise<PerfStats>;
+            getMatchRecap?: () => Promise<PlayRecapEntry[]>;
             getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
             setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
             reportOverlayContent?: (hasContent: boolean) => void;

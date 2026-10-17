@@ -39,6 +39,12 @@ function usePerfStats(): PerfStats | null {
 export const PerformanceView: React.FC = () => {
   const stats = usePerfStats();
   const { settings, update, restartRequired } = useAppSettings();
+  const [recap, setRecap] = React.useState<PlayRecapEntry[]>([]);
+
+  React.useEffect(() => {
+    if (!stats || stats.inGame) return;
+    void window.electronAPI?.getMatchRecap?.().then((entries) => setRecap(entries || []));
+  }, [stats?.inGame, stats]);
 
   if (!isDesktop) {
     return (
@@ -196,6 +202,34 @@ export const PerformanceView: React.FC = () => {
           ) : (
             <p className="ot-muted text-sm">Loading</p>
           )}
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Last match recap"
+            sub="Blunders, picks, and enemy mistakes from your most recent game. Shown after the overlay closes."
+          />
+          {recap.length ? (
+            <ul className="space-y-2 text-sm max-h-56 overflow-y-auto">
+              {recap.map((entry, i) => (
+                <li key={`${entry.gameTime}-${entry.label}-${i}`} className="border-b border-[color:var(--ot-border)] pb-2 last:border-0">
+                  <div className="flex items-center gap-2">
+                    <Pill tone={entry.kind === 'brilliant' ? 'live' : entry.kind === 'blunder' ? 'bad' : 'muted'}>
+                      {Math.floor(entry.gameTime / 60)}:{String(Math.floor(entry.gameTime % 60)).padStart(2, '0')}
+                    </Pill>
+                    <span className="font-medium">{entry.label}</span>
+                  </div>
+                  <p className="ot-muted mt-1 text-[13px]">{entry.detail}</p>
+                  {entry.hint ? <p className="ot-faint mt-0.5 text-xs">{entry.hint}</p> : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm ot-muted">Play a match with the overlay on. Moments appear here when the game ends.</p>
+          )}
+          {stats?.lastEndReason && !stats.inGame ? (
+            <p className="mt-3 text-xs ot-faint">Last overlay close: {stats.lastEndReason}</p>
+          ) : null}
         </Card>
 
         <Card className="lg:col-span-2">

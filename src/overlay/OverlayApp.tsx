@@ -95,7 +95,7 @@ export const OverlayApp: React.FC = () => {
   const [alignMode, setAlignMode] = useState(false);
   const [hudScale, setHudScale] = useState(20);
   const [mapScale, setMapScale] = useState(33);
-  const [chromeColor, setChromeColor] = useState('#d4d8de');
+  const [chromeColor, setChromeColor] = useState('#e8b84a');
   const [collapsed, setCollapsed] = useState(false);
   const [gameWidth, setGameWidth] = useState(1920);
   const [gameHeight, setGameHeight] = useState(1080);

@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
-import { byChampion, pct, record, recordAgainst, type Record_ } from '../../logic/stats';
+import { byChampion, pct, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
 import { isDesktop } from '../hooks';
 import { IconStats } from '../icons';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
@@ -73,6 +73,15 @@ export const StatsView: React.FC<{
   }
   const opponentRows = [...opponents.entries()].sort((a, b) => b[1].games - a[1].games || a[1].winRate - b[1].winRate).slice(0, 12);
 
+  const withAllyDetails = focusGames.filter((g) => g.allies?.length);
+  const allies = new Map<number, Record_>();
+  for (const g of withAllyDetails) {
+    for (const id of g.allies || []) {
+      if (!allies.has(id)) allies.set(id, recordWith(withAllyDetails, id, { championId: focus ?? undefined }));
+    }
+  }
+  const allyRows = [...allies.entries()].sort((a, b) => b[1].games - a[1].games || a[1].winRate - b[1].winRate).slice(0, 12);
+
   return (
     <div className="ot-page">
       {header}
@@ -86,7 +95,7 @@ export const StatsView: React.FC<{
       <div className="grid gap-5 lg:grid-cols-5">
         <Card className="lg:col-span-3" pad={false}>
           <div className="ot-card-pad !pb-2">
-            <CardHeader title="By champion" sub="Pick a row to see who you do well and badly against." />
+            <CardHeader title="By champion" sub="Pick a row to see matchup win rates against enemies and with allies." />
           </div>
           <table className="w-full text-sm">
             <thead>
@@ -128,38 +137,69 @@ export const StatsView: React.FC<{
           </table>
         </Card>
 
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title={focusRow ? `${byKey.get(focusRow.championId)?.name || 'Champion'} against` : 'Against'}
-            sub={
-              withDetails.length < focusGames.length
-                ? `From ${withDetails.length} of ${focusGames.length} games so far. More load each refresh.`
-                : `From ${withDetails.length} games.`
-            }
-          />
-          {opponentRows.length ? (
-            <ul className="space-y-2">
-              {opponentRows.map(([id, r]) => {
-                const c = byKey.get(id);
-                return (
-                  <li key={id} className="flex items-center gap-3">
-                    <Portrait champion={c || { key: id }} size={30} ring="red" />
-                    <span className="flex-1 min-w-0 truncate text-[15px]">{c?.name || `#${id}`}</span>
-                    <span className="ot-num text-sm ot-muted">
-                      {r.wins}–{r.losses}
-                    </span>
-                    <WinRate r={r} />
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="text-sm ot-muted">{loading ? 'Loading game details.' : 'No game details yet.'}</p>
-          )}
-          <p className="mt-4 text-xs ot-faint leading-relaxed">
+        <div className="lg:col-span-2 grid gap-5 sm:grid-cols-2">
+          <Card>
+            <CardHeader
+              title={focusRow ? `${byKey.get(focusRow.championId)?.name || 'Champion'} against` : 'Against'}
+              sub={
+                withDetails.length < focusGames.length
+                  ? `From ${withDetails.length} of ${focusGames.length} games.`
+                  : `From ${withDetails.length} games.`
+              }
+            />
+            {opponentRows.length ? (
+              <ul className="space-y-2">
+                {opponentRows.map(([id, r]) => {
+                  const c = byKey.get(id);
+                  return (
+                    <li key={id} className="flex items-center gap-3">
+                      <Portrait champion={c || { key: id }} size={30} ring="red" />
+                      <span className="flex-1 min-w-0 truncate text-[15px]">{c?.name || `#${id}`}</span>
+                      <span className="ot-num text-sm ot-muted">
+                        {r.wins}–{r.losses}
+                      </span>
+                      <WinRate r={r} />
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-sm ot-muted">{loading ? 'Loading game details.' : 'No enemy details yet.'}</p>
+            )}
+          </Card>
+          <Card>
+            <CardHeader
+              title={focusRow ? `${byKey.get(focusRow.championId)?.name || 'Champion'} with` : 'With'}
+              sub={
+                withAllyDetails.length < focusGames.length
+                  ? `From ${withAllyDetails.length} of ${focusGames.length} games.`
+                  : `From ${withAllyDetails.length} games.`
+              }
+            />
+            {allyRows.length ? (
+              <ul className="space-y-2">
+                {allyRows.map(([id, r]) => {
+                  const c = byKey.get(id);
+                  return (
+                    <li key={id} className="flex items-center gap-3">
+                      <Portrait champion={c || { key: id }} size={30} ring="blue" />
+                      <span className="flex-1 min-w-0 truncate text-[15px]">{c?.name || `#${id}`}</span>
+                      <span className="ot-num text-sm ot-muted">
+                        {r.wins}–{r.losses}
+                      </span>
+                      <WinRate r={r} />
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-sm ot-muted">{loading ? 'Loading game details.' : 'No ally details yet.'}</p>
+            )}
+          </Card>
+          <p className="sm:col-span-2 text-xs ot-faint leading-relaxed">
             Faded numbers have fewer than {MIN_SAMPLE} games. The range is a 95% confidence interval.
           </p>
-        </Card>
+        </div>
       </div>
     </div>
   );

@@ -23,3 +23,23 @@ const heal = t.serializeSummoners(Date.now(), 'bot').find((l) => l.role === 'Bot
 ok(Math.abs(heal.remaining - 199) <= 1, `heal remaining ${heal.remaining}`);
 // No cross-lane toggle.
 ok(!t.toggleSpellUsed('Mid', 'Heal').success, 'Mid Heal does not fall back to Bot');
+t.resetSummonerTracker();
+t.ingestChampSelectTeam([
+  { championName: 'Caitlyn', assignedPosition: 'BOTTOM', spell1Id: 4, spell2Id: 7 },
+]);
+const map = new Map<string, string>([['Caitlyn', 'Caitlyn']]);
+t.ingestLiveEvents(
+  [{ EventID: 50, EventName: 'ChampionKill', EventTime: 100, VictimName: 'Caitlyn', KillerName: 'x' }],
+  map,
+  120
+);
+const botAfter1 = t.serializeSummoners(Date.now(), 'bot').find((l) => l.role === 'Bot')!;
+const flash1 = botAfter1.spells.find((s) => s.name === 'Flash')!;
+ok(flash1.remaining > 0, 'first death starts Flash CD');
+t.ingestLiveEvents(
+  [{ EventID: 51, EventName: 'ChampionKill', EventTime: 110, VictimName: 'Caitlyn', KillerName: 'y' }],
+  map,
+  130
+);
+const flash2 = t.serializeSummoners(Date.now(), 'bot').find((l) => l.role === 'Bot')!.spells.find((s) => s.name === 'Flash')!;
+ok(flash2.remaining > 0 && flash2.remaining <= flash1.remaining, 'second death does not restart Flash');

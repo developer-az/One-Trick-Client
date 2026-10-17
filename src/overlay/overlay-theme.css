@@ -14,8 +14,8 @@ html.overlay-root {
   --ov-border: rgba(212, 216, 222, 0.14);
   --ov-text: #e7e9ee;
   --ov-text-2: #a7aebb;
-  --ov-gold: #d4d8de;
-  --ov-blood: #b4243a;
+  --ov-gold: #e8b84a;
+  --ov-blood: #9b1c2e;
   --ov-teal: #35d0ba;
   --ov-red: #f0656a;
   --ov-amber: #f2b350;
@@ -60,8 +60,8 @@ html.overlay-root .hud-panel-mark {
 }
 
 html.overlay-root .hud-chrome-header {
-  background: none;
-  border-bottom: 1px solid var(--ov-border);
+  background: linear-gradient(90deg, rgba(232, 184, 74, 0.12), transparent 70%);
+  border-bottom: 1px solid rgba(232, 184, 74, 0.22);
 }
 
 html.overlay-root .hud-chrome-title {
@@ -122,14 +122,14 @@ html.overlay-root .hud-chrome-cue {
   background: rgba(255, 255, 255, 0.04);
 }
 html.overlay-root .hud-chrome-cue--spike {
-  border-color: rgba(212, 216, 222, 0.5);
-  background: rgba(212, 216, 222, 0.12);
+  border-color: rgba(155, 28, 46, 0.55);
+  background: rgba(155, 28, 46, 0.14);
   box-shadow: inset 3px 0 0 var(--ov-blood);
 }
 html.overlay-root .hud-chrome-cue--warn {
-  border-color: rgba(240, 101, 106, 0.5);
-  background: rgba(240, 101, 106, 0.12);
-  box-shadow: inset 3px 0 0 var(--ov-red);
+  border-color: rgba(232, 184, 74, 0.45);
+  background: rgba(232, 184, 74, 0.1);
+  box-shadow: inset 3px 0 0 var(--ov-gold);
   color: var(--ov-text);
 }
 

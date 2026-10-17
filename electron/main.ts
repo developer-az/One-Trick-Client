@@ -15,6 +15,7 @@ import {
     getMonitorStats,
     refreshLiveCadence,
 } from './game-monitor';
+import { getPlayRecap } from './play-recap';
 import {
     destroyOverlay,
     toggleOverlayVisibility,
@@ -451,9 +452,12 @@ app.whenReady().then(() => {
             inGame: monitor.inGame,
             livePollMs: monitor.livePollMs,
             liveReads: monitor.liveReads,
+            lastEndReason: monitor.lastEndReason,
             environment: await overlayEnvironment(),
         };
     });
+
+    ipcMain.handle('match-recap-get', () => getPlayRecap());
 
     ipcMain.handle('lcu-request', async (_event, method, endpoint, body) => {
         try {

@@ -28,6 +28,10 @@ export interface MatchSummary {
     enemies?: number[];
     /** Enemy in the same position, when positions are known. */
     laneOpponent?: number | null;
+    /** Allied champion ids when details have been loaded. */
+    allies?: number[];
+    /** Bot lane partner when roles are known. */
+    lanePartner?: number | null;
 }
 
 interface RawParticipant {
@@ -121,7 +125,30 @@ export function enemiesFrom(game: RawGame, puuid: string | null): { enemies: num
     };
 }
 
-type DetailCache = Record<string, { enemies: number[]; laneOpponent: number | null }>;
+/** Allied champions and bot partner from a full game. */
+export function alliesFrom(
+    game: RawGame,
+    puuid: string | null
+): { allies: number[]; lanePartner: number | null } {
+    const me = selfIn(game, puuid);
+    if (!me) return { allies: [], lanePartner: null };
+    const team = (game.participants || []).filter(
+        (p) => p.teamId === me.teamId && p.championId && p.participantId !== me.participantId
+    );
+    const myRole = roleOf(me);
+    let lanePartner: number | null = null;
+    if (myRole === 'Bot' || myRole === 'Support') {
+        const want = myRole === 'Bot' ? 'Support' : 'Bot';
+        const partners = team.filter((p) => roleOf(p) === want);
+        lanePartner = partners.length === 1 ? partners[0].championId! : null;
+    }
+    return { allies: team.map((p) => p.championId!), lanePartner };
+}
+
+type DetailCache = Record<
+    string,
+    { enemies: number[]; laneOpponent: number | null; allies?: number[]; lanePartner?: number | null }
+>;
 let detailCache: DetailCache | null = null;
 let cacheWrite: ReturnType<typeof setTimeout> | null = null;
 
@@ -204,6 +231,8 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
         if (hit) {
             g.enemies = hit.enemies;
             g.laneOpponent = hit.laneOpponent;
+            if (hit.allies?.length) g.allies = hit.allies;
+            if (hit.lanePartner != null) g.lanePartner = hit.lanePartner;
             continue;
         }
         // Never fetch details during a match; one request at a time otherwise.
@@ -213,10 +242,13 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
             fetched++;
             if (!full) continue;
             const info = enemiesFrom(full, puuid);
+            const allyInfo = alliesFrom(full, puuid);
             if (!info.enemies.length) continue;
-            cache[g.gameId] = info;
+            cache[g.gameId] = { ...info, ...allyInfo };
             g.enemies = info.enemies;
             g.laneOpponent = info.laneOpponent;
+            g.allies = allyInfo.allies;
+            g.lanePartner = allyInfo.lanePartner;
         } catch {
             break;
         }

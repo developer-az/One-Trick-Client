@@ -7,5 +7,5 @@
     "skipLibCheck": true,
     "moduleResolution": "node"
   },
-  "include": ["electron/**/*"]
+  "include": ["electron/**/*", "src/logic/playMoments.ts", "src/logic/situation.ts", "src/logic/jungleLogic.ts"]
 }

@@ -63,6 +63,29 @@ const lastRendererReload = new WeakMap<BrowserWindow, number>();
 
 /** Tab is held down (reported by the native key helper). */
 let holdDown = false;
+/** While a match is live, never hide every locked window at once. */
+let overlayMatchActive = false;
+
+export function setOverlayMatchActive(active: boolean): void {
+    overlayMatchActive = active;
+    if (active) {
+        for (const win of overlayWindows()) {
+            try {
+                syncWindowVisibility(win);
+            } catch {
+                // ignore
+            }
+        }
+    }
+}
+
+function wouldHideAllSlots(nextEmptyId: number): boolean {
+    const wins = overlayWindows();
+    if (!wins.length) return false;
+    return wins.every(
+        (w) => w.webContents.id === nextEmptyId || emptySlots.has(w.webContents.id)
+    );
+}
 
 function lockedLayout(): boolean {
     return clickThrough && !alignMode;
@@ -145,6 +168,7 @@ export function setOverlaySlotContent(webContentsId: number, hasContent: boolean
     if (emptySlots.has(webContentsId) || pending) return;
     const timer = setTimeout(() => {
         emptyGrace.delete(webContentsId);
+        if (overlayMatchActive && wouldHideAllSlots(webContentsId)) return;
         emptySlots.add(webContentsId);
         syncSlotVisibility(webContentsId);
     }, EMPTY_HIDE_GRACE_MS);
@@ -233,7 +257,7 @@ export function getOverlayWindowStats(): { windows: number; visible: number } {
 let hudScale = 20;
 /** Default ~MinimapScale 1.0 (was 88 ≈ 1.82 — caused huge map frame vs HUD). */
 let mapScale = 33;
-let chromeColor = '#d4d8de';
+let chromeColor = '#e8b84a';
 let gameWidth = 1920;
 let gameHeight = 1080;
 let calibration: OverlayCalibration = { ...DEFAULT_CALIBRATION, ability: { ...DEFAULT_CALIBRATION.ability }, minimap: { ...DEFAULT_CALIBRATION.minimap } };

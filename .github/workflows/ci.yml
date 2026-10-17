@@ -52,6 +52,12 @@ jobs:
       - name: Overlay stays up for the whole match
         run: npm run verify:match
 
+      - name: Jungle threat heuristics
+        run: npm run verify:jungle
+
+      - name: Play moment cues
+        run: npm run verify:play-moments
+
       - name: Build TypeScript
         run: npm run electron:build
 

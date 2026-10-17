@@ -1,6 +1,6 @@
 // Match-history parsing and stats math.
-import { enemiesFrom, roleOf, summarize } from './electron/match-history';
-import { byChampion, recordAgainst, wilson } from './src/logic/stats';
+import { alliesFrom, enemiesFrom, roleOf, summarize } from './electron/match-history';
+import { byChampion, recordAgainst, recordWith, wilson } from './src/logic/stats';
 
 function assert(c: unknown, m: string): void {
   if (!c) {
@@ -41,14 +41,16 @@ const s = summarize(full, 'me');
 assert(s && s.championId === 555 && s.win && s.cs === 160 && s.role === 'Support', `summarize ${JSON.stringify(s)}`);
 const e = enemiesFrom(full, 'me');
 assert(e.enemies.length === 3 && e.laneOpponent === 99, `enemies ${JSON.stringify(e)}`);
+const a = alliesFrom(full, 'me');
+assert(a.allies.includes(222) && a.lanePartner === 222, `allies ${JSON.stringify(a)}`);
 assert(roleOf({ timeline: { lane: 'BOTTOM', role: 'NONE' } }) === null, 'unknown bot role stays unknown');
 // The list endpoint carries only you.
 assert(summarize({ ...full, participants: [full.participants[0]] }, null)?.championId === 555, 'list endpoint self');
 
 const games = [
-  { ...s!, enemies: e.enemies, laneOpponent: e.laneOpponent },
-  { ...s!, gameId: 8, win: false, enemies: [99], laneOpponent: 99 },
-  { ...s!, gameId: 9, championId: 80, enemies: [51] },
+  { ...s!, enemies: e.enemies, laneOpponent: e.laneOpponent, allies: a.allies, lanePartner: a.lanePartner },
+  { ...s!, gameId: 8, win: false, enemies: [99], laneOpponent: 99, allies: a.allies, lanePartner: a.lanePartner },
+  { ...s!, gameId: 9, championId: 80, enemies: [51], allies: a.allies },
 ];
 const champs = byChampion(games);
 assert(champs[0].championId === 555 && champs[0].games === 2 && champs[0].wins === 1, 'byChampion');
@@ -56,6 +58,7 @@ assert(near(champs[0].kda, 6), `kda ${champs[0].kda}`);
 const vsLux = recordAgainst(games, 99);
 assert(vsLux.games === 2 && vsLux.wins === 1, 'record vs Lux');
 assert(recordAgainst(games, 51, { championId: 80 }).games === 1, 'record vs Cait on Pantheon');
+assert(recordWith(games, 222).games === 2, 'record with ADC');
 // Smite decides jungle; a smiteless "JUNGLE" lane guess (roaming Pyke) is not jungle.
 assert(roleOf({ spell1Id: 4, spell2Id: 11, timeline: { lane: 'TOP', role: 'SOLO' } }) === 'Jungle', 'smite = jungle');
 assert(roleOf({ spell1Id: 4, spell2Id: 14, timeline: { lane: 'JUNGLE', role: 'NONE' } }) === null, 'roaming support is not jungle');

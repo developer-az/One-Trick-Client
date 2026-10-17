@@ -14,6 +14,8 @@ export interface GameLike {
   role: string | null;
   enemies?: number[];
   laneOpponent?: number | null;
+  allies?: number[];
+  lanePartner?: number | null;
 }
 
 export interface Record_ {
@@ -88,6 +90,17 @@ export function recordAgainst(games: GameLike[], enemyId: number, opts: { champi
       (g) =>
         (opts.championId === undefined || g.championId === opts.championId) &&
         (opts.laneOnly ? g.laneOpponent === enemyId : !!g.enemies?.includes(enemyId))
+    )
+  );
+}
+
+/** Your record when `allyId` was on your team (optionally your bot lane partner). */
+export function recordWith(games: GameLike[], allyId: number, opts: { championId?: number; laneOnly?: boolean } = {}): Record_ {
+  return record(
+    games.filter(
+      (g) =>
+        (opts.championId === undefined || g.championId === opts.championId) &&
+        (opts.laneOnly ? g.lanePartner === allyId : !!g.allies?.includes(allyId))
     )
   );
 }

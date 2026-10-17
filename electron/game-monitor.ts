@@ -7,6 +7,7 @@ import {
     type LiveClientAllGameData,
 } from './live-client';
 import {
+    describeEndMatchReason,
     isInGamePhase,
     shouldEndMatch,
 } from './match-lifecycle';
@@ -22,6 +23,7 @@ import {
     syncScalesFromLeague,
     keepOverlayOnTop,
     healOverlayWindows,
+    setOverlayMatchActive,
 } from './overlay-window';
 import {
     ingestChampSelectTeam,
@@ -35,6 +37,10 @@ import {
 } from './summoner-tracker';
 import { clipboard } from 'electron';
 import { getAppSettings } from './app-settings';
+import { snapshotFromState, tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
+import type { PlayOverlayState } from '../src/logic/playMoments';
+import { appendPlayRecap, clearPlayRecap } from './play-recap';
+import { resetJungleThreatClock } from '../src/logic/jungleLogic';
 
 /**
  * Match lifecycle, driven by League Client events (see lcu-socket.ts).
@@ -88,6 +94,8 @@ let phaseSince = 0;
 let onGameStateChange: ((active: boolean) => void) | null = null;
 /** Optional hook so main can re-bind PageUp/PageDown when a match starts. */
 let onMatchStartHotkeys: (() => void) | null = null;
+let lastMatchEndReason: string | null = null;
+let playMomentSnapshot: PlayMomentSnapshot | null = null;
 
 export function getLastChampSelectEnemies(): CachedEnemy[] {
     return lastChampSelectEnemies;
@@ -98,8 +106,18 @@ export function isCurrentlyInGame(): boolean {
 }
 
 /** Diagnostics for the performance panel. */
-export function getMonitorStats(): { inGame: boolean; livePollMs: number | null; liveReads: number } {
-    return { inGame, livePollMs: liveTimer ? currentPollMs : null, liveReads: liveReadsTotal };
+export function getMonitorStats(): {
+    inGame: boolean;
+    livePollMs: number | null;
+    liveReads: number;
+    lastEndReason: string | null;
+} {
+    return {
+        inGame,
+        livePollMs: liveTimer ? currentPollMs : null,
+        liveReads: liveReadsTotal,
+        lastEndReason: lastMatchEndReason,
+    };
 }
 
 /** Optional hook so main window can hide / pause work while League is running. */
@@ -332,7 +350,18 @@ function resetMatchCaches(): void {
     lastKeepOnTopAt = 0;
     lastLiveProofAt = 0;
     trustedGameTime = 0;
+    playMomentSnapshot = null;
+    resetJungleThreatClock();
     resetSummonerTracker();
+}
+
+function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): ReturnType<typeof buildOverlayPayload> {
+    const state = { ...payload, inGame: true } as PlayOverlayState;
+    const { cues, recap } = tickPlayMoments(playMomentSnapshot, state);
+    playMomentSnapshot = snapshotFromState(state);
+    appendPlayRecap(recap);
+    if (!cues.length) return payload;
+    return { ...payload, momentCues: cues } as ReturnType<typeof buildOverlayPayload>;
 }
 
 function phaseHoldMs(phase: string | null): number {
@@ -348,15 +377,16 @@ function considerMatchEnd(liveGameTime: number | null): void {
     if (!inGame) return;
     const phase = lcuSocket.phase;
     const silenceMs = lastLiveProofAt > 0 ? Date.now() - lastLiveProofAt : 0;
-    if (
-        shouldEndMatch({
-            phase,
-            liveSilenceMs: silenceMs,
-            phaseHeldMs: phaseHoldMs(phase),
-            liveGameTime,
-            trustedGameTime,
-        })
-    ) {
+    const input = {
+        phase,
+        liveSilenceMs: silenceMs,
+        phaseHeldMs: phaseHoldMs(phase),
+        liveGameTime,
+        trustedGameTime,
+    };
+    const reason = describeEndMatchReason(input);
+    if (reason) {
+        lastMatchEndReason = reason;
         endGameSession();
     }
 }
@@ -407,6 +437,11 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(): void {
     console.info('[match] started');
     inGame = true;
+    lastMatchEndReason = null;
+    playMomentSnapshot = null;
+    clearPlayRecap();
+    resetJungleThreatClock();
+    setOverlayMatchActive(true);
     lastLiveProofAt = Date.now();
     if (destroyOverlayTimer) {
         clearTimeout(destroyOverlayTimer);
@@ -429,8 +464,9 @@ function beginMatch(): void {
 
 function endGameSession(): void {
     if (!inGame) return;
-    console.info('[match] ended');
+    console.info('[match] ended', lastMatchEndReason || '(manual)');
     inGame = false;
+    setOverlayMatchActive(false);
     resetMatchCaches();
     hideOverlay();
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
@@ -516,7 +552,7 @@ async function liveTick(): Promise<void> {
             const fp = overlayFingerprint(payload);
             if (fp !== lastOverlayFingerprint) {
                 lastOverlayFingerprint = fp;
-                sendOverlayUpdate(payload);
+                sendOverlayUpdate(withPlayMoments(payload));
             }
             return;
         }

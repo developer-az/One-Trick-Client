@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
 import type { ViewId } from '../App';
-import { recordAgainst } from '../../logic/stats';
+import { recordAgainst, recordWith } from '../../logic/stats';
 import { ROLES, type DraftMember, type DraftState, type Role } from '../hooks';
 import { IconArrowRight, IconDraft } from '../icons';
 import type { Loadout } from './LoadoutView';
@@ -142,7 +142,13 @@ const TeamColumn: React.FC<{
             <div className="flex gap-1.5">
               {m?.isLocal ? <Badge tone="gold">You</Badge> : null}
               {m?.hovering ? <Badge>Hovering</Badge> : null}
-              {side === 'enemy' && m?.champion && history ? <YourRecord history={history} enemyKey={Number(m.champion.key)} /> : null}
+              {m?.champion && history ? (
+                <HistoryRecord
+                  history={history}
+                  champKey={Number(m.champion.key)}
+                  mode={side === 'enemy' ? 'against' : 'with'}
+                />
+              ) : null}
             </div>
           </div>
         );
@@ -254,12 +260,20 @@ function titleCase(s: string): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
 
-/** Your own record in past games against this champion (from match history). */
-const YourRecord: React.FC<{ history: MatchSummary[]; enemyKey: number }> = ({ history, enemyKey }) => {
-  const r = recordAgainst(history, enemyKey);
+/** Your record with or against this champion from match history. */
+const HistoryRecord: React.FC<{
+  history: MatchSummary[];
+  champKey: number;
+  mode: 'against' | 'with';
+}> = ({ history, champKey, mode }) => {
+  const r = mode === 'against' ? recordAgainst(history, champKey) : recordWith(history, champKey);
   if (!r.games) return null;
+  const title =
+    mode === 'against'
+      ? `Your games against this champion: ${r.wins} won, ${r.losses} lost`
+      : `Your games with this ally: ${r.wins} won, ${r.losses} lost`;
   return (
-    <span title={`Your games against this champion: ${r.wins} won, ${r.losses} lost`}>
+    <span title={title}>
       <Badge tone={r.games < 5 ? 'muted' : r.low > 0.5 ? 'teal' : r.high < 0.5 ? 'red' : 'muted'}>
         You {r.wins}–{r.losses}
       </Badge>

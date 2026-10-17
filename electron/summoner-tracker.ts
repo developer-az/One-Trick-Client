@@ -139,6 +139,8 @@ export function hastedCooldownMs(baseCdSeconds: number, haste = 0): number {
 }
 
 let trackedLanes: EnemyLaneSpells[] = [];
+/** Champ select pins — live position flicker must not reshuffle Bot/Supp/Mid. */
+const pinnedByRole = new Map<TrackedRole, { championId?: number; norm: string }>();
 /** False until the first event batch of a match has been seen. */
 let eventsPrimed = false;
 let processedEventIds = new Set<number>();
@@ -163,6 +165,7 @@ export function getEnemyBotSummoners(): EnemyLaneSpells[] {
 
 export function resetSummonerTracker(): void {
   trackedLanes = [];
+  pinnedByRole.clear();
   processedEventIds = new Set();
   eventsPrimed = false;
   lastFingerprint = '';
@@ -316,6 +319,7 @@ export function ingestChampSelectTeam(
     const role = resolveRole(pos, name, defs);
     if (!role) continue;
     upsertLane(role, name || role, m.championId, defs);
+    pinnedByRole.set(role, { championId: m.championId, norm: normChamp(name) });
   }
 }
 
@@ -345,7 +349,16 @@ export function ingestLivePlayers(
     candidates.push({ champ: e.championName, defs, fixed });
   }
 
-  for (const [champ, role] of assignLaneRoles(candidates)) {
+  const assigned = assignLaneRoles(candidates);
+  for (const role of LANE_ROLES) {
+    const pin = pinnedByRole.get(role);
+    if (!pin?.norm) continue;
+    const match = candidates.find(
+      (c) => normChamp(c.champ) === pin.norm || (pin.championId && c.champ === `#${pin.championId}`)
+    );
+    if (match) assigned.set(match.champ, role);
+  }
+  for (const [champ, role] of assigned) {
     const c = candidates.find((x) => x.champ === champ);
     if (!c) continue;
     if (c.defs.length === 0) {
@@ -466,10 +479,12 @@ export function ingestLiveEvents(
           startSpellCd(lane, 'Exhaust', 'death', { at });
         }
 
-        // Flash: only if currently ready (never restarts mid-CD).
-        // Live Client has no cast events — death while Flash is up is still the
-        // best available signal; press PageUp/PageDown to correct.
-        startSpellCd(lane, 'Flash', 'death', { at });
+        // Flash: first death only while armed (later deaths are too noisy).
+        if (lane.flashDeathArmed !== false && lane.spells.some((s) => s.name === 'Flash')) {
+          if (startSpellCd(lane, 'Flash', 'death', { at })) {
+            lane.flashDeathArmed = false;
+          }
+        }
       }
     }
   }

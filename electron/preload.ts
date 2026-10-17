@@ -84,5 +84,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setSummonerSpells: (spellIds: [number, number]) => ipcRenderer.invoke('lcu-set-summoner-spells', spellIds),
     relaunchApp: () => ipcRenderer.invoke('app-relaunch'),
     getPerfStats: () => ipcRenderer.invoke('perf-stats'),
+    getMatchRecap: () => ipcRenderer.invoke('match-recap-get'),
     reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),
 });

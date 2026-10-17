@@ -90,3 +90,15 @@ export function shouldEndMatch(input: EndMatchInput): boolean {
     // Socket dropped and the lockfile is gone, or the phase is unknown.
     return input.liveSilenceMs >= LIVE_SILENCE_END_MS;
 }
+
+/** Human-readable reason when `shouldEndMatch` is true — for debug / perf panel. */
+export function describeEndMatchReason(input: EndMatchInput): string | null {
+    if (!shouldEndMatch(input)) return null;
+    if (isTerminalPhase(input.phase)) {
+        return `terminal_phase:${input.phase ?? 'unknown'} held ${Math.round(input.phaseHeldMs / 1000)}s`;
+    }
+    if (isOutOfGamePhase(input.phase)) {
+        return `menu_phase:${input.phase ?? 'unknown'} live_silent ${Math.round(input.liveSilenceMs / 1000)}s`;
+    }
+    return `live_silent ${Math.round(input.liveSilenceMs / 1000)}s phase=${input.phase ?? 'null'}`;
+}

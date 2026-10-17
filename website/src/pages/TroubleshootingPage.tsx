@@ -36,6 +36,7 @@ export function TroubleshootingPage() {
         <li>The HUD appears when a match starts, not in the client menus.</li>
         <li>Ctrl+Shift+H shows it again if it was hidden.</li>
         <li>Check Performance → In-game overlay is on.</li>
+        <li>If the HUD vanishes mid-match, update to v1.5.0 or newer, disable “Only while holding Tab” unless you mean to use it, and check Performance for the last overlay close reason after the game.</li>
         <li>Turn Frames on before using Align or Sync LoL for HUD and minimap frames.</li>
       </ul>
 

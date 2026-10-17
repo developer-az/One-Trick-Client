@@ -73,6 +73,8 @@ export interface OverlayState {
   enemyBotSummoners?: OverlayBotSummoner[];
   activePlayerLevel?: number;
   timestamp?: number;
+  /** Live blunder/brilliant lines from main process (moment-* ids). */
+  momentCues?: Array<Pick<OverlayCue, 'id' | 'label' | 'detail' | 'urgency' | 'maxAgeSec'>>;
 }
 
 export interface OverlayCue {
@@ -151,6 +153,19 @@ export function remainingBuildItems(state: OverlayState, build: Build | null | u
   return trackBuildProgress(state.localPlayer?.items, build).remaining;
 }
 
+function mergeMomentCues(base: OverlayCue[], state: OverlayState): OverlayCue[] {
+  const moments = state.momentCues || [];
+  if (!moments.length) return base;
+  const seen = new Set<string>();
+  return [...moments, ...base]
+    .filter((c) => {
+      if (seen.has(c.id)) return false;
+      seen.add(c.id);
+      return true;
+    })
+    .slice(0, 4);
+}
+
 /** Practical cues from Live Client + matchup analysis — levels, items, clock, mid/bot route. */
 export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}): OverlayCue[] {
   const cues: OverlayCue[] = [];
@@ -158,15 +173,15 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
 
   const profileId = ctx.profileId || resolveProfileId(state);
   if (profileId === 'yone-mid') {
-    return finalizeCues(buildYoneCues(state, ctx), state, profileId);
+    return mergeMomentCues(finalizeCues(buildYoneCues(state, ctx), state, profileId), state);
   }
   if (profileId === 'pantheon-support') {
-    return finalizeCues(buildPantheonCues(state, ctx), state, profileId);
+    return mergeMomentCues(finalizeCues(buildPantheonCues(state, ctx), state, profileId), state);
   }
   if (profileId === 'pyke-support') {
-    return finalizeCues(buildPykeCues(state, ctx), state, profileId);
+    return mergeMomentCues(finalizeCues(buildPykeCues(state, ctx), state, profileId), state);
   }
-  return finalizeCues(buildGenericCues(state), state, profileId);
+  return mergeMomentCues(finalizeCues(buildGenericCues(state), state, profileId), state);
 }
 
 /** Shared jungle / vision / wave / threat helpers — no authored-doctrine spam. */

@@ -258,11 +258,12 @@ export function profileIdFromChampion(
   return profileFromChampionName(name, role)?.id || 'pyke-support';
 }
 
-export function profileFocusLane(profileId: ProfileId): 'mid' | 'bot' {
+export function profileFocusLane(profileId: ProfileId): 'mid' | 'bot' | 'top' {
   if (profileId === 'yone-mid') return 'mid';
   if (isGenericProfileId(profileId)) {
     const role = parseGenericProfileId(profileId)?.role;
-    if (role === 'Mid' || role === 'Top' || role === 'Jungle') return 'mid';
+    if (role === 'Top') return 'top';
+    if (role === 'Mid' || role === 'Jungle') return 'mid';
   }
   return 'bot';
 }

@@ -97,6 +97,13 @@ function norm(name: string): string {
   return name.toLowerCase().replace(/[^a-z]/g, '');
 }
 
+/** When a HIGH window opens, hold it for profile.redWindowSec of game time. */
+let highRiskSinceGameTime: number | null = null;
+
+export function resetJungleThreatClock(): void {
+  highRiskSinceGameTime = null;
+}
+
 function profileFor(name: string): JunglerPathProfile | null {
   const n = norm(name);
   if (JUNGLER_DB[n]) return JUNGLER_DB[n];
@@ -149,16 +156,19 @@ export function assessJungleThreat(
       summonerSpellOne?: { displayName?: string };
       summonerSpellTwo?: { displayName?: string };
     };
+    isDead?: boolean;
   }>,
-  focusLane: 'bot' | 'mid' = 'bot'
+  focusLane: 'bot' | 'mid' | 'top' = 'bot'
 ): JungleThreat | null {
-  // Prefer Smite holder — Live Client often leaves position blank mid-game
+  const smiteHolders = enemies.filter((e) => hasSmite(e));
+  const jungleTagged = enemies.filter((e) => {
+    const p = (e.position || '').toUpperCase();
+    return p === 'JUNGLE' || p === 'JNG';
+  });
   const jg =
-    enemies.find((e) => hasSmite(e)) ||
-    enemies.find((e) => {
-      const p = (e.position || '').toUpperCase();
-      return p === 'JUNGLE' || p === 'JNG';
-    }) ||
+    jungleTagged.find((e) => hasSmite(e)) ||
+    jungleTagged[0] ||
+    (smiteHolders.length === 1 ? smiteHolders[0] : null) ||
     enemies.find((e) => profileFor(e.championName) != null);
 
   if (!jg) {
@@ -173,6 +183,19 @@ export function assessJungleThreat(
       detail: 'No Smite / jg role yet — play like river is contested.',
       squareReason: 'Fog risk',
       clearStyle: 'flex',
+    };
+  }
+
+  if (jg.isDead) {
+    return {
+      junglerName: jg.championName,
+      sideBias: 'unknown',
+      gankRisk: 'low',
+      probability: 12,
+      label: 'Jg down',
+      detail: `${jg.championName} dead — window to shove / invade.`,
+      squareReason: 'Jg respawn',
+      clearStyle: profileFor(jg.championName)?.style || 'flex',
     };
   }
 
@@ -204,10 +227,10 @@ export function assessJungleThreat(
       label = early ? 'Jg bot crab' : 'Scuttle window';
       squareReason = early ? 'Crab contest — leave river' : 'Scuttle fog';
       detail = profile?.notes || `${name} toward first crab — ward pixel ~2:15.`;
-    } else if (focusLane === 'mid') {
+    } else if (focusLane === 'mid' || focusLane === 'top') {
       gankRisk = 'medium';
-      probability = 50;
-      label = 'Scuttle / mid river';
+      probability = focusLane === 'top' ? 45 : 50;
+      label = focusLane === 'top' ? 'Top river / crab' : 'Scuttle / mid river';
       squareReason = 'River fog';
       detail = `${name} crab fight — short trades only with river ward.`;
     }
@@ -271,13 +294,26 @@ export function assessJungleThreat(
     detail = `${name} CS ${cs} low for ${minutes.toFixed(1)}m — assume on the map.`;
   }
 
+  if (gankRisk === 'high' && profile) {
+    if (highRiskSinceGameTime == null) highRiskSinceGameTime = gameTime;
+    const held = gameTime - highRiskSinceGameTime;
+    if (held > profile.redWindowSec) {
+      gankRisk = 'medium';
+      probability = Math.min(probability, 55);
+      squareReason = 'Fog risk';
+      highRiskSinceGameTime = null;
+    }
+  } else {
+    highRiskSinceGameTime = null;
+  }
+
   // Cap how long "high" stays without a missing-CS spike — soft decay outside windows
   if (gankRisk === 'high' && profile) {
     const inFirst = minutes >= gankStart && minutes <= gankEnd;
     const inCrab = minutes >= 2.1 && minutes <= 3.15;
     const inDrake = minutes >= 12 && minutes <= 16;
     const missing = minutes >= 3 && minutes <= 8 && cs > 0 && cs < expectedCs * 0.55;
-    if (!inFirst && !inCrab && !inDrake && !missing) {
+    if (!inFirst && !inCrab && !inDrake && !missing && highRiskSinceGameTime == null) {
       gankRisk = 'medium';
       probability = Math.min(probability, 55);
       squareReason = 'Fog risk';
