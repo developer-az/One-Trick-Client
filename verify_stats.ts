@@ -50,7 +50,7 @@ assert(summarize({ ...full, participants: [full.participants[0]] }, null)?.champ
 const games = [
   { ...s!, enemies: e.enemies, laneOpponent: e.laneOpponent, allies: a.allies, lanePartner: a.lanePartner },
   { ...s!, gameId: 8, win: false, enemies: [99], laneOpponent: 99, allies: a.allies, lanePartner: a.lanePartner },
-  { ...s!, gameId: 9, championId: 80, enemies: [51], allies: a.allies },
+  { ...s!, gameId: 9, championId: 80, enemies: [51], allies: [], lanePartner: null },
 ];
 const champs = byChampion(games);
 assert(champs[0].championId === 555 && champs[0].games === 2 && champs[0].wins === 1, 'byChampion');
