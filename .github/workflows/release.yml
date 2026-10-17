@@ -63,6 +63,9 @@ jobs:
       - name: Build Web
         run: npm run build
 
+      - name: Electron dist paths
+        run: npm run verify:electron-paths
+
       - name: Check for TypeScript errors
         run: npx tsc --noEmit
 
@@ -129,6 +132,9 @@ jobs:
 
       - name: Build Electron Main
         run: npm run electron:build
+
+      - name: Electron dist paths
+        run: npm run verify:electron-paths
 
       - name: Build Electron App
         run: npx electron-builder --publish never --win zip nsis

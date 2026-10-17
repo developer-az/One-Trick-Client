@@ -62,9 +62,10 @@ import {
 import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive, getKeyHookStatus } from './global-key-hook';
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
+import { buildIconCandidates, distDir, publicDir } from './paths';
 
-process.env.DIST = path.join(__dirname, '../dist');
-process.env.VITE_PUBLIC = app.isPackaged ? process.env.DIST : path.join(__dirname, '../public');
+process.env.DIST = distDir();
+process.env.VITE_PUBLIC = publicDir();
 
 let win: BrowserWindow | null;
 let tray: Tray | null = null;
@@ -128,13 +129,7 @@ function createTray(): void {
 }
 
 function resolveAppIcon(): string {
-    const candidates = [
-        path.join(process.env.VITE_PUBLIC || '', 'icon.ico'),
-        path.join(process.env.VITE_PUBLIC || '', 'icon.png'),
-        path.join(__dirname, '../build/icon.ico'),
-        path.join(__dirname, '../build/icon.png'),
-    ];
-    for (const candidate of candidates) {
+    for (const candidate of buildIconCandidates()) {
         if (candidate && fs.existsSync(candidate)) return candidate;
     }
     return path.join(process.env.VITE_PUBLIC || '', 'icon.png');

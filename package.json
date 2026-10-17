@@ -1,7 +1,7 @@
 {
   "name": "pyke-dominator",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
@@ -74,6 +74,7 @@
     "verify:match": "npx --yes tsx verify_match_lifecycle.ts",
     "verify:jungle": "npx --yes tsx verify_jungle.ts",
     "verify:play-moments": "npx --yes tsx verify_play_moments.ts",
+    "verify:electron-paths": "npx --yes tsx verify_electron_paths.ts",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",

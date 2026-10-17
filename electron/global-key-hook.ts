@@ -10,10 +10,10 @@
  * not deliver keys from the elevated process to a lower-integrity hook. Run
  * One Trick as admin in that case (or don't elevate League).
  */
-import { app } from 'electron';
 import { spawn, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { nativeKeyHookPath } from './paths';
 
 export interface FlashKeyHandlers {
     onPrimary: () => void;
@@ -36,12 +36,7 @@ const DEBOUNCE_MS = 150;
 const MAX_RESTARTS = 5;
 
 function helperPath(): string | null {
-    const candidates = app.isPackaged
-        ? [path.join(process.resourcesPath, 'onetrick-keys.exe')]
-        : [
-              path.join(__dirname, '../native/bin/onetrick-keys.exe'),
-              path.join(process.cwd(), 'native/bin/onetrick-keys.exe'),
-          ];
+    const candidates = [nativeKeyHookPath(), path.join(process.cwd(), 'native/bin/onetrick-keys.exe')];
     for (const candidate of candidates) {
         try {
             if (fs.existsSync(candidate)) return candidate;
