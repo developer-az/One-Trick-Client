@@ -54,7 +54,9 @@ export function DownloadPage() {
       <h2>Updating</h2>
       <p>
         Download the new zip and replace the previous folder. If you used the optional setup program, run the new
-        setup the same way. It still installs for the current user only.
+        setup the same way. It still installs for the current user only. Setup removes old &quot;Pyke Dominator&quot;
+        shortcuts; use the new Start menu entry named One Trick. If the taskbar still shows a generic icon, unpin and
+        pin again from the fresh shortcut.
       </p>
 
       <h2>Optional setup program</h2>

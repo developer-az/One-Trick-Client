@@ -1,4 +1,15 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, clipboard, Menu, Tray, nativeImage } from 'electron';
+import './configure-app-branding';
+import {
+    app,
+    BrowserWindow,
+    ipcMain,
+    globalShortcut,
+    clipboard,
+    Menu,
+    Tray,
+    nativeImage,
+    type NativeImage,
+} from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { connectToLCU, makeLCURequest } from './lcu-connector';
@@ -104,7 +115,7 @@ function sendToDashboard(channel: string, payload: unknown): void {
 function createTray(): void {
     if (tray) return;
     try {
-        const image = nativeImage.createFromPath(resolveAppIcon());
+        const image = loadAppIconImage();
         tray = new Tray(image.isEmpty() ? image : image.resize({ width: 16, height: 16 }));
     } catch {
         return;
@@ -135,13 +146,20 @@ function resolveAppIcon(): string {
     return path.join(process.env.VITE_PUBLIC || '', 'icon.png');
 }
 
+function loadAppIconImage(): NativeImage {
+    const iconPath = resolveAppIcon();
+    const image = nativeImage.createFromPath(iconPath);
+    if (!image.isEmpty()) return image;
+    return nativeImage.createFromPath(path.join(process.env.VITE_PUBLIC || '', 'icon.png'));
+}
+
 function createWindow() {
     win = new BrowserWindow({
         width: 1240,
         height: 860,
         minWidth: 880,
         minHeight: 640,
-        icon: resolveAppIcon(),
+        icon: loadAppIconImage(),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -328,9 +346,6 @@ app.on('will-quit', () => {
 
 app.whenReady().then(() => {
     if (!primaryInstance) return;
-    if (process.platform === 'win32') {
-        app.setAppUserModelId('com.onetrick.app');
-    }
     createWindow();
     // Overlay is created only when a match starts (see game-monitor) —
     // avoid a permanent fullscreen transparent window sitting idle.

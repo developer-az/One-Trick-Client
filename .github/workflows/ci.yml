@@ -67,6 +67,9 @@ jobs:
       - name: Electron dist paths
         run: npm run verify:electron-paths
 
+      - name: Windows packaging metadata
+        run: npm run verify:packaging
+
       - name: Check for TypeScript errors
         run: npx tsc --noEmit
 

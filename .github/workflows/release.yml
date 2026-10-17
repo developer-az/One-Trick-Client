@@ -57,6 +57,9 @@ jobs:
       - name: Play moment cues
         run: npm run verify:play-moments
 
+      - name: Windows packaging metadata
+        run: npm run verify:packaging
+
       - name: Build TypeScript
         run: npm run electron:build
 
@@ -103,7 +106,9 @@ jobs:
         run: |
           $pkg = Get-Content package.json -Raw | ConvertFrom-Json
           if (-not $pkg.build) { throw "Missing build config in package.json" }
-          if ($pkg.build.win.signAndEditExecutable -ne $false) { throw "win.signAndEditExecutable must remain false" }
+          if ($pkg.build.win.signAndEditExecutable -ne $true) { throw "win.signAndEditExecutable must be true so the exe embeds build/icon.ico" }
+          if ($pkg.name -ne 'one-trick') { throw "package name must be one-trick (not legacy pyke-dominator)" }
+          if (-not (Test-Path "build/installer.nsh")) { throw "Missing build/installer.nsh for legacy shortcut cleanup" }
           if (-not (Test-Path "build/icon.ico")) { throw "Missing build/icon.ico" }
           if (-not (Test-Path "packaging/INSTALL.txt")) { throw "Missing packaging/INSTALL.txt" }
           if (-not $pkg.build.extraFiles) { throw "build.extraFiles must ship INSTALL.txt" }

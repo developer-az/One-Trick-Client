@@ -1,7 +1,7 @@
 {
-  "name": "pyke-dominator",
+  "name": "one-trick",
   "private": true,
-  "version": "1.5.4",
+  "version": "1.5.5",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
@@ -25,13 +25,15 @@
     "win": {
       "icon": "build/icon.ico",
       "executableName": "OneTrick",
+      "publisherName": "Az040",
+      "legalTrademarks": "One Trick",
       "requestedExecutionLevel": "asInvoker",
       "artifactName": "One.Trick.${version}.${ext}",
       "target": [
         "zip",
         "nsis"
       ],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true
     },
     "nsis": {
       "oneClick": false,
@@ -45,7 +47,8 @@
       "artifactName": "One.Trick.Setup.${version}.${ext}",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
-      "installerHeaderIcon": "build/icon.ico"
+      "installerHeaderIcon": "build/icon.ico",
+      "include": "build/installer.nsh"
     },
     "extraFiles": [
       {
@@ -75,6 +78,7 @@
     "verify:jungle": "npx --yes tsx verify_jungle.ts",
     "verify:play-moments": "npx --yes tsx verify_play_moments.ts",
     "verify:electron-paths": "npx --yes tsx verify_electron_paths.ts",
+    "verify:packaging": "npx --yes tsx verify_packaging.ts",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
