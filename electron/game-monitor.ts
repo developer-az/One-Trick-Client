@@ -9,7 +9,6 @@ import {
 import {
     describeEndMatchReason,
     isInGamePhase,
-    shouldEndMatch,
 } from './match-lifecycle';
 import {
     showOverlay,
