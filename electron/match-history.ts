@@ -226,9 +226,18 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
 
     const cache = loadCache();
     let fetched = 0;
+    const applyDetail = (g: MatchSummary, info: ReturnType<typeof enemiesFrom>, allyInfo: ReturnType<typeof alliesFrom>): void => {
+        cache[g.gameId] = { ...info, ...allyInfo };
+        g.enemies = info.enemies;
+        g.laneOpponent = info.laneOpponent;
+        g.allies = allyInfo.allies;
+        g.lanePartner = allyInfo.lanePartner;
+    };
+
     for (const g of out) {
         const hit = cache[g.gameId];
-        if (hit) {
+        const needsAllyBackfill = !!hit?.enemies?.length && !hit.allies?.length;
+        if (hit && !needsAllyBackfill) {
             g.enemies = hit.enemies;
             g.laneOpponent = hit.laneOpponent;
             if (hit.allies?.length) g.allies = hit.allies;
@@ -236,7 +245,15 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
             continue;
         }
         // Never fetch details during a match; one request at a time otherwise.
-        if (fetched >= detailLimit || !canFetchDetails()) continue;
+        if (fetched >= detailLimit || !canFetchDetails()) {
+            if (hit) {
+                g.enemies = hit.enemies;
+                g.laneOpponent = hit.laneOpponent;
+                if (hit.allies?.length) g.allies = hit.allies;
+                if (hit.lanePartner != null) g.lanePartner = hit.lanePartner;
+            }
+            continue;
+        }
         try {
             const full = (await makeLCURequest('GET', `/lol-match-history/v1/games/${g.gameId}`, undefined, 8000)) as RawGame | null;
             fetched++;
@@ -244,11 +261,7 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
             const info = enemiesFrom(full, puuid);
             const allyInfo = alliesFrom(full, puuid);
             if (!info.enemies.length) continue;
-            cache[g.gameId] = { ...info, ...allyInfo };
-            g.enemies = info.enemies;
-            g.laneOpponent = info.laneOpponent;
-            g.allies = allyInfo.allies;
-            g.lanePartner = allyInfo.lanePartner;
+            applyDetail(g, info, allyInfo);
         } catch {
             break;
         }

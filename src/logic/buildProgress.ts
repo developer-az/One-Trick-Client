@@ -6,6 +6,7 @@
 
 import {
   ALL_BOOT_IDS,
+  MID_TIER_BOOT_IDS,
   nextBootStep,
   ownsAnyCompleteBoots,
   ownsFinishedBoots,
@@ -143,6 +144,76 @@ export function trackBuildProgress(
     completedCount,
     hasBoots,
     hasFinishedBoots: bootDone,
+  };
+}
+
+/** Trinket / lens — not counted toward the six item slots. */
+export const TRINKET_ITEM_IDS = new Set(['3340', '3363', '3364']);
+
+export function countFilledItemSlots(
+  inventory: Array<{ itemID: number }> | undefined
+): number {
+  return (inventory || []).filter((i) => {
+    if (!i.itemID || i.itemID === 0) return false;
+    const id = String(i.itemID);
+    return !TRINKET_ITEM_IDS.has(id);
+  }).length;
+}
+
+export interface SupportBootSlotAdvice {
+  action: 'sell' | 'keep';
+  label: string;
+  detail: string;
+}
+
+/**
+ * Six-slot support: sell boots for the last legendary when inventory is full.
+ * Roam boots stay longer; behind = keep MS.
+ */
+export function supportBootSlotAdvice(
+  inventory: Array<{ itemID: number }> | undefined,
+  progress: BuildProgress,
+  gameTimeSec: number,
+  opts: { behind?: boolean } = {}
+): SupportBootSlotAdvice | null {
+  if (!progress.hasFinishedBoots || !progress.next) return null;
+  if (ALL_BOOT_IDS.has(progress.next.id)) return null;
+
+  const filled = countFilledItemSlots(inventory);
+  if (filled < 6) return null;
+
+  const minutes = gameTimeSec / 60;
+  const ownedBootId = [...progress.ownedIds].find((id) => ALL_BOOT_IDS.has(id) || MID_TIER_BOOT_IDS.has(id));
+  const roamBoot = ownedBootId === '3158' || ownedBootId === '3009';
+
+  if (opts.behind) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Full inventory but behind — MS beats one extra component right now.',
+    };
+  }
+
+  if (roamBoot && minutes < 20) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Roam boots still pay off — finish another core before selling.',
+    };
+  }
+
+  if (minutes < 13) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Mid game — keep boots until two cores + quest are done.',
+    };
+  }
+
+  return {
+    action: 'sell',
+    label: 'Sell boots',
+    detail: `Six items — sell boots to buy ${progress.next.name}. Re-buy boots after if gold allows.`,
   };
 }
 

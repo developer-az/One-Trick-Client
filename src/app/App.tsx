@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
-import { IconDraft, IconGauge, IconHome, IconLoadout, IconOverlay, IconStats } from './icons';
+import { IconDraft, IconGauge, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats } from './icons';
 import { ChromeMark } from '../overlay/ChromeMark';
 import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useMatchHistory, useDraft, useLeague, useProfile, useToasts } from './hooks';
 import { leagueStatus } from './status';
@@ -12,13 +12,15 @@ import { LoadoutView } from './views/LoadoutView';
 import { OverlayView } from './views/OverlayView';
 import { PerformanceView } from './views/PerformanceView';
 import { StatsView } from './views/StatsView';
+import { MayhemView } from './views/MayhemView';
 
-export type ViewId = 'home' | 'draft' | 'loadout' | 'stats' | 'overlay' | 'performance';
+export type ViewId = 'home' | 'draft' | 'loadout' | 'mayhem' | 'stats' | 'overlay' | 'performance';
 
 const NAV: Array<{ id: ViewId; label: string; icon: React.ReactNode }> = [
   { id: 'home', label: 'Home', icon: <IconHome /> },
   { id: 'draft', label: 'Champ select', icon: <IconDraft /> },
   { id: 'loadout', label: 'Build & runes', icon: <IconLoadout /> },
+  { id: 'mayhem', label: 'ARAM Mayhem (beta)', icon: <IconMayhem /> },
   { id: 'stats', label: 'Your stats', icon: <IconStats /> },
   { id: 'overlay', label: 'In-game overlay', icon: <IconOverlay /> },
   { id: 'performance', label: 'Performance', icon: <IconGauge /> },
@@ -176,6 +178,13 @@ export const App: React.FC = () => {
             connected={league.lcu?.state === 'connected'}
             onNavigate={setView}
             onToast={push}
+          />
+        ) : null}
+        {view === 'mayhem' ? (
+          <MayhemView
+            champions={catalog.champions}
+            focusChampion={catalog.champions.find((c) => c.id === profile.championId) || null}
+            onSelectChampion={(c) => selectChampion(c, 'Support')}
           />
         ) : null}
         {view === 'stats' ? (

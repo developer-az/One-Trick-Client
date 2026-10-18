@@ -36,7 +36,13 @@ const DEBOUNCE_MS = 150;
 const MAX_RESTARTS = 5;
 
 function helperPath(): string | null {
-    const candidates = [nativeKeyHookPath(), path.join(process.cwd(), 'native/bin/onetrick-keys.exe')];
+    const localApp = process.env.LOCALAPPDATA || '';
+    const candidates = [
+        nativeKeyHookPath(),
+        path.join(process.cwd(), 'native', 'bin', 'onetrick-keys.exe'),
+        path.join(localApp, 'Programs', 'One Trick', 'resources', 'onetrick-keys.exe'),
+        path.join(localApp, 'Programs', 'one-trick', 'resources', 'onetrick-keys.exe'),
+    ];
     for (const candidate of candidates) {
         try {
             if (fs.existsSync(candidate)) return candidate;

@@ -300,9 +300,12 @@ export function buildWardStatus(
   } else if (profileFocusLane(profileId) === 'mid') {
     where = 'Cover gank path';
     why = jgBot ? 'Bot-side river while shoving' : 'River bush on shove side';
-  } else if (minutes >= 12) {
+  } else if (minutes >= 12 && minutes <= 17) {
     where = 'Own the objective';
     why = due ? 'Re-ward pit + entrance before spawn' : 'Pit deny + entrance cut';
+  } else if (minutes > 17) {
+    where = due ? 'Refresh pit vision' : 'Hold pit pink';
+    why = due ? 'Sweep + pink before next spawn' : 'Keep entrance denied between fights';
   } else {
     where = jgBot ? 'Cover bot gank path' : 'Cover crash leave';
     why = due ? 'Re-ward the entrance you play through' : 'River/tri on shove';

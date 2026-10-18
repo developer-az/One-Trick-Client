@@ -75,4 +75,16 @@ const twoSmite = assessJungleThreat(
 );
 ok(twoSmite?.junglerName === 'Maokai', `prefer jungle tag over supp smite (${twoSmite?.junglerName})`);
 
+resetJungleThreatClock();
+const jgBase = {
+  championName: 'Viego',
+  level: 9,
+  position: 'JUNGLE',
+  scores: { creepScore: 72 },
+  summonerSpells: { summonerSpellOne: { displayName: 'Smite' }, summonerSpellTwo: { displayName: 'Flash' } },
+};
+assessJungleThreat(8 * 60, [jgBase], 'bot');
+const stalled = assessJungleThreat(8 * 60 + 32, [{ ...jgBase, scores: { creepScore: 72 } }], 'bot');
+ok(stalled?.label === 'Jg base / reset', `cs stall reads base (${stalled?.label})`);
+
 if (!process.exitCode) console.log('verify:jungle ok');

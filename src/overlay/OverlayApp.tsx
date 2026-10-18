@@ -5,12 +5,12 @@ import {
   type MatchupAnalysis,
 } from '../logic/pykeLogic';
 import { getProfile, isProfileId, loadStoredProfileId, type ProfileId } from '../logic/profiles';
+import { trackBuildProgress, type BuildItemRef } from '../logic/buildProgress';
 import {
   buildInGameCues,
   formatGameTime,
   getGankStatus,
   getWardStatus,
-  remainingBuildItems,
   resolveAllyAdcName,
   resolveAllyMidName,
   resolveAllyJungleName,
@@ -39,6 +39,18 @@ import {
   type HudLayout,
 } from './hudLayout';
 import { computeLeagueGeometry } from './leagueGeometry';
+import bundledMayhem from '../data/mayhem/bundle.json';
+import {
+  adjustBuildForMayhem,
+  championForMayhem,
+  isMayhemGame,
+  isAramOrMayhem,
+  rankMayhemChoices,
+} from '../logic/mayhem';
+import type { MayhemBundle } from '../logic/mayhem/types';
+import { OverlayMayhemPanel } from './OverlayMayhemPanel';
+
+const mayhemBundle = bundledMayhem as MayhemBundle;
 
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
@@ -119,7 +131,8 @@ export const OverlayApp: React.FC = () => {
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
-  const profile = useMemo(() => getProfile(profileId), [profileId]);
+  const resolvedProfileId = useMemo(() => resolveProfileId(state), [state]);
+  const profile = useMemo(() => getProfile(resolvedProfileId), [resolvedProfileId]);
 
   useEffect(() => {
     const base = state.gameTime ?? 0;
@@ -320,13 +333,24 @@ export const OverlayApp: React.FC = () => {
     [situationKey, enemyKey]
   );
 
-  const build: Build | null = useMemo(
-    () =>
-      enemyChampions.length > 0
-        ? profile.calculateBuild(enemyChampions, adcForProfile, allyPartner, situation)
-        : null,
-    [enemyChampions, adcForProfile, allyPartner, profile, situation]
-  );
+  const inMayhem = isMayhemGame(state.gameMode, state.mapName);
+  const inAram = isAramOrMayhem(state.gameMode, state.mapName);
+
+  const build: Build | null = useMemo(() => {
+    const base = profile.calculateBuild(enemyChampions, adcForProfile, allyPartner, situation);
+    if (inMayhem && base) {
+      return adjustBuildForMayhem(base, state.mayhemOwnedIds || [], mayhemBundle);
+    }
+    return base;
+  }, [
+    enemyChampions,
+    adcForProfile,
+    allyPartner,
+    profile,
+    situation,
+    inMayhem,
+    state.mayhemOwnedIds,
+  ]);
 
   const analysis: MatchupAnalysis | null = useMemo(
     () =>
@@ -402,7 +426,90 @@ export const OverlayApp: React.FC = () => {
 
   const wardStatus = useMemo(() => getWardStatus(state, profileId), [state, profileId]);
   const gankStatus = useMemo(() => getGankStatus(state, profileId), [state, profileId]);
-  const itemsLeft = useMemo(() => remainingBuildItems(state, build).slice(0, 2), [state, build]);
+
+  const buildProgress = useMemo(
+    () => trackBuildProgress(state.localPlayer?.items, build),
+    [state.localPlayer?.items, build]
+  );
+
+  /** Buy rail — in Mayhem keep icons up for the whole match (don't vanish when remaining blips empty). */
+  const buyQueue = useMemo((): BuildItemRef[] => {
+    if (!build) return [];
+    const rem = buildProgress.remaining;
+    if (rem.length > 0) return rem.slice(0, 2);
+    if (inMayhem) {
+      if (buildProgress.next) return [buildProgress.next, ...rem].slice(0, 2);
+      const unowned = buildProgress.path.filter((i) => !buildProgress.ownedIds.has(i.id));
+      if (unowned.length > 0) return unowned.slice(0, 2);
+      if (buildProgress.path.length > 0) return buildProgress.path.slice(-2);
+    }
+    return rem.slice(0, 2);
+  }, [build, buildProgress, inMayhem]);
+
+  const buyQueueComplete =
+    inMayhem &&
+    !!build &&
+    buildProgress.remaining.length === 0 &&
+    buildProgress.path.every((i) => buildProgress.ownedIds.has(i.id));
+
+  const mayhemChampion = useMemo(
+    () => championForMayhem(state.localPlayer?.championName, champions),
+    [state.localPlayer?.championName, champions]
+  );
+
+  const [latchedMayhemOffers, setLatchedMayhemOffers] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!inMayhem || !state.mayhemAugmentWindow || state.mayhemAugmentDismissedAt) {
+      setLatchedMayhemOffers([]);
+      return;
+    }
+    const incoming = state.mayhemOfferIds ?? [];
+    if (incoming.length >= 3) {
+      setLatchedMayhemOffers(incoming.slice(0, 3));
+      return;
+    }
+    if (incoming.length > 0) {
+      setLatchedMayhemOffers((prev) => {
+        if (prev.length >= 3 && incoming.length < 3) return prev;
+        if (incoming.length < prev.length) return prev;
+        return incoming.slice(0, 3);
+      });
+    }
+  }, [inMayhem, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
+
+  const displayMayhemOfferIds = useMemo(() => {
+    if (!state.mayhemAugmentWindow) return [];
+    const incoming = state.mayhemOfferIds ?? [];
+    if (incoming.length >= 3) return incoming.slice(0, 3);
+    if (incoming.length > 0) {
+      if (latchedMayhemOffers.length >= 3 && incoming.length < 3) return latchedMayhemOffers;
+      return incoming.slice(0, 3);
+    }
+    if (latchedMayhemOffers.length > 0) return latchedMayhemOffers;
+    return [];
+  }, [state.mayhemOfferIds, state.mayhemAugmentWindow, latchedMayhemOffers]);
+
+  const mayhemRanked = useMemo(() => {
+    if (!mayhemChampion || !inMayhem || !displayMayhemOfferIds.length) return [];
+    const owned = state.mayhemOwnedIds || [];
+    return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
+  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem]);
+
+  const mayhemDismissedRecently =
+    typeof state.mayhemAugmentDismissedAt === 'number' &&
+    Date.now() - state.mayhemAugmentDismissedAt < 120_000;
+
+  const mayhemPanelActive =
+    inMayhem &&
+    hudModules.mayhem &&
+    !!state.mayhemAugmentWindow &&
+    !mayhemDismissedRecently &&
+    displayMayhemOfferIds.length > 0;
+
+  const mayhemLayoutPos =
+    layoutElement(hudLayout, 'mayhem') ||
+    layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
 
   const handleHide = () => {
     void window.electronAPI?.toggleOverlay?.().catch((error) => {
@@ -494,16 +601,23 @@ export const OverlayApp: React.FC = () => {
     const liveName = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
     const mismatch = !!liveName && liveName !== profile.championId.toLowerCase().replace(/[^a-z]/g, '');
     const sumsModuleOn =
+      !inAram &&
       hudModules.sums &&
       slotHasModule('sums') &&
       layoutElement(hudLayout, 'sums')?.visible !== false;
     return (
       sumsModuleOn ||
-      (hudModules.gank && !!gankStatus && slotHasModule('gank')) ||
-      (mismatch && slotHasModule('gank')) ||
-      (hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
-      (hudModules.action && cues.length > 0 && slotHasModule('action')) ||
-      (hudModules.buy && itemsLeft.length > 0 && slotHasModule('buy'))
+      (!inAram && hudModules.gank && !!gankStatus && slotHasModule('gank')) ||
+      (!inAram && mismatch && slotHasModule('gank')) ||
+      (!mayhemPanelActive && hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
+      (!inAram && hudModules.action && cues.length > 0 && slotHasModule('action')) ||
+      ((!inAram || inMayhem) &&
+        !mayhemPanelActive &&
+        hudModules.buy &&
+        buyQueue.length > 0 &&
+        slotHasModule('buy')) ||
+      (mayhemPanelActive &&
+        (slotHasModule('mayhem') || slotHasModule('vision') || slot?.id === 'slot-center' || slot?.id === 'slot-0'))
     );
   })();
 
@@ -520,29 +634,38 @@ export const OverlayApp: React.FC = () => {
   const profileMatchesLocal = !liveCompact || liveCompact === profileCompact;
 
   const showFrames = alignMode || (hudModules.frames && !compactPanel);
-  const showSumsRail = hudModules.sums && (state.enemyBotSummoners?.length ?? 0) > 0;
   const sumsModuleOn =
+    !inAram &&
     hudModules.sums &&
     slotHasModule('sums') &&
     layoutElement(hudLayout, 'sums')?.visible !== false;
+  const showSumsRail = sumsModuleOn && (state.enemyBotSummoners?.length ?? 0) > 0;
   const showSums = showSumsRail;
-  const showGank = hudModules.gank && !!gankStatus;
-  const showVision = hudModules.vision && !!wardStatus;
-  const showAction = hudModules.action && cues.length > 0;
-  const showBuy = hudModules.buy && itemsLeft.length > 0;
+  const showGank = hudModules.gank && !!gankStatus && !inAram;
+  const showVision = hudModules.vision && !!wardStatus && !mayhemPanelActive;
+  const showAction = hudModules.action && cues.length > 0 && !inAram;
+  const showBuy =
+    hudModules.buy && buyQueue.length > 0 && (!inAram || inMayhem) && !mayhemPanelActive;
+  const mayhemOnThisWindow =
+    !lockedSlot ||
+    slotHasModule('mayhem') ||
+    slotHasModule('vision') ||
+    slot?.id === 'slot-center' ||
+    slot?.id === 'slot-0';
+  const showMayhem = mayhemPanelActive && mayhemOnThisWindow;
   const showRightRail =
     showGank || showVision || showAction || showBuy || !profileMatchesLocal;
 
   const buyRow = showBuy ? (
     <div className="flex flex-wrap gap-0.5 items-center">
-      {itemsLeft.map((item, index) => (
+      {buyQueue.map((item, index) => (
         <ItemIcon
           key={`buy-${item.id}`}
           itemId={item.id}
           alt={item.name}
-          title={item.name}
+          title={buyQueueComplete ? `${item.name} (owned)` : item.name}
           size={22}
-          className={`hud-buy-icon${index === 0 ? ' is-next' : ''}`}
+          className={`hud-buy-icon${index === 0 && !buyQueueComplete ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
         />
       ))}
     </div>
@@ -614,7 +737,7 @@ export const OverlayApp: React.FC = () => {
       {!compactPanel && !collapsed && (
         <>
           <OverlayStickers stickers={slotStickers} geo={paintGeo} />
-          {sumsModuleOn && (
+          {showSumsRail && (
           <div
             className="hud-overlay-scale hud-overlay-scale--left w-[220px]"
             style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo)}
@@ -670,6 +793,23 @@ export const OverlayApp: React.FC = () => {
           <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5">{buyRow}</div>
+            </OverlayChromePanel>
+          </div>
+          )}
+
+          {showMayhem && (
+          <div
+            className="hud-overlay-scale hud-overlay-scale--right w-[min(380px,92vw)] z-30"
+            style={layoutStyle(mayhemLayoutPos, paintGeo)}
+          >
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5">
+                <OverlayMayhemPanel
+                  championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
+                  ranked={mayhemRanked}
+                  mode="roll"
+                />
+              </div>
             </OverlayChromePanel>
           </div>
           )}
@@ -764,9 +904,16 @@ export const OverlayApp: React.FC = () => {
                   Switch profile → {state.localPlayer?.championName || '?'}
                 </div>
               ) : null}
-              {showGank ? <GankSquare threat={gankStatus} compact /> : null}
+              {showMayhem ? (
+                <OverlayMayhemPanel
+                  championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
+                  ranked={mayhemRanked}
+                  mode="roll"
+                />
+              ) : null}
+              {!inAram && showGank ? <GankSquare threat={gankStatus} compact /> : null}
               {showVision ? <WardIndicator status={wardStatus} compact /> : null}
-              {actionLine}
+              {!inAram ? actionLine : null}
               {showSums ? <SummonerTimers lanes={state.enemyBotSummoners || []} compact /> : null}
               {buyRow}
             </div>

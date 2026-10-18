@@ -109,7 +109,7 @@ export const RUNE_META: Record<number, RuneMeta> = {
     8473: { name: 'Bone Plating', icon: `${STYLE_ICON_BASE}/Resolve/BonePlating/BonePlating.png` },
     8444: { name: 'Second Wind', icon: `${STYLE_ICON_BASE}/Resolve/SecondWind/SecondWind.png` },
     8451: { name: 'Overgrowth', icon: `${STYLE_ICON_BASE}/Resolve/Overgrowth/Overgrowth.png` },
-    8242: { name: 'Unflinching', icon: `${STYLE_ICON_BASE}/Resolve/Unflinching/Unflinching.png` },
+    8242: { name: 'Unflinching', icon: `${STYLE_ICON_BASE}/Sorcery/Unflinching/Unflinching.png` },
     // Precision
     8008: { name: 'Lethal Tempo', icon: `${STYLE_ICON_BASE}/Precision/LethalTempo/LethalTempoTemp.png` },
     8021: { name: 'Fleet Footwork', icon: `${STYLE_ICON_BASE}/Precision/FleetFootwork/FleetFootwork.png` },

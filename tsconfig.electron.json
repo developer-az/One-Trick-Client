@@ -7,5 +7,16 @@
     "skipLibCheck": true,
     "moduleResolution": "node"
   },
-  "include": ["electron/**/*", "src/logic/playMoments.ts", "src/logic/situation.ts", "src/logic/jungleLogic.ts"]
+  "include": [
+    "electron/**/*",
+    "src/logic/playMoments.ts",
+    "src/logic/situation.ts",
+    "src/logic/jungleLogic.ts",
+    "src/logic/mayhem/synergy.ts",
+    "src/logic/mayhem/remote.ts",
+    "src/logic/mayhem/types.ts",
+    "src/logic/mayhem/mode.ts",
+    "src/logic/mayhem/match.ts",
+    "src/logic/mayhem/augmentSchedule.ts"
+  ]
 }

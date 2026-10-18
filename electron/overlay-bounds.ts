@@ -37,6 +37,7 @@ const MODULE_SIZE: Record<string, { w: number; h: number }> = {
     vision: { w: 236, h: 120 },
     buy: { w: 236, h: 96 },
     action: { w: 236, h: 120 },
+    mayhem: { w: 360, h: 240 },
 };
 
 const STICKER_SIZE = { w: 56, h: 56 };
@@ -159,9 +160,10 @@ export function clusterOverlayWindows(opts: {
     }));
     if (!items.length) return [];
 
-    const left = items.filter((row) => row.widget.xNorm < 0.5);
-    const right = items.filter((row) => row.widget.xNorm >= 0.5);
-    const groups = [left, right].filter((group) => group.length > 0).slice(0, MAX_SLOTS);
+    const center = items.filter((row) => row.widget.xNorm >= 0.32 && row.widget.xNorm <= 0.68);
+    const left = items.filter((row) => row.widget.xNorm < 0.32);
+    const right = items.filter((row) => row.widget.xNorm > 0.68);
+    const groups = [left, center, right].filter((group) => group.length > 0).slice(0, MAX_SLOTS);
 
     return groups.map((group, index) => {
         const box = unionRects(group.map((row) => row.rect));
@@ -177,8 +179,16 @@ export function clusterOverlayWindows(opts: {
             };
         }
         const clamped = clampToDisplay(box, display);
+        const id =
+            groups.length === 1
+                ? 'slot-0'
+                : index === 0
+                  ? 'slot-left'
+                  : index === groups.length - 1
+                    ? 'slot-right'
+                    : 'slot-center';
         return {
-            id: `slot-${index}`,
+            id,
             ...clamped,
             moduleIds: group.filter((row) => row.widget.kind === 'module').map((row) => row.widget.id),
             stickerIds: group.filter((row) => row.widget.kind === 'sticker').map((row) => row.widget.id),

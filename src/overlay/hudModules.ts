@@ -1,6 +1,6 @@
 /** Toggleable overlay widgets — new HUD features should land as modules, not more copy. */
 
-export const HUD_MODULE_IDS = ['sums', 'gank', 'vision', 'buy', 'action', 'frames'] as const;
+export const HUD_MODULE_IDS = ['sums', 'gank', 'vision', 'buy', 'action', 'mayhem', 'frames'] as const;
 
 export type HudModuleId = (typeof HUD_MODULE_IDS)[number];
 
@@ -12,6 +12,7 @@ export const DEFAULT_HUD_MODULES: HudModules = {
   vision: true,
   buy: true,
   action: true,
+  mayhem: false,
   frames: false,
 };
 
@@ -21,6 +22,7 @@ export const HUD_MODULE_LABELS: Record<HudModuleId, string> = {
   vision: 'Vision',
   buy: 'Buy',
   action: 'Action',
+  mayhem: 'Mayhem (beta)',
   frames: 'Frames',
 };
 

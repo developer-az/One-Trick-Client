@@ -8,6 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+native/toolchain/
+native/toolchain/*.zip
+test-fixtures/mayhem-ocr/*.png
 dist
 dist-electron
 release

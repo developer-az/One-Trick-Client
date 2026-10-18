@@ -31,19 +31,29 @@ function waveHasCannon(waveIndex: number): boolean {
   return true;
 }
 
+/** Overlay / roam cues stop treating cannon as a lane timer after this. */
+export const CANNON_CUE_MAX_GAME_SEC = 14 * 60;
+
 /** Next cannon spawn at or after `gameTime`. */
 export function nextCannon(gameTime: number): CannonWindow | null {
   if (gameTime <= 0) return null;
   for (let i = 0; i < 120; i++) {
     if (!waveHasCannon(i)) continue;
     const spawnAt = waveSpawnTime(i);
-    if (spawnAt + 25 < gameTime) continue; // already long past
+    if (spawnAt + 12 < gameTime) continue; // wave already pushed past
     const eta = spawnAt - gameTime;
-    // Action window: ~20s before spawn through ~35s after (crash timing)
-    const isActionWindow = eta <= 20 && eta >= -35;
+    // Lane window only: shortly before spawn through brief crash window (not half the game).
+    const isActionWindow = eta <= 12 && eta >= -10;
     return { spawnAt, eta, isActionWindow };
   }
   return null;
+}
+
+/** True when a cannon cue is appropriate (laning / early roam), not mid-game macro. */
+export function shouldShowCannonCue(gameTime: number): boolean {
+  if (gameTime <= 0 || gameTime > CANNON_CUE_MAX_GAME_SEC) return false;
+  const cannon = nextCannon(gameTime);
+  return !!cannon?.isActionWindow;
 }
 
 export function formatCannonEta(eta: number): string {
