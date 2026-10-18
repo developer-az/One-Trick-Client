@@ -99,9 +99,24 @@ function norm(name: string): string {
 
 /** When a HIGH window opens, hold it for profile.redWindowSec of game time. */
 let highRiskSinceGameTime: number | null = null;
+let lastJgFarm: { name: string; cs: number; gameTime: number } | null = null;
 
 export function resetJungleThreatClock(): void {
   highRiskSinceGameTime = null;
+  lastJgFarm = null;
+}
+
+/** CS flat long enough while alive → likely base / passive soak, not pathing toward lane. */
+function jgLikelyInBase(name: string, cs: number, gameTime: number, minutes: number): boolean {
+  if (minutes < 3.5) return false;
+  if (!lastJgFarm || lastJgFarm.name !== name) {
+    lastJgFarm = { name, cs, gameTime };
+    return false;
+  }
+  const dt = gameTime - lastJgFarm.gameTime;
+  const dcs = cs - lastJgFarm.cs;
+  lastJgFarm = { name, cs, gameTime };
+  return dt >= 28 && dcs <= 1;
 }
 
 function profileFor(name: string): JunglerPathProfile | null {
@@ -205,6 +220,19 @@ export function assessJungleThreat(
   const style = profile?.style || 'flex';
   const cs = jg.scores?.creepScore ?? 0;
   const level = jg.level ?? 1;
+
+  if (jgLikelyInBase(name, cs, gameTime, minutes)) {
+    return {
+      junglerName: name,
+      sideBias: 'unknown',
+      gankRisk: 'low',
+      probability: 10,
+      label: 'Jg base / reset',
+      detail: `${name} CS unchanged — likely recalled or soaking base, not pathing to you.`,
+      squareReason: 'In base',
+      clearStyle: style,
+    };
+  }
 
   let sideBias: JungleThreat['sideBias'] = 'unknown';
   let gankRisk: GankRisk = 'low';

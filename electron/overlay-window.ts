@@ -5,7 +5,6 @@ import { readLeagueHudScales } from './league-settings';
 import { clusterOverlayWindows, type OverlayCluster } from './overlay-bounds';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
-
 export interface FrameCalibration {
     dx: number;
     dy: number;
@@ -69,6 +68,9 @@ let overlayMatchActive = false;
 export function setOverlayMatchActive(active: boolean): void {
     overlayMatchActive = active;
     if (active) {
+        for (const timer of emptyGrace.values()) clearTimeout(timer);
+        emptyGrace.clear();
+        emptySlots.clear();
         for (const win of overlayWindows()) {
             try {
                 syncWindowVisibility(win);
@@ -104,6 +106,8 @@ function shouldShowWindow(win: BrowserWindow): boolean {
     // Unlocked / align modes are for arranging panels: always visible.
     if (!lockedLayout()) return true;
     if (holdToShowActive() && !holdDown) return false;
+    // During a live match, do not hide the HUD because a module had nothing to draw.
+    if (overlayMatchActive) return true;
     return !emptySlots.has(win.webContents.id);
 }
 
@@ -165,6 +169,7 @@ export function setOverlaySlotContent(webContentsId: number, hasContent: boolean
         return;
     }
     // Already hidden, or already waiting out a blip.
+    if (overlayMatchActive) return;
     if (emptySlots.has(webContentsId) || pending) return;
     const timer = setTimeout(() => {
         emptyGrace.delete(webContentsId);
@@ -262,16 +267,17 @@ let gameWidth = 1920;
 let gameHeight = 1080;
 let calibration: OverlayCalibration = { ...DEFAULT_CALIBRATION, ability: { ...DEFAULT_CALIBRATION.ability }, minimap: { ...DEFAULT_CALIBRATION.minimap } };
 
-export type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'frames';
+export type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
 export type HudModules = Record<HudModuleId, boolean>;
 
-const HUD_MODULE_IDS: HudModuleId[] = ['sums', 'gank', 'vision', 'buy', 'action', 'frames'];
+const HUD_MODULE_IDS: HudModuleId[] = ['sums', 'gank', 'vision', 'buy', 'action', 'mayhem', 'frames'];
 const DEFAULT_HUD_MODULES: HudModules = {
     sums: true,
     gank: true,
     vision: true,
     buy: true,
     action: true,
+    mayhem: false,
     frames: false,
 };
 
@@ -402,8 +408,12 @@ function widgetsFromSettings(): Array<{
         { id: 'vision', visible: true, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
         { id: 'buy', visible: true, x: 0.835, y: 0.42, scale: 1, anchor: 'tr' },
         { id: 'action', visible: true, x: 0.835, y: 0.54, scale: 1, anchor: 'tr' },
+        { id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
     ];
-    const elements = Array.isArray(raw?.elements) && raw.elements.length ? raw.elements : defaults;
+    const elements = Array.isArray(raw?.elements) && raw.elements.length ? [...raw.elements] : defaults;
+    if (!elements.some((el) => el?.id === 'mayhem')) {
+        elements.push({ id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' });
+    }
     const widgets: Array<{
         id: string;
         kind: 'module' | 'sticker';

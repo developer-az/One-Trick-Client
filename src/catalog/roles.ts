@@ -45,7 +45,8 @@ export function roleFromChampionTags(tags: string[] | null | undefined): Catalog
   const t = tags || [];
   if (t.includes('Support')) return 'Support';
   if (t.includes('Marksman')) return 'Bot';
-  if (t.includes('Assassin') || t.includes('Mage')) return 'Mid';
+  if (t.includes('Mage')) return 'Mid';
+  if (t.includes('Assassin')) return 'Mid';
   if (t.includes('Tank') || t.includes('Fighter')) return 'Top';
   return 'Mid';
 }

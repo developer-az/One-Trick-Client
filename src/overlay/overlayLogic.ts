@@ -2,12 +2,19 @@ import type { Build, MatchupAnalysis } from '../logic/pykeLogic';
 import { profileIdFromChampion, isSupportStyleProfile, profileFocusLane, type ProfileId } from '../logic/profiles';
 import { roleFromLivePosition } from '../catalog/roles';
 import { formatCd } from '../logic/summonerSpells';
-import { nextCannon, formatCannonEta } from '../logic/waveLogic';
+import { formatCannonEta, nextCannon, shouldShowCannonCue } from '../logic/waveLogic';
 import { assessJungleThreat } from '../logic/jungleLogic';
 import { buildWardStatus, type WardStatus } from '../logic/visionLogic';
-import { trackBuildProgress, inventoryHasName, type BuildItemRef } from '../logic/buildProgress';
+import {
+  trackBuildProgress,
+  inventoryHasName,
+  supportBootSlotAdvice,
+  type BuildItemRef,
+} from '../logic/buildProgress';
 import { activeThreatsByName } from '../logic/counters';
 import { inferSituation, type ProfileSituation } from '../logic/situation';
+import { buildAramInGameCues, getAramGankStatus, getAramWardStatus, shouldUseAramOverlay } from '../logic/aramOverlay';
+import { isAramOrMayhem } from '../logic/mayhem/mode';
 
 export interface OverlayEnemy {
   championName: string;
@@ -72,9 +79,19 @@ export interface OverlayState {
   cachedChampSelectEnemies?: Array<{ championId: number; championName?: string; position?: string }>;
   enemyBotSummoners?: OverlayBotSummoner[];
   activePlayerLevel?: number;
+  championStats?: Record<string, number> | null;
   timestamp?: number;
   /** Live blunder/brilliant lines from main process (moment-* ids). */
   momentCues?: Array<Pick<OverlayCue, 'id' | 'label' | 'detail' | 'urgency' | 'maxAgeSec'>>;
+  /** ARAM Mayhem augment roll detected via screen OCR (augment ids). */
+  mayhemOfferIds?: string[];
+  mayhemOwnedIds?: string[];
+  /** True when OCR matched augment card names on screen (not “you might be picking”). */
+  mayhemAugmentWindow?: boolean;
+  mayhemPickHint?: string;
+  mayhemWaitingForDeath?: boolean;
+  /** Set when user hits Page Up to close a stuck augment HUD. */
+  mayhemAugmentDismissedAt?: number;
 }
 
 export interface OverlayCue {
@@ -92,9 +109,13 @@ export interface OverlayCue {
   maxAgeSec?: number;
 }
 
+export type BuildProgressSnapshot = ReturnType<typeof trackBuildProgress>;
+
 export interface OverlayCueContext {
   analysis?: MatchupAnalysis | null;
   build?: Build | null;
+  /** When set, profile cue builders reuse one inventory pass per frame. */
+  buildProgress?: BuildProgressSnapshot | null;
   profileId?: ProfileId;
   situation?: ProfileSituation | null;
 }
@@ -103,7 +124,9 @@ export interface OverlayCueContext {
 export function resolveProfileId(state: OverlayState, fallback?: ProfileId): ProfileId {
   const liveName = state.localPlayer?.championName;
   if (liveName) {
-    return profileIdFromChampion(liveName, roleFromLivePosition(state.localPlayer?.position));
+    const aramStyle = isAramOrMayhem(state.gameMode, state.mapName);
+    const liveRole = aramStyle ? null : roleFromLivePosition(state.localPlayer?.position);
+    return profileIdFromChampion(liveName, liveRole);
   }
   if (state.profileHint) return state.profileHint;
   if (state.isYone) return 'yone-mid';
@@ -123,6 +146,7 @@ export function situationFromState(state: OverlayState): ProfileSituation {
 
 /** Vision read for the standalone ward indicator (never in the cue stack). */
 export function getWardStatus(state: OverlayState, profileId: ProfileId): WardStatus | null {
+  if (shouldUseAramOverlay(state)) return getAramWardStatus(state);
   const gameTime = state.gameTime ?? 0;
   const focusLane = profileFocusLane(profileId);
   const jg = assessJungleThreat(gameTime, state.enemies || [], focusLane);
@@ -143,6 +167,7 @@ export function getGankStatus(
   state: OverlayState,
   profileId: ProfileId
 ): import('../logic/jungleLogic').JungleThreat | null {
+  if (shouldUseAramOverlay(state)) return getAramGankStatus();
   const gameTime = state.gameTime ?? 0;
   if (gameTime <= 0) return null;
   return assessJungleThreat(gameTime, state.enemies || [], profileFocusLane(profileId));
@@ -172,14 +197,29 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
   if (!state.inGame) return cues;
 
   const profileId = ctx.profileId || resolveProfileId(state);
+  const cueCtx: OverlayCueContext =
+    ctx.buildProgress !== undefined || !ctx.build
+      ? ctx
+      : {
+          ...ctx,
+          buildProgress: trackBuildProgress(state.localPlayer?.items, ctx.build),
+        };
+
+  if (isAramOrMayhem(state.gameMode, state.mapName)) {
+    const aram = buildAramInGameCues(state);
+    return mergeMomentCues(
+      finalizeCues(aram as OverlayCue[], state, profileId, { skipLaneMacro: true }),
+      state
+    );
+  }
   if (profileId === 'yone-mid') {
-    return mergeMomentCues(finalizeCues(buildYoneCues(state, ctx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildYoneCues(state, cueCtx), state, profileId), state);
   }
   if (profileId === 'pantheon-support') {
-    return mergeMomentCues(finalizeCues(buildPantheonCues(state, ctx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildPantheonCues(state, cueCtx), state, profileId), state);
   }
   if (profileId === 'pyke-support') {
-    return mergeMomentCues(finalizeCues(buildPykeCues(state, ctx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildPykeCues(state, cueCtx), state, profileId), state);
   }
   return mergeMomentCues(finalizeCues(buildGenericCues(state), state, profileId), state);
 }
@@ -202,6 +242,25 @@ function buildGenericCues(state: OverlayState): OverlayCue[] {
 
 /** Coach / essay cues — kept in champ-select drawers, never on the live HUD. */
 const COACH_CUE_ID = /^(matchup-doctrine|pro-tip-|jg-threat-|prey-focus|buy-|yone-jg-sync|yone-early|yone-e-trades|yone-side|yone-boots|pan-behind|pan-ahead|early-window|xp-hold)/;
+
+function appendSupportBootSlotCue(
+  cues: OverlayCue[],
+  state: OverlayState,
+  progress: ReturnType<typeof trackBuildProgress>,
+  behind: boolean
+): void {
+  const advice = supportBootSlotAdvice(state.localPlayer?.items, progress, state.gameTime ?? 0, {
+    behind,
+  });
+  if (!advice) return;
+  cues.push({
+    id: `boot-slot-${advice.action}`,
+    label: advice.label,
+    detail: advice.detail,
+    urgency: advice.action === 'sell' ? 'spike' : 'warn',
+    maxAgeSec: advice.action === 'sell' ? 45 : 35,
+  });
+}
 
 export function isCoachCueId(id: string): boolean {
   return COACH_CUE_ID.test(id);
@@ -231,6 +290,7 @@ function cueConfidenceScore(cue: OverlayCue): number {
   if (/^(ult-online|pan-ult|yone-ult|sum-flash)$/.test(cue.id)) score += 18;
   else if (/^(threat-|roam-cannon|cannon-shove)/.test(cue.id)) score += 14;
   else if (/^(swap-oracle|xp-hold|pan-behind|pan-ahead|prey-focus)/.test(cue.id)) score += 10;
+  else if (/^boot-slot-sell/.test(cue.id)) score += 16;
   else if (/^buy-/.test(cue.id)) score += 6;
 
   const maxAge = cue.maxAgeSec ?? 30;
@@ -244,7 +304,8 @@ function cueConfidenceScore(cue: OverlayCue): number {
 function finalizeCues(
   base: OverlayCue[],
   state: OverlayState,
-  profileId: ProfileId
+  profileId: ProfileId,
+  opts: { skipLaneMacro?: boolean } = {}
 ): OverlayCue[] {
   const gameTime = state.gameTime ?? 0;
   const shared: OverlayCue[] = [];
@@ -260,18 +321,16 @@ function finalizeCues(
     shared.push(actionCue(`threat-${threat.id}`, threat.cue.label, online ? 'spike' : 'warn'));
   }
 
-  if (isSupportStyleProfile(profileId)) {
-    const cannon = nextCannon(gameTime);
-    if (cannon?.isActionWindow && (cannon.eta == null || cannon.eta <= 20)) {
-      shared.push(
-        actionCue(
-          'cannon-shove',
-          cannon.eta > 0 ? `Cannon ${formatCannonEta(cannon.eta)}` : 'Cannon now',
-          'spike',
-          18
-        )
-      );
-    }
+  if (!opts.skipLaneMacro && isSupportStyleProfile(profileId) && shouldShowCannonCue(gameTime)) {
+    const cannon = nextCannon(gameTime)!;
+    shared.push(
+      actionCue(
+        'cannon-shove',
+        cannon.eta > 0 ? `Cannon ${formatCannonEta(cannon.eta)}` : 'Cannon now',
+        'spike',
+        18
+      )
+    );
   }
 
   const seen = new Set<string>();
@@ -309,12 +368,11 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
   const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
   const gameTime = state.gameTime ?? 0;
   const minutes = gameTime / 60;
-  const progress = trackBuildProgress(state.localPlayer?.items, build);
+  const progress = ctx.buildProgress ?? trackBuildProgress(state.localPlayer?.items, build);
   const situation = ctx.situation || situationFromState(state);
   const behind = situation.state === 'behind';
   const ahead = situation.state === 'ahead';
   const hasOracle = progress.ownedIds.has('3364');
-  const cannon = nextCannon(gameTime);
 
   if (analysis?.preyFocus && level >= 2) {
     cues.push({
@@ -364,14 +422,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
     });
   }
 
-  if (
-    !behind &&
-    minutes >= 3 &&
-    minutes <= 8 &&
-    level >= 6 &&
-    cannon?.isActionWindow &&
-    cannon.eta <= 20
-  ) {
+  if (!behind && minutes >= 3 && minutes <= 8 && level >= 6 && shouldShowCannonCue(gameTime)) {
     cues.push({
       id: 'roam-cannon',
       label: 'Roam now',
@@ -399,6 +450,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
       urgency: behind ? 'spike' : 'warn',
     });
   }
+  appendSupportBootSlotCue(cues, state, progress, behind);
 
   const flashDown = (state.enemyBotSummoners || []).flatMap((l) =>
     l.spells.filter((s) => s.short === 'Flash' && !s.ready && s.remaining > 0)
@@ -421,7 +473,7 @@ function buildYoneCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
   const gameTime = state.gameTime ?? 0;
   const minutes = Math.floor(gameTime / 60);
-  const progress = trackBuildProgress(state.localPlayer?.items, build);
+  const progress = ctx.buildProgress ?? trackBuildProgress(state.localPlayer?.items, build);
   const hasBerserkers =
     progress.ownedIds.has('3006') ||
     progress.ownedIds.has('3172') ||
@@ -509,7 +561,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
   const gameTime = state.gameTime ?? 0;
   const minutes = gameTime / 60;
-  const progress = trackBuildProgress(state.localPlayer?.items, build);
+  const progress = ctx.buildProgress ?? trackBuildProgress(state.localPlayer?.items, build);
   const hasUmbral =
     progress.ownedIds.has('3179') || inventoryHasName(state.localPlayer?.items, ['umbral']);
   const hasOracle = progress.ownedIds.has('3364');
@@ -530,7 +582,6 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
       ? enemyBotLevels.reduce((a, b) => a + b, 0) / enemyBotLevels.length
       : level;
   const xpBehind = level < 6 && level + 0.4 < enemyBotAvg;
-  const cannon = nextCannon(gameTime);
 
   // Prey focus — always high value once we know who dies first
   if (analysis?.preyFocus && level >= 2) {
@@ -583,13 +634,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   }
 
   // Roam: only during the live cannon action window, short TTL
-  if (
-    minutes >= 3 &&
-    minutes <= 8 &&
-    level >= 6 &&
-    cannon?.isActionWindow &&
-    (cannon.eta == null || cannon.eta <= 25)
-  ) {
+  if (minutes >= 3 && minutes <= 8 && level >= 6 && shouldShowCannonCue(gameTime)) {
     const roamDetail = analysis?.roamAdvice
       ? analysis.roamAdvice.slice(0, 100)
       : hardLane || lowAggro
@@ -639,6 +684,9 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
       });
     }
   }
+
+  const situation = ctx.situation || situationFromState(state);
+  appendSupportBootSlotCue(cues, state, progress, situation.state === 'behind');
 
   const flashDown = (state.enemyBotSummoners || []).flatMap((l) =>
     l.spells.filter((s) => s.short === 'Flash' && !s.ready && s.remaining > 0)

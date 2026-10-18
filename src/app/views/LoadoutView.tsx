@@ -108,6 +108,13 @@ export const LoadoutView: React.FC<{
             <div className="grid gap-5 sm:grid-cols-2">
               <ItemGroup title="Start" items={build.starter} />
               <ItemGroup title="Boots" items={[build.boots]} />
+              {profile.role === 'Support' ? (
+                <p className="text-sm ot-muted mt-3 leading-relaxed">
+                  Mid-tier boots are enough. Late game with a full inventory, the overlay may say to{' '}
+                  <strong className="font-medium text-inherit">sell boots</strong> for the last legendary — keep them if
+                  you are behind or still roaming.
+                </p>
+              ) : null}
             </div>
           </Card>
 

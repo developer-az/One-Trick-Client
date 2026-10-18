@@ -25,7 +25,11 @@ import {
     pushSummonerUpdate,
     getMonitorStats,
     refreshLiveCadence,
+    triggerManualMayhemOcrFromHotkey,
+    dismissMayhemAugmentPanelFromHotkey,
+    isMayhemMatchActive,
 } from './game-monitor';
+import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
 import {
     destroyOverlay,
@@ -70,7 +74,7 @@ import {
     getSummonerFocus,
     type TrackedRole,
 } from './summoner-tracker';
-import { startFlashKeyHook, stopFlashKeyHook, isFlashKeyHookActive, getKeyHookStatus } from './global-key-hook';
+import { startFlashKeyHook, stopFlashKeyHook, getKeyHookStatus } from './global-key-hook';
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
@@ -80,6 +84,7 @@ process.env.VITE_PUBLIC = publicDir();
 
 let win: BrowserWindow | null;
 let tray: Tray | null = null;
+let quittingApp = false;
 /** Set when the dashboard was hidden by a match starting, so it is restored after. */
 let hiddenForMatch = false;
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
@@ -134,7 +139,13 @@ function createTray(): void {
                 },
             },
             { type: 'separator' },
-            { label: 'Quit', click: () => app.quit() },
+            {
+                label: 'Quit',
+                click: () => {
+                    quittingApp = true;
+                    app.quit();
+                },
+            },
         ])
     );
 }
@@ -153,12 +164,15 @@ function loadAppIconImage(): NativeImage {
     return nativeImage.createFromPath(path.join(process.env.VITE_PUBLIC || '', 'icon.png'));
 }
 
+const MAIN_DEV_URL = 'http://localhost:5173/';
+
 function createWindow() {
     win = new BrowserWindow({
         width: 1240,
         height: 860,
         minWidth: 880,
         minHeight: 640,
+        show: false,
         icon: loadAppIconImage(),
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -179,14 +193,32 @@ function createWindow() {
         }
     });
 
+    win.on('close', (event) => {
+        if (!quittingApp) {
+            event.preventDefault();
+            win?.hide();
+            return;
+        }
+    });
+
     win.on('closed', () => {
         win = null;
         stopGameMonitor();
         destroyOverlay();
         stopFlashKeyHook();
         globalShortcut.unregisterAll();
-        if (process.platform !== 'darwin') {
-            app.quit();
+    });
+
+    let loadAttempts = 0;
+    win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame || !win) return;
+        console.error('[main] did-fail-load', errorCode, errorDescription, validatedURL);
+        const devUrl = VITE_DEV_SERVER_URL || MAIN_DEV_URL;
+        if (!app.isPackaged && validatedURL.startsWith('http://localhost:') && loadAttempts < 3) {
+            loadAttempts += 1;
+            setTimeout(() => {
+                void win?.loadURL(devUrl);
+            }, 600 * loadAttempts);
         }
     });
 
@@ -194,11 +226,15 @@ function createWindow() {
         win?.webContents.send('main-process-message', (new Date).toLocaleString());
     });
 
+    win.once('ready-to-show', () => {
+        win?.show();
+    });
+
     const loadMain = async () => {
         if (VITE_DEV_SERVER_URL) {
             await win?.loadURL(VITE_DEV_SERVER_URL);
         } else if (!app.isPackaged) {
-            await win?.loadURL('http://localhost:5173/');
+            await win?.loadURL(MAIN_DEV_URL);
             // DevTools are heavy on GPU/CPU — only open when explicitly requested.
             if (process.env.PYKE_OPEN_DEVTOOLS === '1') {
                 win?.webContents.openDevTools();
@@ -219,12 +255,20 @@ function flashToggleRoles(): { primary: TrackedRole; secondary: TrackedRole } {
 }
 
 function onFlashPrimary(): void {
+    if (isMayhemMatchActive()) {
+        dismissMayhemAugmentPanelFromHotkey();
+        return;
+    }
     const { primary } = flashToggleRoles();
     const res = toggleSpellUsed(primary, 'Flash');
     if (res.success) pushSummonerUpdate();
 }
 
 function onFlashSecondary(): void {
+    if (isMayhemMatchActive()) {
+        void triggerManualMayhemOcrFromHotkey();
+        return;
+    }
     const { secondary } = flashToggleRoles();
     if (getSummonerFocus() === 'mid') {
         // Mid: PageDown is the laner's other summoner (Ignite, else Teleport).
@@ -247,28 +291,7 @@ function onFlashSecondary(): void {
  * Elevation: if League is Run as Administrator and One Trick is not, Windows
  * UIPI blocks the hook from seeing those keydowns — run One Trick elevated too.
  */
-function registerFlashHotkeys(): void {
-    // Drop any prior RegisterHotKey binds for these keys (avoid double-fire if
-    // both paths somehow lived together from an older session).
-    for (const key of ['PageUp', 'PageDown', 'num9', 'num3', 'Prior', 'Next'] as const) {
-        try {
-            if (globalShortcut.isRegistered(key)) globalShortcut.unregister(key);
-        } catch {
-            // ignore
-        }
-    }
-
-    const hookOk = startFlashKeyHook({
-        onPrimary: onFlashPrimary,
-        onSecondary: onFlashSecondary,
-        onHold: setOverlayHold,
-    });
-
-    if (hookOk && isFlashKeyHookActive()) {
-        return;
-    }
-
-    // Fallback — usually insufficient while League is focused
+function registerElectronFlashHotkeyFallback(): void {
     const upOk = globalShortcut.register('PageUp', onFlashPrimary);
     const downOk = globalShortcut.register('PageDown', onFlashSecondary);
     try {
@@ -292,6 +315,35 @@ function registerFlashHotkeys(): void {
                 (getKeyHookStatus().error || 'The onetrick-keys helper did not start.')
         );
     }
+}
+
+function registerFlashHotkeys(): void {
+    ensureKeyhookBinary();
+    // Drop any prior RegisterHotKey binds for these keys (avoid double-fire if
+    // both paths somehow lived together from an older session).
+    for (const key of ['PageUp', 'PageDown', 'num9', 'num3', 'Prior', 'Next'] as const) {
+        try {
+            if (globalShortcut.isRegistered(key)) globalShortcut.unregister(key);
+        } catch {
+            // ignore
+        }
+    }
+
+    const hookOk = startFlashKeyHook({
+        onPrimary: onFlashPrimary,
+        onSecondary: onFlashSecondary,
+        onHold: setOverlayHold,
+    });
+    if (!hookOk) {
+        registerElectronFlashHotkeyFallback();
+        return;
+    }
+
+    // Helper reports "R" on stdout asynchronously — don't register fallback yet.
+    setTimeout(() => {
+        if (getKeyHookStatus().mode === 'native') return;
+        registerElectronFlashHotkeyFallback();
+    }, 500);
 }
 
 function registerOverlayHotkeys() {
@@ -664,6 +716,72 @@ app.whenReady().then(() => {
     ipcMain.handle('catalog-refresh', async () => {
         const catalog = await refreshCatalogCache();
         return { success: !!catalog, catalog };
+    });
+
+    ipcMain.handle('mayhem-get', async () => {
+        const { loadMayhemBundle } = await import('./mayhem-data');
+        const bundle = loadMayhemBundle();
+        return { success: !!bundle, bundle };
+    });
+
+    ipcMain.handle('mayhem-set-owned', async (_event, ids: unknown) => {
+        const { setOwnedMayhemAugmentIds } = await import('./mayhem-state');
+        const { notifyMayhemOverlayStateChanged } = await import('./game-monitor');
+        const list = Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [];
+        setOwnedMayhemAugmentIds(list);
+        notifyMayhemOverlayStateChanged();
+        return { success: true };
+    });
+
+    ipcMain.handle('mayhem-set-roll', async (_event, ids: unknown) => {
+        const { setMayhemRollIds } = await import('./mayhem-state');
+        const { notifyMayhemOverlayStateChanged } = await import('./game-monitor');
+        const list = Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [];
+        setMayhemRollIds(list);
+        notifyMayhemOverlayStateChanged();
+        return { success: true };
+    });
+
+    ipcMain.handle('mayhem-get-owned', async () => {
+        const { getOwnedMayhemAugmentIds } = await import('./mayhem-state');
+        return { success: true, owned: getOwnedMayhemAugmentIds() };
+    });
+
+    ipcMain.handle('mayhem-get-roll', async () => {
+        const { getMayhemRollIds } = await import('./mayhem-state');
+        return { success: true, roll: getMayhemRollIds() };
+    });
+
+    ipcMain.handle('mayhem-take-augment', async (_event, augmentId: unknown) => {
+        const { getOwnedMayhemAugmentIds, setOwnedMayhemAugmentIds, setMayhemPicksTaken, getMayhemRollIds } =
+            await import('./mayhem-state');
+        const { clearMayhemOffersForDashboard, notifyMayhemOverlayStateChanged, getMayhemLiveOfferIds } =
+            await import('./game-monitor');
+        if (typeof augmentId !== 'string' || !augmentId) return { success: false };
+        const roll = [...new Set([...getMayhemRollIds(), ...getMayhemLiveOfferIds()])];
+        if (roll.length > 0 && !roll.includes(augmentId)) {
+            return { success: false, error: 'not_on_current_roll' };
+        }
+        const owned = getOwnedMayhemAugmentIds();
+        if (!owned.includes(augmentId)) {
+            setOwnedMayhemAugmentIds([...owned, augmentId]);
+        }
+        const nextOwned = getOwnedMayhemAugmentIds();
+        setMayhemPicksTaken(Math.max(nextOwned.length, 1));
+        clearMayhemOffersForDashboard();
+        notifyMayhemOverlayStateChanged();
+        return { success: true, owned: nextOwned };
+    });
+
+    ipcMain.handle('mayhem-refresh', async () => {
+        const { refreshMayhemBundle } = await import('./mayhem-data');
+        try {
+            const { bundle, fromNetwork } = await refreshMayhemBundle();
+            return { success: true, bundle, fromNetwork };
+        } catch (error: unknown) {
+            const err = error as { message?: string };
+            return { success: false, error: err.message || 'Mayhem refresh failed' };
+        }
     });
 
     ipcMain.handle('overlay-sync-league-scales', async () => {

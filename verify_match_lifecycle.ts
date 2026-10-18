@@ -7,6 +7,7 @@
  */
 import {
     LIVE_SILENCE_END_MS,
+    LIVE_SILENCE_MIDGAME_END_MS,
     OUT_OF_GAME_HOLD_MS,
     TERMINAL_PHASE_HOLD_MS,
     shouldEndMatch,
@@ -103,18 +104,36 @@ check(
 );
 
 check(
-    'unknown phase ends only after a full minute with no live client',
+    'unknown phase early game ends after 60s with no live client',
     decide({
         phase: null,
         liveSilenceMs: LIVE_SILENCE_END_MS - 1,
         phaseHeldMs: LIVE_SILENCE_END_MS,
         liveGameTime: null,
-        trustedGameTime: 12 * 60,
+        trustedGameTime: 4 * 60,
     }) === false &&
         decide({
             phase: null,
             liveSilenceMs: LIVE_SILENCE_END_MS,
             phaseHeldMs: LIVE_SILENCE_END_MS,
+            liveGameTime: null,
+            trustedGameTime: 4 * 60,
+        }) === true
+);
+
+check(
+    'unknown phase mid game tolerates 60s silence but ends after 3 minutes',
+    decide({
+        phase: null,
+        liveSilenceMs: LIVE_SILENCE_END_MS + 1000,
+        phaseHeldMs: LIVE_SILENCE_END_MS + 1000,
+        liveGameTime: null,
+        trustedGameTime: 12 * 60,
+    }) === false &&
+        decide({
+            phase: null,
+            liveSilenceMs: LIVE_SILENCE_MIDGAME_END_MS,
+            phaseHeldMs: LIVE_SILENCE_MIDGAME_END_MS,
             liveGameTime: null,
             trustedGameTime: 12 * 60,
         }) === true

@@ -197,8 +197,9 @@ export function buildsMagic(champion: Pick<CatalogChampion, 'id' | 'tags' | 'dam
 }
 
 export function archetypeFor(tags: string[], damageType: CatalogChampion['damageType'], role: CatalogRole): string {
-  const [primary] = tags;
   const magic = damageType === 'Magic';
+  if (role === 'Bot' && tags.includes('Marksman') && !magic) return 'marksman';
+  const [primary] = tags;
   if (role === 'Support') {
     if (tags.includes('Tank') || primary === 'Fighter') return 'supportTank';
     if (primary === 'Mage') return 'mage';
@@ -236,6 +237,36 @@ export function itemFit(item: CatalogItem, archetype: string, damageType: Catalo
   return score;
 }
 
+/** Curated loadouts when tag-scoring picks on-hit / movement ADC items (Yun Tal, Stormrazor). */
+export const CHAMPION_BUILD_PRESETS: Partial<
+  Record<string, Partial<Record<CatalogRole, { core: string[]; boots?: string; situational?: string[] }>>>
+> = {
+  Samira: {
+    Bot: {
+      core: ['6676', '3031', '3036'],
+      boots: '3047',
+      situational: ['3139', '3026', '6333', '3153'],
+    },
+  },
+};
+
+const ON_HIT_MARKSMEN = new Set(['Kalista', 'KogMaw', 'Vayne', 'Varus', 'Smolder']);
+
+/** Prefer crit / lethality spikes for most ADCs; on-hit items are champion-specific. */
+const MARKSMAN_CRIT_CORE_ORDER = [
+  '6676',
+  '3031',
+  '3036',
+  '3085',
+  '3072',
+  '3139',
+  '6673',
+  '3046',
+  '3153',
+  '3032',
+  '3095',
+];
+
 const ARCHETYPE_BOOTS: Record<string, string[]> = {
   marksman: ['3006'],
   mage: ['3020'],
@@ -266,7 +297,51 @@ function pickStarters(items: CatalogItem[], role: CatalogRole): string[] {
   return pool.slice(0, 2).map((item) => item.id);
 }
 
-function pickCore(items: CatalogItem[], archetype: string, damageType: CatalogChampion['damageType']): string[] {
+function pickMarksmanCore(
+  items: CatalogItem[],
+  damageType: CatalogChampion['damageType'],
+  championId: string
+): string[] {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const allowOnHit = ON_HIT_MARKSMEN.has(championId);
+  const ordered = MARKSMAN_CRIT_CORE_ORDER.filter((id) => {
+    const item = byId.get(id);
+    if (!item || !legendary(item)) return false;
+    if (!allowOnHit && (item.tags.includes('OnHit') || id === '3032' || id === '3095')) return false;
+    return itemFit(item, 'marksman', damageType) > 0;
+  });
+  if (ordered.length >= 3) return ordered.slice(0, 3);
+  const seen = new Set<string>();
+  const scored = items
+    .filter(legendary)
+    .map((item) => {
+      let score = itemFit(item, 'marksman', damageType);
+      if (!allowOnHit && (item.tags.includes('OnHit') || item.id === '3032' || item.id === '3095')) score -= 6;
+      if (item.tags.includes('ArmorPenetration') || item.id === '6676') score += 2;
+      if (item.id === '3031') score += 1.5;
+      return { item, score };
+    })
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score || b.item.gold - a.item.gold || a.item.id.localeCompare(b.item.id))
+    .filter((row) => (seen.has(row.item.name) ? false : (seen.add(row.item.name), true)))
+    .map((row) => row.item.id);
+  const merged = [...ordered];
+  for (const id of scored) {
+    if (!merged.includes(id)) merged.push(id);
+    if (merged.length >= 3) break;
+  }
+  return merged.slice(0, 3);
+}
+
+function pickCore(
+  items: CatalogItem[],
+  archetype: string,
+  damageType: CatalogChampion['damageType'],
+  championId: string
+): string[] {
+  if (archetype === 'marksman' && damageType === 'Physical') {
+    return pickMarksmanCore(items, damageType, championId);
+  }
   const seen = new Set<string>();
   return items
     .filter(legendary)
@@ -276,6 +351,30 @@ function pickCore(items: CatalogItem[], archetype: string, damageType: CatalogCh
     .filter((row) => (seen.has(row.item.name) ? false : (seen.add(row.item.name), true)))
     .slice(0, 3)
     .map((row) => row.item.id);
+}
+
+function applyChampionPreset(
+  championId: string,
+  role: CatalogRole,
+  items: CatalogItem[],
+  core: string[],
+  boots: string,
+  situational: string[]
+): { core: string[]; boots: string; situational: string[] } {
+  const preset = CHAMPION_BUILD_PRESETS[championId]?.[role];
+  if (!preset) return { core, boots, situational };
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const presetCore = (preset.core || []).filter((id) => byId.get(id)?.purchasable);
+  const presetBoots =
+    preset.boots && byId.get(preset.boots)?.purchasable ? preset.boots : boots;
+  const presetSit = (preset.situational || situational).filter(
+    (id) => byId.get(id)?.purchasable && !presetCore.includes(id)
+  );
+  return {
+    core: presetCore.length >= 2 ? presetCore.slice(0, 3) : core,
+    boots: presetBoots,
+    situational: presetSit.length ? presetSit.slice(0, 4) : situational,
+  };
 }
 
 function pickSituational(items: CatalogItem[], archetype: string, core: string[]): string[] {
@@ -334,9 +433,17 @@ export function buildRecommendation(args: {
   const starter = pickStarters(items, role);
   const damage = buildsMagic(champion) ? 'Magic' : 'Physical';
   const archetype = archetypeFor(champion.tags, damage, role);
-  const core = pickCore(items, archetype, damage);
-  const boots = pickBoots(items, archetype, role);
-  const situational = pickSituational(items, archetype, core);
+  let core = pickCore(items, archetype, damage, champion.id);
+  let boots = pickBoots(items, archetype, role);
+  let situational = pickSituational(items, archetype, core);
+  ({ core, boots, situational } = applyChampionPreset(
+    champion.id,
+    role,
+    items,
+    core,
+    boots,
+    situational
+  ));
   return {
     championId: champion.id,
     role,

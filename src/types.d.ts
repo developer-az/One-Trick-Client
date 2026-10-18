@@ -13,7 +13,7 @@ declare global {
         minimap: FrameCalibration;
     }
 
-    type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'frames';
+    type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
     interface LcuStatus {
@@ -173,6 +173,13 @@ declare global {
             getPerfStats?: () => Promise<PerfStats>;
             getMatchRecap?: () => Promise<PlayRecapEntry[]>;
             getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
+            getMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown }>;
+            refreshMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown; fromNetwork?: boolean; error?: string }>;
+            getMayhemOwned?: () => Promise<{ success: boolean; owned?: string[] }>;
+            getMayhemRoll?: () => Promise<{ success: boolean; roll?: string[] }>;
+            setMayhemOwned?: (ids: string[]) => Promise<{ success: boolean }>;
+            setMayhemRoll?: (ids: string[]) => Promise<{ success: boolean }>;
+            takeMayhemAugment?: (augmentId: string) => Promise<{ success: boolean; owned?: string[] }>;
             setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
             reportOverlayContent?: (hasContent: boolean) => void;
         };

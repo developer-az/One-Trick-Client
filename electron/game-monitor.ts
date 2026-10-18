@@ -40,6 +40,29 @@ import { snapshotFromState, tickPlayMoments, type PlayMomentSnapshot } from '../
 import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
+import { isAramOrMayhem, isMayhemGame } from '../src/logic/mayhem/mode';
+import { planMayhemOcr } from '../src/logic/mayhem/augmentSchedule';
+import {
+    computeMayhemPickPhase,
+    nextMayhemPickLevel,
+    resolveMayhemPicksTaken,
+    type MayhemPickPhase,
+} from '../src/logic/mayhem/pickPhase';
+import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
+import { loadMayhemBundle } from './mayhem-data';
+import {
+    detectMayhemOfferIds,
+    isMayhemOcrRerollPending,
+    resetMayhemOcrCache,
+    setMayhemOcrRetainOffers,
+} from './mayhem-ocr';
+import {
+    getMayhemPicksTaken,
+    getOwnedMayhemAugmentIds,
+    mergedMayhemOfferIds,
+    resetMayhemMatchState,
+    setMayhemRollIds,
+} from './mayhem-state';
 
 /**
  * Match lifecycle, driven by League Client events (see lcu-socket.ts).
@@ -55,6 +78,9 @@ import { resetJungleThreatClock } from '../src/logic/jungleLogic';
 
 /** In-game: overlay owns the hot path; ~2.5s keeps cues/wards fresh without thrashing. */
 const POLL_INGAME_MS = 2500;
+/** After ~18 min, enemy item churn causes fewer meaningful HUD changes — ease off CPU/IPC. */
+const POLL_INGAME_LATE_MS = 4200;
+const LATE_GAME_SEC = 18 * 60;
 /** In-game with the overlay hidden: still ingest live for timers, but less often. */
 const POLL_INGAME_HIDDEN_MS = 8000;
 /** No League client found: probe the game API slowly in case a match is running anyway. */
@@ -102,6 +128,52 @@ export function getLastChampSelectEnemies(): CachedEnemy[] {
 
 export function isCurrentlyInGame(): boolean {
     return inGame;
+}
+
+export function isMayhemMatchActive(): boolean {
+    return (
+        inGame &&
+        !!lastGoodPayload &&
+        isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)
+    );
+}
+
+/** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
+export function dismissMayhemAugmentPanelFromHotkey(): void {
+    if (!isMayhemMatchActive()) return;
+    mayhemUserDismissedUntilMs = Date.now() + 120_000;
+    mayhemAugmentDismissedAt = Date.now();
+    mayhemManualScanUntilMs = 0;
+    purgeMayhemOffersFromScreen();
+    pushMayhemOverlayPatch();
+    notifyMayhemOverlayStateChanged();
+}
+
+/** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
+export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
+    if (!inGame || !lastGoodPayload) return;
+    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
+    mayhemUserDismissedUntilMs = 0;
+    mayhemAugmentDismissedAt = 0;
+    const bundle = loadMayhemBundle();
+    if (!bundle?.augments?.length) return;
+    resetMayhemOcrCache();
+    const ids = await detectMayhemOfferIds(
+        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+        0,
+        { minMatches: 1 }
+    );
+    mayhemOfferIds = ids;
+    if (ids.length >= 1) {
+        mayhemManualScanUntilMs = Date.now() + 60_000;
+        setMayhemRollIds(ids);
+        beginMayhemPickSession();
+    } else {
+        mayhemManualScanUntilMs = 0;
+    }
+    applyMayhemOfferVisibilityAfterOcr();
+    pushMayhemOverlayPatch();
+    notifyMayhemOverlayStateChanged();
 }
 
 /** Diagnostics for the performance panel. */
@@ -231,15 +303,21 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         summonerSpells: p.summonerSpells,
     }));
 
-    // Keep lane summoner timers current from live positions + kill events
-    ingestLivePlayers(
-        enemyPlayers.map((p) => ({
-            championName: p.championName,
-            position: p.position,
-            summonerSpells: p.summonerSpells,
-            itemIds: (p.items || []).map((i) => i.itemID),
-        }))
-    );
+    const aramMatch = isAramOrMayhem(live?.gameData?.gameMode, live?.gameData?.mapName);
+    if (isMayhemGame(live?.gameData?.gameMode, live?.gameData?.mapName) && live) {
+        syncMayhemPickPhase(live);
+    }
+    // Lane-based enemy sum tracking is SR-only (ADC/mid bot lane model).
+    if (!aramMatch) {
+        ingestLivePlayers(
+            enemyPlayers.map((p) => ({
+                championName: p.championName,
+                position: p.position,
+                summonerSpells: p.summonerSpells,
+                itemIds: (p.items || []).map((i) => i.itemID),
+            }))
+        );
+    }
     const nameToChampion = new Map<string, string>();
     for (const p of live?.allPlayers || []) {
         if (p.summonerName) nameToChampion.set(p.summonerName, p.championName);
@@ -278,7 +356,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
             isDead: p.isDead,
         })) || [];
 
-    return {
+    const payload = {
         inGame: true,
         gameflowPhase,
         gameMode: live?.gameData?.gameMode || null,
@@ -302,10 +380,22 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         enemies,
         allies,
         cachedChampSelectEnemies: lastChampSelectEnemies,
-        enemyBotSummoners: serializeSummoners(),
+        enemyBotSummoners: aramMatch ? [] : serializeSummoners(),
         activePlayerLevel: live?.activePlayer?.level ?? localPlayer?.level ?? 0,
+        championStats: live?.activePlayer?.championStats ?? null,
+        mayhemOfferIds: (() => {
+            const merged = mergedMayhemOfferIds(mayhemOfferIds);
+            return merged.length ? merged : undefined;
+        })(),
+        mayhemOwnedIds: getOwnedMayhemAugmentIds(),
+        mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemPickHint: mayhemPickPhase.hint,
+        mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
+        mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
         timestamp: Date.now(),
     };
+
+    return payload;
 }
 
 /** Coarse fingerprint — skip IPC/React work when nothing the HUD cares about changed. */
@@ -315,11 +405,12 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
     const goldBucket = Math.floor((lp?.currentGold ?? 0) / 50);
     const wardScore = Math.floor(lp?.scores?.wardScore ?? 0);
     // Include CS + items so jungle pathing / threat heuristics actually update.
+    const itemBucket = Math.floor((payload.gameTime || 0) / 12);
     const enemyKey = (payload.enemies || [])
         .map((e) => {
             const cs = e.scores?.creepScore ?? 0;
-            const items = (e.items || []).slice(0, 6).join(',');
-            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${items}`;
+            const itemCount = (e.items || []).filter((id) => id && id !== '0').length;
+            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}`;
         })
         .join('|');
     // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
@@ -339,7 +430,308 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         payload.profileHint || '',
         summonerFingerprint(),
         (payload.cachedChampSelectEnemies || []).map((e) => e.championId).join(','),
+        (payload.mayhemOfferIds || []).join(','),
+        (payload.mayhemOwnedIds || []).join(','),
+        payload.mayhemAugmentWindow ? 1 : 0,
+        payload.mayhemPickHint || '',
+        payload.mayhemWaitingForDeath ? 1 : 0,
+        payload.mayhemAugmentDismissedAt ?? 0,
     ].join('~');
+}
+
+let mayhemOfferIds: string[] = [];
+let mayhemPollTimer: ReturnType<typeof setTimeout> | null = null;
+let mayhemBurstUntilMs = 0;
+let mayhemLastLevel = 0;
+let mayhemPickPhase: MayhemPickPhase = {
+    pickWindowOpen: false,
+    waitingForDeath: false,
+    hint: '',
+    nextPickLevel: 3,
+    picksTaken: 0,
+    ocrBurst: false,
+};
+let mayhemWasDead = false;
+let mayhemLastEventScanId = 0;
+let mayhemPicksAtWindowOpen = 0;
+let mayhemPickSessionActive = false;
+/** Page Down with a single OCR hit — allow HUD until timeout or off-screen OCR. */
+let mayhemManualScanUntilMs = 0;
+/** Page Up dismiss — pause auto OCR until next pick window or Page Down. */
+let mayhemUserDismissedUntilMs = 0;
+let mayhemAugmentDismissedAt = 0;
+
+function mayhemManualScanActive(): boolean {
+    return Date.now() < mayhemManualScanUntilMs;
+}
+
+function mayhemAugmentHudShouldShow(): boolean {
+    const merged = mergedMayhemOfferIds(mayhemOfferIds);
+    return isMayhemAugmentHudVisible(merged, mayhemManualScanActive());
+}
+
+function clearMayhemLiveOffers(): void {
+    mayhemOfferIds = [];
+    setMayhemRollIds([]);
+    resetMayhemOcrCache();
+}
+
+function beginMayhemPickSession(): void {
+    mayhemPickSessionActive = true;
+    setMayhemOcrRetainOffers(true);
+}
+
+function endMayhemPickSession(): void {
+    mayhemPickSessionActive = false;
+    setMayhemOcrRetainOffers(false);
+    clearMayhemLiveOffers();
+}
+
+function purgeMayhemOffersFromScreen(): void {
+    mayhemOfferIds = [];
+    setMayhemRollIds([]);
+    mayhemManualScanUntilMs = 0;
+    if (mayhemPickSessionActive) {
+        endMayhemPickSession();
+    } else {
+        setMayhemOcrRetainOffers(false);
+        resetMayhemOcrCache();
+    }
+}
+
+function applyMayhemOfferVisibilityAfterOcr(): void {
+    if (mayhemAugmentHudShouldShow()) {
+        if (!mayhemPickSessionActive) beginMayhemPickSession();
+        return;
+    }
+    purgeMayhemOffersFromScreen();
+}
+
+function shouldRunMayhemAutoOcr(level: number): boolean {
+    if (Date.now() < mayhemUserDismissedUntilMs) return false;
+    const ownedCount = mayhemPicksResolved(level);
+    const nextPick = nextMayhemPickLevel(ownedCount);
+    if (nextPick == null) return false;
+    if (level >= nextPick) return true;
+    if (mayhemAugmentHudShouldShow()) return true;
+    return false;
+}
+
+function mayhemPicksResolved(level: number): number {
+    return resolveMayhemPicksTaken(level, getOwnedMayhemAugmentIds(), getMayhemPicksTaken());
+}
+
+function syncMayhemPickPhase(live: LiveClientAllGameData): void {
+    const localPlayer = findLocalPlayer(live);
+    const level = localPlayer?.level ?? live.activePlayer?.level ?? 1;
+    const isDead = !!localPlayer?.isDead;
+    const ownedCount = mayhemPicksResolved(level);
+    const prevOpen = mayhemPickPhase.pickWindowOpen;
+    mayhemPickPhase = computeMayhemPickPhase({
+        level,
+        gameTime: live.gameData?.gameTime ?? 0,
+        isDead,
+        wasDead: mayhemWasDead,
+        ownedAugmentCount: ownedCount,
+        championStats: live.activePlayer?.championStats,
+    });
+
+    if (ownedCount > mayhemPicksAtWindowOpen && !isDead) {
+        mayhemPickPhase = {
+            ...mayhemPickPhase,
+            pickWindowOpen: false,
+            waitingForDeath: false,
+            ocrBurst: false,
+        };
+        purgeMayhemOffersFromScreen();
+    }
+
+    if (mayhemPickPhase.pickWindowOpen && !prevOpen) {
+        mayhemPicksAtWindowOpen = ownedCount;
+        mayhemUserDismissedUntilMs = 0;
+        mayhemAugmentDismissedAt = 0;
+    }
+    mayhemWasDead = isDead;
+    const events = live.events?.Events;
+    if (events?.length && isMayhemGame(live.gameData?.gameMode, live.gameData?.mapName)) {
+        for (const ev of events) {
+            if (ev.EventID <= mayhemLastEventScanId) continue;
+            const name = ev.EventName || '';
+            if (/augment|mayhem|kiwi|arena/i.test(name)) {
+                console.info('[mayhem-live-event]', name, ev.EventTime);
+            }
+        }
+        const maxId = events.reduce((m, e) => Math.max(m, e.EventID ?? 0), 0);
+        if (maxId > mayhemLastEventScanId) mayhemLastEventScanId = maxId;
+    }
+}
+
+function syncMayhemPickPhaseFromPayload(): void {
+    if (!lastGoodPayload) return;
+    const lp = lastGoodPayload.localPlayer;
+    const level = lp?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const isDead = !!lp?.isDead;
+
+    const ownedCount = mayhemPicksResolved(level);
+    const prevOpen = mayhemPickPhase.pickWindowOpen;
+    mayhemPickPhase = computeMayhemPickPhase({
+        level,
+        gameTime: lastGoodPayload.gameTime ?? 0,
+        isDead,
+        wasDead: mayhemWasDead,
+        ownedAugmentCount: ownedCount,
+        championStats: lastGoodPayload.championStats,
+    });
+
+    if (ownedCount > mayhemPicksAtWindowOpen && !isDead) {
+        mayhemPickPhase = {
+            ...mayhemPickPhase,
+            pickWindowOpen: false,
+            waitingForDeath: false,
+            ocrBurst: false,
+        };
+        purgeMayhemOffersFromScreen();
+    }
+
+    if (mayhemPickPhase.pickWindowOpen && !prevOpen) {
+        mayhemPicksAtWindowOpen = ownedCount;
+        mayhemUserDismissedUntilMs = 0;
+        mayhemAugmentDismissedAt = 0;
+    }
+    mayhemWasDead = isDead;
+}
+
+function stopMayhemPoll(): void {
+    if (mayhemPollTimer) {
+        clearTimeout(mayhemPollTimer);
+        mayhemPollTimer = null;
+    }
+}
+
+function scheduleMayhemPoll(delayMs: number): void {
+    stopMayhemPoll();
+    mayhemPollTimer = setTimeout(() => {
+        void tickMayhemOcr().finally(() => {
+            if (inGame) scheduleMayhemPoll(nextMayhemPollDelayMs());
+        });
+    }, delayMs);
+}
+
+function nextMayhemPollDelayMs(): number {
+    if (!lastGoodPayload || !isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return 15_000;
+    syncMayhemPickPhaseFromPayload();
+    if (mayhemPickPhase.pickWindowOpen) return 900;
+    if (mayhemPickPhase.waitingForDeath) return 4000;
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const plan = planMayhemOcr({
+        level,
+        previousLevel: mayhemLastLevel,
+        championStats: lastGoodPayload.championStats,
+        gameTime: lastGoodPayload.gameTime ?? 0,
+        nowMs: Date.now(),
+        burstUntilMs: mayhemBurstUntilMs,
+    });
+    mayhemBurstUntilMs = plan.burstUntilMs;
+    return plan.intervalMs;
+}
+
+function startMayhemPoll(): void {
+    mayhemLastLevel = 0;
+    mayhemBurstUntilMs = 0;
+    mayhemWasDead = false;
+    mayhemLastEventScanId = 0;
+    mayhemPicksAtWindowOpen = 0;
+    mayhemPickSessionActive = false;
+    mayhemManualScanUntilMs = 0;
+    mayhemUserDismissedUntilMs = 0;
+    mayhemAugmentDismissedAt = 0;
+    setMayhemOcrRetainOffers(false);
+    resetMayhemMatchState();
+    mayhemPickPhase = {
+        pickWindowOpen: false,
+        waitingForDeath: false,
+        hint: '',
+        nextPickLevel: 3,
+        picksTaken: 0,
+        ocrBurst: false,
+    };
+    scheduleMayhemPoll(1200);
+}
+
+function pushMayhemOverlayPatch(): void {
+    if (!lastGoodPayload) return;
+    const merged = mergedMayhemOfferIds(mayhemOfferIds);
+    const payload = {
+        ...lastGoodPayload,
+        mayhemOfferIds: merged.length ? merged : undefined,
+        mayhemOwnedIds: getOwnedMayhemAugmentIds(),
+        mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemPickHint: mayhemPickPhase.hint,
+        mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
+        mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
+        timestamp: Date.now(),
+    };
+    const fp = overlayFingerprint(payload);
+    if (fp === lastOverlayFingerprint) return;
+    lastGoodPayload = payload;
+    lastOverlayFingerprint = fp;
+    sendOverlayUpdate(payload);
+}
+
+/** Dashboard owned/roll edits — push merged offers without waiting for the next live poll. */
+export function notifyMayhemOverlayStateChanged(): void {
+    pushMayhemOverlayPatch();
+}
+
+async function tickMayhemOcr(): Promise<void> {
+    if (!inGame || !lastGoodPayload) return;
+    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
+    syncMayhemPickPhaseFromPayload();
+    pushMayhemOverlayPatch();
+
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    mayhemLastLevel = level;
+
+    const bundle = loadMayhemBundle();
+    if (!bundle?.augments?.length) return;
+
+    if (!shouldRunMayhemAutoOcr(level)) {
+        if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
+        pushMayhemOverlayPatch();
+        return;
+    }
+
+    const onScreen = mayhemAugmentHudShouldShow();
+    setMayhemOcrRetainOffers(onScreen);
+    const rerollPending = isMayhemOcrRerollPending();
+    const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
+    const minGap = onScreen
+        ? rerollPending
+            ? 550
+            : needThirdCard
+              ? 450
+              : mayhemOfferIds.length >= 3
+                ? 1100
+                : 750
+        : 1400;
+    const ids = await detectMayhemOfferIds(
+        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+        minGap,
+        { minMatches: 2 }
+    );
+    mayhemOfferIds = ids;
+    if (ids.length) setMayhemRollIds(ids);
+    applyMayhemOfferVisibilityAfterOcr();
+    pushMayhemOverlayPatch();
+}
+
+export function clearMayhemOffersForDashboard(): void {
+    clearMayhemLiveOffers();
+    pushMayhemOverlayPatch();
+}
+
+export function getMayhemLiveOfferIds(): string[] {
+    return [...mayhemOfferIds];
 }
 
 function resetMatchCaches(): void {
@@ -350,6 +742,20 @@ function resetMatchCaches(): void {
     lastLiveProofAt = 0;
     trustedGameTime = 0;
     playMomentSnapshot = null;
+    mayhemOfferIds = [];
+    mayhemPicksAtWindowOpen = 0;
+    mayhemPickSessionActive = false;
+    mayhemManualScanUntilMs = 0;
+    mayhemUserDismissedUntilMs = 0;
+    mayhemAugmentDismissedAt = 0;
+    setMayhemOcrRetainOffers(false);
+    resetMayhemMatchState();
+    mayhemBurstUntilMs = 0;
+    mayhemLastLevel = 0;
+    mayhemWasDead = false;
+    mayhemLastEventScanId = 0;
+    resetMayhemOcrCache();
+    stopMayhemPoll();
     resetJungleThreatClock();
     resetSummonerTracker();
 }
@@ -392,8 +798,12 @@ function considerMatchEnd(liveGameTime: number | null): void {
 
 function noteLiveClock(gameTime: number): void {
     lastLiveProofAt = Date.now();
+    const prev = trustedGameTime;
     if (Number.isFinite(gameTime) && gameTime > trustedGameTime) {
         trustedGameTime = gameTime;
+    }
+    if (prev < LATE_GAME_SEC && trustedGameTime >= LATE_GAME_SEC && inGame) {
+        scheduleLive();
     }
 }
 
@@ -461,6 +871,14 @@ function beginMatch(): void {
     onGameStateChange?.(true);
 }
 
+function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
+    if (isMayhemGame(gameMode, mapName)) {
+        if (!mayhemPollTimer) startMayhemPoll();
+        return;
+    }
+    stopMayhemPoll();
+}
+
 function endGameSession(): void {
     if (!inGame) return;
     console.info('[match] ended', lastMatchEndReason || '(manual)');
@@ -490,7 +908,9 @@ function endGameSession(): void {
 function liveCadence(): number | null {
     const phase = lcuSocket.phase;
     if (inGame || isInGamePhase(phase)) {
-        return isOverlayUserHidden() ? POLL_INGAME_HIDDEN_MS : POLL_INGAME_MS;
+        if (isOverlayUserHidden()) return POLL_INGAME_HIDDEN_MS;
+        const gt = trustedGameTime || lastGoodPayload?.gameTime || 0;
+        return gt >= LATE_GAME_SEC ? POLL_INGAME_LATE_MS : POLL_INGAME_MS;
     }
     // No client to tell us about matches: probe slowly so a running game is still found.
     if (lcuSocket.state === 'searching') return POLL_PROBE_MS;
@@ -542,6 +962,7 @@ async function liveTick(): Promise<void> {
             if ((payload.gameTime || 0) < trustedGameTime) {
                 payload.gameTime = trustedGameTime;
             }
+            syncMayhemPollForMode(payload.gameMode, payload.mapName);
             lastGoodPayload = payload;
             if (overlayHidden) {
                 // Slim ping so the main window stays parked as "in match"

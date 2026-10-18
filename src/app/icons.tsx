@@ -59,6 +59,14 @@ export const IconStats: React.FC<IconProps> = ({ size = 18, className }) => (
   </svg>
 );
 
+export const IconMayhem: React.FC<IconProps> = ({ size = 18, className }) => (
+  <svg {...base(size)} className={className}>
+    <path d="M12 3 4 9v12h16V9z" />
+    <path d="M9 14h6M9 17h4" />
+    <path d="m16 6 2-2M8 6 6 4" />
+  </svg>
+);
+
 export const IconCheck: React.FC<IconProps> = ({ size = 16, className }) => (
   <svg {...base(size)} className={className}>
     <path d="m5 12.5 4.5 4.5L19 7.5" />

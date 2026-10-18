@@ -22,11 +22,15 @@ import { SpellTimers } from '../SpellTimers';
 import { Card, CardHeader, SettingRow, Switch } from '../ui';
 
 const MODULE_INFO: Record<HudModuleId, { title: string; hint: string }> = {
-  sums: { title: 'Summoner timers', hint: 'Enemy Flash and other spell cooldowns next to the minimap.' },
-  gank: { title: 'Gank warning', hint: 'A coloured square estimating how likely a jungle gank is right now.' },
-  vision: { title: 'Vision', hint: 'Where to ward next, and when a ward is due.' },
+  sums: { title: 'Summoner timers', hint: 'SR: enemy Flash/ignite by lane. Off on Howling Abyss / ARAM.' },
+  gank: { title: 'Gank warning', hint: 'SR: jungle pressure. Hidden on Howling Abyss / ARAM.' },
+  vision: { title: 'Vision', hint: 'SR: lane wards. ARAM Mayhem: augment picks use this slot instead of sweeper hints.' },
   buy: { title: 'Next buy', hint: 'The next items left on your build path.' },
   action: { title: 'Next move', hint: 'Short calls for what to do next, ranked by urgency.' },
+  mayhem: {
+    title: 'ARAM Mayhem (beta)',
+    hint: 'Mayhem only: OCR on augment cards (Windows). Off by default — enable for ARAM Mayhem queues.',
+  },
   frames: { title: 'Frames', hint: 'Decorative borders around the overlay panels.' },
 };
 

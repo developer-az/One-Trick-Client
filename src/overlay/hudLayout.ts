@@ -75,6 +75,7 @@ export function dualRailLayout(): HudLayout {
       moduleElement('vision', { x: 0.835, y: 0.26, visible: true, anchor: 'tr' }),
       moduleElement('buy', { x: 0.835, y: 0.42, visible: true, anchor: 'tr' }),
       moduleElement('action', { x: 0.835, y: 0.54, visible: true, anchor: 'tr' }),
+      moduleElement('mayhem', { x: 0.835, y: 0.26, visible: false, anchor: 'tr' }),
       moduleElement('frames', { x: 0.5, y: 0.82, visible: false, anchor: 'center' }),
     ],
     stickers: [],
@@ -176,6 +177,7 @@ export function layoutToHudModules(layout: HudLayout): HudModules {
     vision: true,
     buy: true,
     action: true,
+    mayhem: false,
     frames: false,
   };
   for (const id of HUD_MODULE_IDS) {

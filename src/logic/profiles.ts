@@ -31,6 +31,7 @@ import {
 } from './pantheonLogic';
 import type { ProfileSituation } from './situation';
 import { createGenericProfile } from './genericProfile';
+import { CHAMPION_POSITIONS } from './championPositions';
 
 export type AuthoredProfileId = 'pyke-support' | 'pantheon-support' | 'yone-mid';
 export type GenericProfileId = `generic:${string}:${CatalogRole}`;
@@ -232,6 +233,24 @@ export function getProfile(id: ProfileId | string | null | undefined): ChampionP
   return pykeSupport;
 }
 
+/** Live Client often reports UTILITY in ARAM for marksmen — prefer real lanes. */
+function reconcileLiveRole(
+  championId: string,
+  catalogChamp: ReturnType<typeof findChampionInCatalog>,
+  liveRole: CatalogRole | null
+): CatalogRole | null {
+  if (!liveRole) return null;
+  const table =
+    CHAMPION_POSITIONS[championId] ||
+    catalogChamp?.roles ||
+    (catalogChamp?.tags ? [roleFromChampionTags(catalogChamp.tags)] : null);
+  const natural = table?.[0] || roleFromChampionTags(catalogChamp?.tags);
+  if (!table?.length) return liveRole;
+  if (table.includes(liveRole)) return liveRole;
+  if (liveRole === 'Support' && !table.includes('Support')) return natural;
+  return natural;
+}
+
 export function profileFromChampionName(
   name: string | null | undefined,
   role?: CatalogRole | null
@@ -244,8 +263,11 @@ export function profileFromChampionName(
   const ref = catalogChamp || resolveChampionRef({ name, id: name });
   const championId = catalogChamp?.id || ref?.id || name.replace(/[^a-zA-Z0-9]/g, '');
   if (!championId) return null;
+  const liveRole = role && isCatalogRole(role) ? reconcileLiveRole(championId, catalogChamp, role) : null;
+  const tableRole = CHAMPION_POSITIONS[championId]?.[0] ?? null;
   const resolvedRole =
-    (role && isCatalogRole(role) ? role : null) ||
+    liveRole ||
+    tableRole ||
     inferCatalogRole(catalogChamp, null) ||
     roleFromChampionTags(catalogChamp?.tags);
   return getProfile(genericProfileId(championId, resolvedRole));

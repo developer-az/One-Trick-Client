@@ -55,6 +55,33 @@ jobs:
       - name: Jungle threat heuristics
         run: npm run verify:jungle
 
+      - name: Cannon wave cues
+        run: npm run verify:wave
+
+      - name: Loss matchup insights
+        run: npm run verify:loss-insights
+
+      - name: Ranked SR guards (Mayhem isolated)
+        run: npm run verify:ranked
+
+      - name: ARAM Mayhem augment ranker
+        run: npm run verify:mayhem
+
+      - name: Mayhem OCR name match
+        run: npm run verify:mayhem-match
+
+      - name: Mayhem HUD visibility (OCR-gated)
+        run: npm run verify:mayhem-visibility
+
+      - name: verify mayhem OCR (Windows OCR + matcher)
+        run: npm run verify:mayhem-ocr
+
+      - name: Global hotkey + summoner toggle logic
+        run: npm run verify:global-hotkeys
+
+      - name: Mayhem augment OCR schedule
+        run: npm run verify:augment-schedule
+
       - name: Play moment cues
         run: npm run verify:play-moments
 

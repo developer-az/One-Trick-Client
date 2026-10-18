@@ -72,6 +72,7 @@ export function getAppSettings(): AppSettings {
 
 export function gpuAccelerationAtLaunch(): boolean {
     loadAppSettings();
+    if (process.env.PYKE_GPU === '1') return true;
     return !!gpuAtLaunch;
 }
 
