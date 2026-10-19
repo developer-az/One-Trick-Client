@@ -9,35 +9,9 @@
  * next to a running game on a second monitor).
  */
 
-html:not(.overlay-root) {
-  --ot-bg: #08080a;
-  --ot-bg-raised: #0b0b0e;
-  --ot-surface: #111114;
-  --ot-surface-2: #17171b;
-  --ot-surface-3: #202026;
-  --ot-border: rgba(212, 216, 222, 0.08);
-  --ot-border-strong: rgba(212, 216, 222, 0.16);
-  --ot-text: #eceef2;
-  --ot-text-2: #a9adb6;
-  --ot-text-3: #6e727c;
-  --ot-gold: #d4d8de; /* chrome silver: "yours" */
-  --ot-gold-soft: rgba(212, 216, 222, 0.1);
-  --ot-blood: #b4243a;
-  --ot-blood-soft: rgba(180, 36, 58, 0.16);
-  --ot-chrome: linear-gradient(180deg, #f4f5f8 0%, #c9cdd4 45%, #8d939d 55%, #dfe2e7 100%);
-  --ot-teal: #35d0ba;
-  --ot-teal-soft: rgba(53, 208, 186, 0.13);
-  --ot-red: #f0656a;
-  --ot-red-soft: rgba(240, 101, 106, 0.13);
-  --ot-blue: #6aa6f8;
-  --ot-blue-soft: rgba(106, 166, 248, 0.13);
-  --ot-amber: #f2b350;
-  --ot-amber-soft: rgba(242, 179, 80, 0.13);
-  --ot-radius: 6px;
-  --ot-radius-sm: 5px;
-  --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-  --ot-font-display: 'Cinzel', 'Times New Roman', serif;
+/* Tokens live in tokens.css on :root — see src/app/tokens.css. */
 
+html:not(.overlay-root) {
   font-family: var(--ot-font);
   font-weight: 450;
   letter-spacing: -0.005em;

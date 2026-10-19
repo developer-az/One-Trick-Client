@@ -136,6 +136,7 @@ declare global {
             setOverlayHudScale: (scale: number) => Promise<{ success: boolean; hudScale: number }>;
             setOverlayMapScale: (scale: number) => Promise<{ success: boolean; mapScale: number }>;
             setOverlayChromeColor: (color: string) => Promise<{ success: boolean; chromeColor: string }>;
+            setOverlayTextScale: (scale: number) => Promise<{ success: boolean; overlayTextScale: number }>;
             setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
             setOverlayHudLayout: (layout: unknown) => Promise<{ success: boolean; hudLayout?: unknown }>;
             getCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
@@ -152,6 +153,7 @@ declare global {
                 hudScale: number;
                 mapScale?: number;
                 chromeColor?: string;
+                overlayTextScale?: number;
                 hudModules?: HudModules;
                 hudLayout?: unknown;
                 calibration?: OverlayCalibration;

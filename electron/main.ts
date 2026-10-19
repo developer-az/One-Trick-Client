@@ -47,6 +47,8 @@ import {
     setMapScale,
     getChromeColor,
     setChromeColor,
+    getOverlayTextScale,
+    setOverlayTextScale,
     getHudModules,
     setHudModules,
     getHudLayout,
@@ -701,6 +703,11 @@ app.whenReady().then(() => {
         return { success: true, chromeColor: setChromeColor(color) };
     });
 
+    ipcMain.handle('overlay-set-text-scale', async (_event, scale: unknown) => {
+        const next = setOverlayTextScale(scale);
+        return { success: true, overlayTextScale: next };
+    });
+
     ipcMain.handle('overlay-set-hud-modules', async (_event, modules: unknown) => {
         return { success: true, hudModules: setHudModules(modules) };
     });
@@ -814,6 +821,7 @@ app.whenReady().then(() => {
             hudScale: getHudScale(),
             mapScale: getMapScale(),
             chromeColor: getChromeColor(),
+            overlayTextScale: getOverlayTextScale(),
             hudModules: getHudModules(),
             hudLayout: getHudLayout(),
             calibration: getCalibration(),

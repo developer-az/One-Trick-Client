@@ -93,6 +93,7 @@
     "verify:electron-paths": "npx --yes tsx verify_electron_paths.ts",
     "verify:packaging": "npx --yes tsx verify_packaging.ts",
     "verify:ranked": "npx --yes tsx verify_ranked.ts && npx --yes tsx verify_aram_profile.ts",
+    "verify:one-trick": "npx --yes tsx verify_one_trick.ts",
     "verify:release": "npm run lint && npm run verify:cues && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-bounds && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",

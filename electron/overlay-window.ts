@@ -263,6 +263,8 @@ let hudScale = 20;
 /** Default ~MinimapScale 1.0 (was 88 ≈ 1.82 — caused huge map frame vs HUD). */
 let mapScale = 33;
 let chromeColor = '#e8b84a';
+/** Overlay text scale multiplier (0.85–1.6). Independent of HUD geometry. */
+let overlayTextScale = 1;
 let gameWidth = 1920;
 let gameHeight = 1080;
 let calibration: OverlayCalibration = { ...DEFAULT_CALIBRATION, ability: { ...DEFAULT_CALIBRATION.ability }, minimap: { ...DEFAULT_CALIBRATION.minimap } };
@@ -535,6 +537,7 @@ function loadSettings(): void {
             hudScale?: unknown;
             mapScale?: unknown;
             chromeColor?: unknown;
+            overlayTextScale?: unknown;
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
             hudModules?: unknown;
@@ -551,6 +554,8 @@ function loadSettings(): void {
         }
         const savedColor = normalizeChromeColor(settings.chromeColor);
         if (savedColor) chromeColor = savedColor;
+        const savedTextScale = normalizeOverlayTextScale(settings.overlayTextScale);
+        if (savedTextScale != null) overlayTextScale = savedTextScale;
         const savedCalibration = settings as { calibration?: { ability?: unknown; minimap?: unknown } };
         if (savedCalibration.calibration) {
             const ability = normalizeFrameCalibration(savedCalibration.calibration.ability);
@@ -592,6 +597,7 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
                 hudScale,
                 mapScale,
                 chromeColor,
+                overlayTextScale,
                 interactiveBounds,
                 calibration,
                 hudModules,
@@ -1029,6 +1035,27 @@ export function getChromeColor(): string {
     return chromeColor;
 }
 
+/** Clamp to a sane range: below 0.85 is unreadable, above 1.6 the panels outgrow their anchors. */
+function normalizeOverlayTextScale(value: unknown): number | null {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    return Math.round(Math.max(0.85, Math.min(1.6, value)) * 100) / 100;
+}
+
+export function getOverlayTextScale(): number {
+    ensureSettingsLoaded();
+    return overlayTextScale;
+}
+
+export function setOverlayTextScale(value: unknown): number {
+    const next = normalizeOverlayTextScale(value);
+    if (next != null) {
+        overlayTextScale = next;
+        saveSettings();
+        broadcastOverlayMeta();
+    }
+    return overlayTextScale;
+}
+
 export function setChromeColor(color: string): string {
     const next = normalizeChromeColor(color);
     if (next) {
@@ -1111,6 +1138,7 @@ export function broadcastOverlayMeta(): void {
             hudScale,
             mapScale,
             chromeColor,
+            overlayTextScale,
             calibration,
             gameWidth,
             gameHeight,

@@ -40,6 +40,7 @@ interface OverlayControls {
   hudScale: number;
   mapScale: number;
   chromeColor: string;
+  overlayTextScale: number;
   modules: HudModules;
   layout: HudLayout;
 }
@@ -51,6 +52,7 @@ function useOverlayControls() {
     hudScale: 20,
     mapScale: 33,
     chromeColor: '#d4d8de',
+    overlayTextScale: 1,
     modules: DEFAULT_HUD_MODULES,
     layout: typeof window !== 'undefined' ? loadStoredHudLayout() : dualRailLayout(),
   }));
@@ -70,18 +72,20 @@ function useOverlayControls() {
         hudScale: res.hudScale,
         mapScale: typeof res.mapScale === 'number' ? res.mapScale : s.mapScale,
         chromeColor: res.chromeColor || s.chromeColor,
+        overlayTextScale: typeof res.overlayTextScale === 'number' ? res.overlayTextScale : s.overlayTextScale,
         layout: layout || s.layout,
         modules: res.hudModules ? normalizeHudModules(res.hudModules) : layout ? normalizeHudModules(Object.fromEntries(layout.elements.map((e) => [e.id, e.visible]))) : s.modules,
       }));
     });
     const unsubVis = api.onOverlayVisibilityChanged?.((p) => patch({ visible: p.visible }));
     const unsubMeta = api.onOverlayMeta?.((payload) => {
-      const meta = payload as Partial<{ clickThrough: boolean; hudScale: number; mapScale: number; chromeColor: string; hudModules: unknown; hudLayout: unknown }>;
+      const meta = payload as Partial<{ clickThrough: boolean; hudScale: number; mapScale: number; chromeColor: string; overlayTextScale: number; hudModules: unknown; hudLayout: unknown }>;
       const next: Partial<OverlayControls> = {};
       if (typeof meta.clickThrough === 'boolean') next.clickThrough = meta.clickThrough;
       if (typeof meta.hudScale === 'number') next.hudScale = meta.hudScale;
       if (typeof meta.mapScale === 'number') next.mapScale = meta.mapScale;
       if (typeof meta.chromeColor === 'string') next.chromeColor = meta.chromeColor;
+      if (typeof meta.overlayTextScale === 'number') next.overlayTextScale = meta.overlayTextScale;
       if (meta.hudModules) next.modules = normalizeHudModules(meta.hudModules);
       if (meta.hudLayout) {
         next.layout = normalizeHudLayout(meta.hudLayout);
@@ -130,6 +134,11 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
   const setChrome = (color: string) => {
     patch({ chromeColor: color });
     void api?.setOverlayChromeColor?.(color);
+  };
+
+  const setTextScale = (value: number) => {
+    patch({ overlayTextScale: value });
+    void api?.setOverlayTextScale?.(value);
   };
 
   const chrome = normalizeChromeColor(state.chromeColor);
@@ -239,6 +248,24 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
           />
           <Slider label="HUD scale" value={state.hudScale} onChange={(v) => setScale('hud', v)} />
           <Slider label="Minimap scale" value={state.mapScale} onChange={(v) => setScale('map', v)} />
+          <label className="block py-2">
+            <div className="flex justify-between text-[15px] mb-1.5">
+              <span className="font-medium">Overlay text size</span>
+              <span className="ot-muted ot-num">{Math.round((state.overlayTextScale ?? 1) * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min={85}
+              max={160}
+              step={5}
+              value={Math.round((state.overlayTextScale ?? 1) * 100)}
+              className="ot-range"
+              onChange={(e) => setTextScale(Number(e.target.value) / 100)}
+            />
+            <p className="mt-1 text-xs ot-faint leading-relaxed">
+              Scales overlay type only. Panels stay where you placed them — useful on 1440p and above.
+            </p>
+          </label>
           <div className="mt-4">
             <div className="text-[15px] font-medium mb-2">Accent colour</div>
             <div className="flex flex-wrap items-center gap-2">

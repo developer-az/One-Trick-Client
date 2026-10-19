@@ -108,6 +108,7 @@ export const OverlayApp: React.FC = () => {
   const [hudScale, setHudScale] = useState(20);
   const [mapScale, setMapScale] = useState(33);
   const [chromeColor, setChromeColor] = useState('#e8b84a');
+  const [overlayTextScale, setOverlayTextScale] = useState(1);
   const [collapsed, setCollapsed] = useState(false);
   const [gameWidth, setGameWidth] = useState(1920);
   const [gameHeight, setGameHeight] = useState(1080);
@@ -208,6 +209,7 @@ export const OverlayApp: React.FC = () => {
         hudScale?: number;
         mapScale?: number;
         chromeColor?: string;
+        overlayTextScale?: number;
         calibration?: OverlayCalibration;
         gameWidth?: number;
         gameHeight?: number;
@@ -233,6 +235,7 @@ export const OverlayApp: React.FC = () => {
       if (typeof meta.hudScale === 'number') setHudScale(meta.hudScale);
       if (typeof meta.mapScale === 'number') setMapScale(meta.mapScale);
       if (typeof meta.chromeColor === 'string') setChromeColor(meta.chromeColor);
+      if (typeof meta.overlayTextScale === 'number') setOverlayTextScale(meta.overlayTextScale);
       if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
       if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
       if (meta.calibration) setCalibration(meta.calibration);
@@ -496,9 +499,21 @@ export const OverlayApp: React.FC = () => {
     return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
   }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem]);
 
+  // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
+  // value the 120 s dismiss window never expired until some unrelated update
+  // re-rendered the overlay, so a dismissed augment panel could stay hidden
+  // for the rest of the match.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!inMayhem || state.mayhemAugmentDismissedAt == null) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [inMayhem, state.mayhemAugmentDismissedAt]);
+
   const mayhemDismissedRecently =
     typeof state.mayhemAugmentDismissedAt === 'number' &&
-    Date.now() - state.mayhemAugmentDismissedAt < 120_000;
+    nowMs - state.mayhemAugmentDismissedAt < 120_000;
 
   const mayhemPanelActive =
     inMayhem &&
@@ -683,7 +698,10 @@ export const OverlayApp: React.FC = () => {
       className={`w-screen h-screen bg-transparent overflow-hidden select-none${
         clickThrough && !alignMode ? ' pointer-events-none' : ''
       }`}
-      style={{ ['--overlay-scale' as string]: `${0.75 + hudScale / 200}` }}
+      style={{
+        ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
+        ['--ov-text-scale' as string]: String(overlayTextScale),
+      }}
     >
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}

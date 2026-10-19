@@ -1,0 +1,62 @@
+/*
+ * One Trick — surface + semantic tokens, one source of truth.
+ *
+ * The dashboard and the in-game overlay share these values so a "red" means
+ * the same thing everywhere. Declared on :root so both html roots inherit;
+ * component stylesheets only consume them and never redefine them.
+ *
+ * Palettes were dimmed relative to the old theme: the dashboard frequently
+ * sits on a second monitor next to a running game, and pure #08080a / #eceef2
+ * contrast is harsh in a dark room. Text keeps >= 7:1 on surfaces.
+ */
+
+:root {
+  /* Surfaces (elevation, darkest to lightest) */
+  --ot-bg: #0a0a0c;
+  --ot-bg-raised: #0d0d10;
+  --ot-surface: #121216;
+  --ot-surface-2: #18181d;
+  --ot-surface-3: #212127;
+
+  /* Lines */
+  --ot-border: rgba(214, 219, 228, 0.075);
+  --ot-border-strong: rgba(214, 219, 228, 0.15);
+  --ot-border-bright: rgba(214, 219, 228, 0.28);
+
+  /* Text */
+  --ot-text: #e9ebef;
+  --ot-text-2: #a4a9b3;
+  --ot-text-3: #6b707a;
+
+  /* "Yours" — chrome silver. The authored/owned/best signal. */
+  --ot-gold: #d6dae0;
+  --ot-gold-soft: rgba(214, 218, 224, 0.09);
+  --ot-chrome: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
+
+  /* Signature ornament */
+  --ot-blood: #b4243a;
+  --ot-blood-soft: rgba(180, 36, 58, 0.15);
+
+  /* Semantic state — fixed meanings, never decorative */
+  --ot-teal: #35d0ba; /* live / good / ready */
+  --ot-teal-soft: rgba(53, 208, 186, 0.12);
+  --ot-red: #f0656a; /* enemy / danger / down */
+  --ot-red-soft: rgba(240, 101, 106, 0.12);
+  --ot-blue: #6aa6f8; /* ally */
+  --ot-blue-soft: rgba(106, 166, 248, 0.12);
+  --ot-amber: #f2b350; /* caution / short window */
+  --ot-amber-soft: rgba(242, 179, 80, 0.12);
+
+  /* Shape */
+  --ot-radius: 6px;
+  --ot-radius-sm: 5px;
+  --ot-radius-lg: 10px;
+
+  /* Type */
+  --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --ot-font-display: 'Cinzel', 'Times New Roman', serif;
+  --ot-font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
+
+  /* Overlay readability: text scale independent of HUD scale. */
+  --ov-text-scale: 1;
+}

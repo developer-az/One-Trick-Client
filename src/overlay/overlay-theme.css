@@ -9,7 +9,7 @@
 html.overlay-root {
   --font-display: 'Cinzel', 'Times New Roman', serif;
   --font-body: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif;
-  --font-mono: 'Inter Variable', 'Segoe UI', sans-serif;
+  --font-mono: var(--font-body);
   --ov-surface: rgba(9, 9, 11, 0.86);
   --ov-border: rgba(212, 216, 222, 0.14);
   --ov-text: #e7e9ee;
@@ -21,6 +21,9 @@ html.overlay-root {
   --ov-amber: #f2b350;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
+  /* Text scale: applied to every overlay panel so 1440p/4K players can read
+   * at a glance without changing layout geometry. 1 = shipped default. */
+  --ov-fs: var(--ov-text-scale, 1);
 }
 
 html.overlay-root .hud-overlay-panel {
@@ -188,3 +191,62 @@ html.overlay-root .hud-gank--yellow .hud-gank-sq {
 html.overlay-root .hud-buy-icon {
   border-radius: 6px;
 }
+
+/* ---------- Readability pass ----------
+ * Everything below is static: no blur, no filters, no animation. Sizing only.
+ * Text scales through --ov-fs so a 4K player can enlarge type without
+ * disturbing the saved HUD layout coordinates.
+ */
+
+html.overlay-root .hud-overlay-panel {
+  /* Slightly more opaque than before: the old 0.86 washed out over bright
+   * Rift terrain (river, base floors) at 100% brightness. */
+  background: rgba(8, 8, 11, 0.92);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+/* Scaled type inside a panel. Components keep their semantic elements; only
+ * the rendered size changes. */
+html.overlay-root .hud-overlay-panel .hud-chrome-title {
+  font-size: calc(12.5px * var(--ov-fs)) !important;
+}
+html.overlay-root .hud-overlay-panel .hud-chrome-meta,
+html.overlay-root .hud-overlay-panel .hud-chip,
+html.overlay-root .hud-overlay-panel .hud-gank-label {
+  font-size: calc(12px * var(--ov-fs)) !important;
+}
+html.overlay-root .hud-overlay-panel .hud-chrome-cue {
+  font-size: calc(13px * var(--ov-fs));
+  line-height: 1.3;
+}
+html.overlay-root .hud-overlay-panel .hud-ward,
+html.overlay-root .hud-overlay-panel .hud-gank {
+  font-size: calc(12.5px * var(--ov-fs));
+}
+html.overlay-root .hud-overlay-panel .text-\[11px\],
+html.overlay-root .hud-overlay-panel .text-\[10px\] {
+  font-size: calc(11px * var(--ov-fs)) !important;
+}
+
+/* The action cue is the one thing a player reads mid-fight: give it the
+ * strongest contrast and a single line of weight, not body copy. */
+html.overlay-root .hud-chrome-cue--spike {
+  background: rgba(155, 28, 46, 0.34);
+  border-color: rgba(240, 101, 106, 0.7);
+}
+html.overlay-root .hud-chrome-cue--warn {
+  background: rgba(242, 179, 80, 0.18);
+  border-color: rgba(242, 179, 80, 0.6);
+}
+
+/* Summoner timers: the countdown is the payload. Dim the scaffolding. */
+html.overlay-root .hud-overlay-panel .ot-spell {
+  height: calc(30px * var(--ov-fs));
+  font-size: calc(13px * var(--ov-fs));
+}
+
+/* Frames/guides must stay crisp when scaled on non-100% DPI Windows. */
+html.overlay-root canvas {
+  image-rendering: -webkit-optimize-contrast;
+}
+

@@ -20,8 +20,8 @@
   --hud-glow: rgba(242, 244, 247, 0.12);
   --hud-fill: rgba(8, 8, 10, 0.55);
   --font-display: 'Cinzel', 'Times New Roman', serif;
-  --font-body: 'Syne', 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-body: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
 
   font-family: var(--font-body);
   line-height: 1.45;
@@ -379,8 +379,8 @@ html.overlay-root {
   --chrome-blood: #9b1c2e;
   --chrome-line: rgba(212, 216, 222, 0.55);
   --font-display: 'Cinzel', 'Times New Roman', serif;
-  --font-body: 'Syne', 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-body: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
 }
 
 html.overlay-root,
@@ -1282,10 +1282,10 @@ html:not(.overlay-root) .font-display {
   font-family: 'Cinzel', 'Times New Roman', serif !important;
 }
 html:not(.overlay-root) .font-sans {
-  font-family: 'Syne', 'Segoe UI', sans-serif !important;
+  font-family: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', sans-serif !important;
 }
 html:not(.overlay-root) .font-mono {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
+  font-family: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace !important;
 }
 
 .hud-studio-fit {

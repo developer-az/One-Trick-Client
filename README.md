@@ -29,6 +29,7 @@ Authored doctrine: **Pyke Support**, **Pantheon Support**, **Yone Mid**. Every o
 ### Matchup & loadout
 
 - **Enemy composition analysis** by role
+- **One-trick guidance** — how to win on your champion, the habits that earn LP, the leaks that cost it, and how the enemy beats you (derived from kit and role, never a fabricated win rate)
 - **Profile builds** — core path first, then boots, then situational (boots are not forced to the front of the checklist)
 - **Rune pages** adapted to poke, CC, and lane shape
 - **Dominance gauge** for how favorable the setup is
@@ -46,6 +47,7 @@ Authored doctrine: **Pyke Support**, **Pantheon Support**, **Yone Mid**. Every o
 
 - **HUD studio** — pin modules and chrome stickers on a League HUD / minimap map (companion + [web studio](https://one-trick-client.vercel.app/studio/)); overlay uses the saved layout
 - HUD modules you can toggle: enemy summoners, gank square, vision, next-buy icons, one time-critical action line
+- **Overlay text size** — scales overlay type 85–160% without moving panels (for 1440p and above)
 - **Gank probability square** — yellow = fog / low-vision risk; red = brief high window from per-jungler pathing
 - **Vision** — short location + pink/sweep hint (detail in tooltip)
 - **Ability / minimap frames** are off by default — turn on Frames if you want them

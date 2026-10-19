@@ -63,8 +63,19 @@ export const MayhemView: React.FC<{
   useEffect(() => {
     syncFromDesktop();
     if (!isDesktop) return;
-    const t = window.setInterval(syncFromDesktop, 2500);
-    return () => window.clearInterval(t);
+    // Poll only while visible: the HUD tab can sit open all evening behind
+    // the game, and each tick is three cross-process calls for data that
+    // only changes when the player picks an augment.
+    const tick = () => {
+      if (document.hidden) return;
+      syncFromDesktop();
+    };
+    const t = window.setInterval(tick, 2500);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, []);
 
   useEffect(() => {

@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setOverlayHudScale: (scale: number) => ipcRenderer.invoke('overlay-set-hud-scale', scale),
     setOverlayMapScale: (scale: number) => ipcRenderer.invoke('overlay-set-map-scale', scale),
     setOverlayChromeColor: (color: string) => ipcRenderer.invoke('overlay-set-chrome-color', color),
+    setOverlayTextScale: (scale: number) => ipcRenderer.invoke('overlay-set-text-scale', scale),
     setOverlayHudModules: (modules: unknown) => ipcRenderer.invoke('overlay-set-hud-modules', modules),
     setOverlayHudLayout: (layout: unknown) => ipcRenderer.invoke('overlay-set-hud-layout', layout),
     getCatalog: () => ipcRenderer.invoke('catalog-get'),

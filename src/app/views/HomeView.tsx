@@ -9,6 +9,7 @@ import { IconArrowRight } from '../icons';
 import { SpellTimers } from '../SpellTimers';
 import type { LeagueStatus } from '../status';
 import { Badge, Card, CardHeader, ChampionCombobox, Pill, Portrait, SettingRow, Switch } from '../ui';
+import { OneTrickCard } from './OneTrickCard';
 
 const STAGE_TITLE: Record<LeagueStatus['stage'], string> = {
   preview: 'Browser preview',
@@ -79,7 +80,7 @@ export const HomeView: React.FC<{
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-5">
+      <div className="grid gap-5 lg:grid-cols-5 mb-5">
         <Card className="lg:col-span-3">
           <CardHeader
             title="Your champion"
@@ -134,6 +135,8 @@ export const HomeView: React.FC<{
         </Card>
 
         <div className="lg:col-span-2 space-y-5">
+          <OneTrickCard champion={profileChampion as Champion} role={profile.role} />
+
           {league.inGame && league.enemySummoners.length ? (
             <Card>
               <CardHeader title="Enemy summoners" sub="Click a spell when you see it used." />

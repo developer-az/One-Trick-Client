@@ -4,6 +4,7 @@ import '@fontsource-variable/inter';
 import '@fontsource-variable/space-grotesk';
 import '@fontsource/cinzel/700.css';
 import '../index.css';
+import '../app/tokens.css';
 import './overlay-theme.css';
 import { OverlayApp } from './OverlayApp';
 
