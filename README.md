@@ -16,6 +16,18 @@
 
 ---
 
+## Demo
+
+<p align="center">
+  <a href="docs/demo/one-trick-demo.mp4">
+    <img src="docs/demo/one-trick-demo.gif" alt="One Trick demo: add enemy picks in champion select and the matchup read, build and runes fill in" width="860">
+  </a>
+</p>
+
+<p align="center"><a href="docs/demo/one-trick-demo.mp4">Watch the full demo (27s)</a></p>
+
+---
+
 ## Overview
 
 **One Trick** connects to the League Client, fills enemy picks in champion select, recommends items and runes for your profile, exports loadouts into the client, and keeps a click-through HUD alive while you play.

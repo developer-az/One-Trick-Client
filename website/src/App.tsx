@@ -1,3 +1,4 @@
+import { DemoVideo } from './components/DemoVideo'
 import { DownloadActions } from './components/DownloadActions'
 import { SiteFooter } from './components/SiteFooter'
 import { SiteHeader } from './components/SiteHeader'
@@ -100,6 +101,20 @@ export default function App() {
                 ))}
               </ol>
             </aside>
+          </div>
+        </section>
+
+        <section className="demo-band" aria-labelledby="demo-heading">
+          <div className="mx-auto w-full max-w-6xl px-5 pb-16 pt-4 sm:px-8 sm:pb-20">
+            <p className="font-display text-[11px] font-medium uppercase tracking-[0.22em] text-chrome-gold">
+              See it work
+            </p>
+            <h2 id="demo-heading" className="mt-3 font-display text-3xl font-medium tracking-wide text-chrome-bright sm:text-4xl">
+              From champion select to a full loadout
+            </h2>
+            <div className="mt-8">
+              <DemoVideo />
+            </div>
           </div>
         </section>
 
