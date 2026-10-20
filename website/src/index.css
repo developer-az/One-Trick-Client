@@ -173,6 +173,45 @@ body {
   background: #0a0b0d;
 }
 
+/* Demo video: same plane as screenshots, fixed ratio so nothing shifts on load */
+.demo-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  background: #0a0b0d;
+}
+
+.demo-band {
+  background: linear-gradient(180deg, #0c0d10 0%, #0e0f12 100%);
+}
+
+.demo-step {
+  height: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(242, 244, 247, 0.08);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--chrome-dim);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.demo-step:hover {
+  border-color: rgba(242, 244, 247, 0.2);
+}
+
+.demo-step.is-active {
+  border-color: rgba(232, 184, 74, 0.45);
+  background: rgba(232, 184, 74, 0.05);
+  color: var(--chrome-bright);
+}
+
+.demo-step:focus-visible {
+  outline: 2px solid #9b1c2e;
+  outline-offset: 3px;
+}
+
 .hero-band {
   background:
     radial-gradient(680px 360px at 8% -8%, rgba(155, 28, 46, 0.28), transparent 62%),
