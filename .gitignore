@@ -30,3 +30,6 @@ dist-ssr
 
 # Native helper build output
 native/bin
+
+# Local OCR / vision scratch output
+out/

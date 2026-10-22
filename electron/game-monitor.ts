@@ -1,11 +1,22 @@
 import { makeLCURequest } from './lcu-connector';
 import { lcuSocket } from './lcu-socket';
+import { findLocalPlayer, type LiveClientAllGameData } from './live-client';
 import {
-    fetchLiveClientData,
-    fetchLiveGameClock,
-    findLocalPlayer,
-    type LiveClientAllGameData,
-} from './live-client';
+    getStateServiceStatus,
+    readLiveBoard,
+    readLiveClock,
+    resetStateService,
+    setStateServiceEngaged,
+    startStateService,
+    stopStateService,
+    getGameState,
+    getObjectiveTimers,
+} from './state-service';
+import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
+import { startClipper, setClipperActive, saveClip } from './clipper';
+
+/** A play at or above this weighted score becomes a clip trigger (Great+). */
+const CLIP_TRIGGER_SCORE = 45;
 import {
     describeEndMatchReason,
     isInGamePhase,
@@ -67,9 +78,11 @@ import {
 /**
  * Match lifecycle, driven by League Client events (see lcu-socket.ts).
  *
- * Nothing here polls the League client. The only timer is the Live Client
- * read, and it runs only while a match is in progress (or, when the client
- * can't be found at all, as a slow probe for a running game).
+ * Nothing here polls the League client. Game state comes from the State Service
+ * (`state-service.ts`), which samples the Live Client at 400 ms and owns the
+ * event cursor, objective timers and snapshot buffer. This module runs a slower
+ * timer purely to decide what the HUD should draw, and to end the match when
+ * the Live Client goes quiet.
  *
  * A dropped client socket or a few failed Live Client reads must not hide the
  * HUD. The overlay stays up until the post-game phase sticks or the game
@@ -758,6 +771,7 @@ function resetMatchCaches(): void {
     stopMayhemPoll();
     resetJungleThreatClock();
     resetSummonerTracker();
+    resetCoachCooldowns();
 }
 
 function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): ReturnType<typeof buildOverlayPayload> {
@@ -765,8 +779,42 @@ function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): Retur
     const { cues, recap } = tickPlayMoments(playMomentSnapshot, state);
     playMomentSnapshot = snapshotFromState(state);
     appendPlayRecap(recap);
-    if (!cues.length) return payload;
-    return { ...payload, momentCues: cues } as ReturnType<typeof buildOverlayPayload>;
+
+    // Live coach: one rule-engine tip per tick at most, riding the same
+    // moment-cue channel. Cooldowns reset on match start.
+    const coachCue = tickCoachCues(getGameState(), getObjectiveTimers(), {
+        gameTime: payload.gameTime || 0,
+        level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 1,
+        isDead: payload.localPlayer?.isDead ?? false,
+        respawnSec: 0,
+        currentGold: payload.localPlayer?.currentGold ?? null,
+        enemies: (payload.enemies || []).map((e) => ({
+            championName: e.championName,
+            level: e.level ?? 0,
+            isDead: !!e.isDead,
+            kills: e.scores?.kills ?? 0,
+            deaths: e.scores?.deaths ?? 0,
+        })),
+    });
+
+    const allCues = coachCue ? [coachCue, ...cues] : cues;
+
+    // Auto-clip: the first scored Brilliant/Great play in this tick becomes a
+    // clip trigger. Fire-and-forget — stitching must never block the HUD tick.
+    const trigger = recap.find((r) => typeof r.score === 'number' && r.score >= CLIP_TRIGGER_SCORE);
+    if (trigger) {
+        void saveClip({
+            eventMs: Date.now(),
+            gameTimeSec: trigger.gameTime,
+            label: trigger.label,
+            score: trigger.score,
+            reasons: trigger.reasons,
+        }).catch((error) => console.warn('[clipper] trigger failed:', error));
+    }
+
+    if (!allCues.length) return payload;
+
+    return { ...payload, momentCues: allCues } as ReturnType<typeof buildOverlayPayload>;
 }
 
 function phaseHoldMs(phase: string | null): number {
@@ -805,6 +853,17 @@ function noteLiveClock(gameTime: number): void {
     if (prev < LATE_GAME_SEC && trustedGameTime >= LATE_GAME_SEC && inGame) {
         scheduleLive();
     }
+}
+
+/**
+ * Silence is what ends a match (see considerMatchEnd), so the proof clock must
+ * come from the State Service's own successful reads — not from this tick,
+ * which now reads a cache and would otherwise look "fresh" forever.
+ */
+function syncLiveProofFromStateService(): void {
+    const status = getStateServiceStatus();
+    if (!status) return;
+    if (status.lastSuccessAt > lastLiveProofAt) lastLiveProofAt = status.lastSuccessAt;
 }
 
 function holdLastBoard(overlayHidden: boolean, gameTime?: number): void {
@@ -848,9 +907,16 @@ function beginMatch(): void {
     inGame = true;
     lastMatchEndReason = null;
     playMomentSnapshot = null;
+    // New match: drop the State Service's event cursor with it. Live Client
+    // EventIDs restart at 0 every game, so a stale cursor would swallow the
+    // first events of this one.
+    resetStateService('match start');
     clearPlayRecap();
     resetJungleThreatClock();
+    resetCoachCooldowns();
     setOverlayMatchActive(true);
+    // Ring buffer starts recording as the match opens.
+    void setClipperActive(true);
     lastLiveProofAt = Date.now();
     if (destroyOverlayTimer) {
         clearTimeout(destroyOverlayTimer);
@@ -885,6 +951,8 @@ function endGameSession(): void {
     inGame = false;
     setOverlayMatchActive(false);
     resetMatchCaches();
+    // Ring buffer pauses with the match; captured segments stay available.
+    void setClipperActive(false);
     hideOverlay();
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
     if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
@@ -923,8 +991,12 @@ function scheduleLive(): void {
     if (cadence === null) {
         if (liveTimer) clearTimeout(liveTimer);
         liveTimer = null;
+        // Nothing to watch: park the sampler entirely rather than hammer a
+        // closed port.
+        setStateServiceEngaged(false);
         return;
     }
+    setStateServiceEngaged(true);
     if (liveTimer && cadence === currentPollMs) return;
     if (liveTimer) clearTimeout(liveTimer);
     currentPollMs = cadence;
@@ -941,8 +1013,11 @@ async function liveTick(): Promise<void> {
     tickInFlight = true;
     try {
         const phase = lcuSocket.phase;
-        const live = await fetchLiveClientData();
+        // Board comes from the State Service's 400 ms sample loop — no network
+        // call on this path. This tick only decides what the HUD should draw.
+        const live = readLiveBoard();
         liveReadsTotal += 1;
+        syncLiveProofFromStateService();
         const overlayHidden = isOverlayUserHidden();
 
         if (live) {
@@ -977,9 +1052,10 @@ async function liveTick(): Promise<void> {
             return;
         }
 
-        // allgamedata timed out or 404'd. The cheap clock is enough to prove
-        // the match is still going, and it does not count as silence.
-        const clock = await fetchLiveGameClock();
+        // Board read failed at the source (Live Client refused/404'd). The cheap
+        // clock is enough to prove the match is still going, and it does not
+        // count as silence.
+        const clock = readLiveClock();
         liveReadsTotal += 1;
         if (clock) {
             if (!inGame) beginMatch();
@@ -1041,6 +1117,10 @@ export function refreshLiveCadence(): void {
 export function startGameMonitor(): void {
     if (monitorStarted) return;
     monitorStarted = true;
+    // The State Service samples the Live Client; this monitor renders at its own
+    // (slower) cadence off the service's cache.
+    startStateService();
+    void startClipper();
     lcuSocket.on('phase', onPhase);
     lcuSocket.on('state', () => scheduleLive());
     lcuSocket.on('champSelect', (session) => ingestChampSelectSession(session));
@@ -1053,6 +1133,7 @@ export function stopGameMonitor(): void {
     monitorStarted = false;
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = null;
+    stopStateService();
     lcuSocket.stop();
 }
 
