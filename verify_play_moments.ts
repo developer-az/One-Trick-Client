@@ -1,6 +1,6 @@
 import { snapshotFromState, tickPlayMoments, type PlayMomentSnapshot } from './src/logic/playMoments';
 import type { PlayOverlayState } from './src/logic/playMoments';
-import { scorePlay, SCORING_CONFIG } from './src/logic/scoring';
+import { SCORING_CONFIG } from './src/logic/scoring';
 
 const ok = (c: boolean, m: string) => {
   if (!c) {

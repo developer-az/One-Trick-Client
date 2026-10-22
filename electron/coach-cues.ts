@@ -33,15 +33,6 @@ export function resetCoachCooldowns(): void {
     cooldowns = new Map();
 }
 
-function hpPctFromStats(stats: Record<string, number> | null | undefined): number | null {
-    const cur = stats?.currentHealth;
-    const max = stats?.maxHealth;
-    if (typeof cur !== 'number' || typeof max !== 'number' || !Number.isFinite(cur + max) || max <= 0) {
-        return null;
-    }
-    return Math.max(0, Math.min(1, cur / max));
-}
-
 /** Map the app's live payload + objective timers into the coach's context. */
 export function coachContextFrom(
     state: GameState | null,

@@ -180,12 +180,15 @@ export function toGameEvent(raw: LiveRawEventLike): GameEvent | null {
     const id = asFiniteNumber(raw.EventID);
     if (id === null) return null;
     const t = asFiniteNumber(raw.EventTime);
-    const { EventID: _id, EventName: _name, EventTime: _time, ...rest } = raw;
+    const rest: Record<string, unknown> = { ...raw };
+    delete rest.EventID;
+    delete rest.EventName;
+    delete rest.EventTime;
     return {
         id,
         name: typeof raw.EventName === 'string' ? raw.EventName : '',
         gameTime: t === null ? 0 : t,
-        raw: rest as Record<string, unknown>,
+        raw: rest,
     };
 }
 
