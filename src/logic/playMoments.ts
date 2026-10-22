@@ -1,4 +1,5 @@
 import { inferSituation } from './situation';
+import { scorePlay, type ScoringContext, type PlayLabel } from './scoring';
 
 export interface PlayMomentCue {
   id: string;
@@ -16,6 +17,8 @@ export interface PlayOverlayState {
     championName: string;
     level: number;
     isDead: boolean;
+    /** 0–1, from GameState. Optional so old callers still compile. */
+    hpPct?: number | null;
     scores?: { kills?: number; deaths?: number; assists?: number };
     summonerSpells?: {
       summonerSpellOne?: { displayName: string };
@@ -26,8 +29,26 @@ export interface PlayOverlayState {
     championName: string;
     level?: number;
     isDead?: boolean;
+    /** 0–1, from GameState. */
+    hpPct?: number | null;
+    /** Current bounty gold. */
+    bounty?: number | null;
     scores?: { kills?: number; deaths?: number; assists?: number };
   }>;
+  /** Number of enemies near the fight (from minimap/vision). */
+  enemiesNear?: number;
+  /** Number of allies near the fight (excluding self). */
+  alliesNear?: number;
+  /** Number of towers near the fight. */
+  towersNear?: number;
+  /** Seconds survived after the last kill, if known. */
+  survivedSec?: number | null;
+  /** Spell cast within the kill window (e.g. 'Flash'). */
+  spellCastInWindow?: string | null;
+  /** Kills within the multi-kill window. */
+  killStreak?: number;
+  /** True if the triggering objective was stolen. */
+  objectiveStolen?: boolean;
   enemyBotSummoners?: Array<{
     role: string;
     championName: string;
@@ -43,6 +64,10 @@ export interface PlayRecapEntry {
   label: string;
   detail: string;
   hint?: string;
+  /** Phase 2 — weighted score + label from the scoring engine. */
+  score?: number;
+  playLabel?: PlayLabel;
+  reasons?: string[];
 }
 
 export interface PlayMomentSnapshot {
@@ -92,11 +117,48 @@ function enemyFlashUp(lanes: PlayOverlayState['enemyBotSummoners'], champ: strin
 }
 
 /**
+ * Build a Phase 2 scoring context from the pre- and post-event states.
+ *
+ * All fields are optional with sensible defaults so existing fixtures keep
+ * compiling; the scoring engine treats a missing HP/bounty as "unknown" and
+ * skips those rules.
+ */
+function scoringContextFrom(prevState: PlayOverlayState | null, next: PlayOverlayState): ScoringContext {
+  const victimNext = (next.enemies || []).find((e) => e.isDead) || null;
+  // Victim HP/bounty must come from the pre-fight state — post-kill they are
+  // dead (hpPct 0), which would never satisfy the "victim HP >60%" rule.
+  const victimPrev =
+    victimNext && prevState
+      ? (prevState.enemies || []).find((e) => e.championName === victimNext.championName) || null
+      : null;
+  const victimAlive = victimPrev ?? victimNext;
+  return {
+    prevSelfHpPct: prevState?.localPlayer?.hpPct ?? null,
+    nextSelfHpPct: next.localPlayer?.hpPct ?? null,
+    victimHpPct: victimAlive?.hpPct ?? null,
+    victimBounty: victimAlive?.bounty ?? null,
+    victimWasFed: (victimAlive?.scores?.kills ?? 0) - (victimAlive?.scores?.deaths ?? 0) >= 3,
+    enemiesNear: next.enemiesNear ?? 0,
+    alliesNear: next.alliesNear ?? 0,
+    towersNear: next.towersNear ?? 0,
+    survivedSec: next.survivedSec ?? null,
+    spellCastInWindow: next.spellCastInWindow ?? null,
+    killStreak: next.killStreak ?? 1,
+    objectiveStolen: next.objectiveStolen ?? false,
+  };
+}
+
+/**
  * Compare snapshots and live state — overlay cues + recap lines for this tick.
+ * Kill recaps are scored by the Phase 2 engine (`scorePlay`), so a low-HP
+ * turnaround is labelled Brilliant with its reasons, not a generic line.
+ * `prevState` (the fight-start state, optional for old callers) is what makes
+ * the low-HP and victim-HP rules work.
  */
 export function tickPlayMoments(
   prev: PlayMomentSnapshot | null,
-  state: PlayOverlayState
+  state: PlayOverlayState,
+  prevState?: PlayOverlayState | null
 ): { cues: PlayMomentCue[]; recap: PlayRecapEntry[] } {
   const cues: PlayMomentCue[] = [];
   const recap: PlayRecapEntry[] = [];
@@ -130,26 +192,26 @@ export function tickPlayMoments(
     }
 
     if (next.localKills > prev.localKills) {
+      const ctx = scoringContextFrom(prevState ?? null, state);
+      const result = scorePlay(ctx);
       const flashPick = (state.enemies || []).some(
         (e) => e.isDead && !enemyFlashUp(state.enemyBotSummoners, e.championName)
       );
+      const detail = result.reasons.length > 0 ? result.reasons.join(' · ') : 'Convert to plate / obj if safe.';
+
       if (flashPick) {
         cues.push(momentCue('moment-pick', 'Pick — Flash down', 'spike', 20));
-        recap.push({
-          gameTime: gt,
-          kind: 'brilliant',
-          label: 'Pick with Flash down',
-          detail: 'Capitalize before sums return.',
-          hint: 'Keep limit-testing if this pattern works.',
-        });
-      } else {
-        recap.push({
-          gameTime: gt,
-          kind: 'brilliant',
-          label: 'Kill secured',
-          detail: 'Convert to plate / obj if safe.',
-        });
       }
+      recap.push({
+        gameTime: gt,
+        kind: 'brilliant',
+        label: flashPick ? 'Pick with Flash down' : `${result.label} play`,
+        detail,
+        hint: flashPick ? 'Capitalize before sums return.' : undefined,
+        score: result.score,
+        playLabel: result.label,
+        reasons: result.reasons,
+      });
     }
 
     if (next.localAssists > prev.localAssists && next.localKills === prev.localKills) {

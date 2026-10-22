@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
-import { IconDraft, IconGauge, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats } from './icons';
+import { IconDraft, IconGauge, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats, IconCheck } from './icons';
 import { ChromeMark } from '../overlay/ChromeMark';
 import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useMatchHistory, useDraft, useLeague, useProfile, useToasts } from './hooks';
 import { leagueStatus } from './status';
@@ -11,10 +11,11 @@ import { DraftView } from './views/DraftView';
 import { LoadoutView } from './views/LoadoutView';
 import { OverlayView } from './views/OverlayView';
 import { PerformanceView } from './views/PerformanceView';
+import { ReviewView } from './views/ReviewView';
 import { StatsView } from './views/StatsView';
 import { MayhemView } from './views/MayhemView';
 
-export type ViewId = 'home' | 'draft' | 'loadout' | 'mayhem' | 'stats' | 'overlay' | 'performance';
+export type ViewId = 'home' | 'draft' | 'loadout' | 'mayhem' | 'stats' | 'review' | 'overlay' | 'performance';
 
 const NAV: Array<{ id: ViewId; label: string; icon: React.ReactNode }> = [
   { id: 'home', label: 'Home', icon: <IconHome /> },
@@ -22,6 +23,7 @@ const NAV: Array<{ id: ViewId; label: string; icon: React.ReactNode }> = [
   { id: 'loadout', label: 'Build & runes', icon: <IconLoadout /> },
   { id: 'mayhem', label: 'ARAM Mayhem (beta)', icon: <IconMayhem /> },
   { id: 'stats', label: 'Your stats', icon: <IconStats /> },
+  { id: 'review', label: 'Match review', icon: <IconCheck /> },
   { id: 'overlay', label: 'In-game overlay', icon: <IconOverlay /> },
   { id: 'performance', label: 'Performance', icon: <IconGauge /> },
 ];
@@ -197,6 +199,7 @@ export const App: React.FC = () => {
             onReload={history.reload}
           />
         ) : null}
+        {view === 'review' ? <ReviewView /> : null}
         {view === 'overlay' ? <OverlayView inGame={league.inGame} summoners={league.enemySummoners} /> : null}
         {view === 'performance' ? <PerformanceView /> : null}
       </main>

@@ -57,10 +57,22 @@ export interface LiveClientGameData {
     mapTerrain?: string;
 }
 
+/** One raw row from `/eventdata`. Only EventID is trusted to be present. */
+export interface LiveClientRawEvent {
+    EventID: number;
+    EventName: string;
+    EventTime: number;
+    [key: string]: unknown;
+}
+
+export interface LiveClientEventData {
+    Events?: LiveClientRawEvent[];
+}
+
 export interface LiveClientAllGameData {
     activePlayer: LiveClientActivePlayer;
     allPlayers: LiveClientPlayer[];
-    events?: { Events?: Array<{ EventName: string; EventID: number; EventTime: number }> };
+    events?: LiveClientEventData;
     gameData: LiveClientGameData;
 }
 
@@ -70,8 +82,16 @@ export interface LiveGameClock {
 }
 
 /**
- * Full board. Timeout stays short so a stuck read cannot freeze the main
- * process; a miss is not "game over" — the caller falls back to the clock.
+ * Full board in one request — **debug/diagnostic only.**
+ *
+ * Do not poll this: the payload is hundreds of KB in a live game. The State
+ * Service (electron/state-service.ts) polls the granular endpoints
+ * (`/eventdata`, `/activeplayer`, `/playerlist`, `/gamestats`) instead, which is
+ * both smaller and faster. Kept because the dashboard's
+ * `live-client-data` IPC handler is a useful one-shot inspection surface.
+ *
+ * Timeout stays short so a stuck read cannot freeze the main process; a miss is
+ * not "game over" — the caller falls back to the clock.
  */
 export async function fetchLiveClientData(): Promise<LiveClientAllGameData | null> {
     try {
@@ -90,6 +110,61 @@ export async function fetchLiveClientData(): Promise<LiveClientAllGameData | nul
         // Game client busy, or not in an active match. Caller probes the clock next.
         return null;
     }
+}
+
+/* ------------------------------------------------------------------ *
+ * Granular endpoints — the State Service's read path.
+ *
+ * Each returns null on connection refused / 404 / timeout. "Not in game" is a
+ * normal state (lobby, loading screen, or the game just ended), not an error.
+ * Localhost only, self-signed cert, same agent as above.
+ * ------------------------------------------------------------------ */
+
+async function getJson<T>(path: string, timeout: number): Promise<T | null> {
+    try {
+        const response = await axios.get(`${LIVE_CLIENT_BASE}${path}`, {
+            httpsAgent,
+            timeout,
+            validateStatus: (status) => status < 500,
+        });
+        if (response.status !== 200 || response.data === undefined || response.data === null) return null;
+        return response.data as T;
+    } catch {
+        return null;
+    }
+}
+
+/** Small and changes on every kill — polled fastest. */
+export function fetchEventData(timeout = 1200): Promise<LiveClientEventData | null> {
+    return getJson<LiveClientEventData>('/eventdata', timeout);
+}
+
+/** Self gold / level / champion stats — exact numbers, so vision must never guess them. */
+export function fetchActivePlayer(timeout = 1200): Promise<LiveClientActivePlayer | null> {
+    return getJson<LiveClientActivePlayer>('/activeplayer', timeout);
+}
+
+/** Ability levels for the local player. Changes rarely; polled slower. */
+export function fetchActivePlayerAbilities(
+    timeout = 1200
+): Promise<Record<string, { abilityLevel?: number; displayName?: string }> | null> {
+    return getJson<Record<string, { abilityLevel?: number; displayName?: string }>>(
+        '/activeplayerabilities',
+        timeout
+    );
+}
+
+/** All 10 players: K/D/A, CS, items, levels, death state. The biggest payload. */
+export function fetchPlayerList(timeout = 1500): Promise<LiveClientPlayer[] | null> {
+    return getJson<LiveClientPlayer[]>('/playerlist', timeout);
+}
+
+/**
+ * Full `gamestats` block: game clock plus mode/map identity. This is the State
+ * Service's liveness proof — it answers if and only if a game is running.
+ */
+export function fetchGameStats(timeout = 1200): Promise<LiveClientGameData | null> {
+    return getJson<LiveClientGameData>('/gamestats', timeout);
 }
 
 /**

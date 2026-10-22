@@ -17,6 +17,14 @@ import { lcuSocket } from './lcu-socket';
 import { getAppSettings, gpuAccelerationAtLaunch, loadAppSettings, updateAppSettings } from './app-settings';
 import { fetchLiveClientData } from './live-client';
 import {
+    getGameState,
+    getObjectiveTimers,
+    getRecentGameEvents,
+    getRecentGameSnapshots,
+    getStateServiceLog,
+    getStateServiceStatus,
+} from './state-service';
+import {
     startGameMonitor,
     stopGameMonitor,
     isCurrentlyInGame,
@@ -31,6 +39,7 @@ import {
 } from './game-monitor';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
+import { getClipperStatus, saveManualClip } from './clipper';
 import {
     destroyOverlay,
     toggleOverlayVisibility,
@@ -523,6 +532,14 @@ app.whenReady().then(() => {
 
     ipcMain.handle('match-recap-get', () => getPlayRecap());
 
+    // Auto-clipping: status for the Performance tab + manual "save last 30s".
+    ipcMain.handle('clipper-status', () => getClipperStatus());
+    ipcMain.handle('clip-save-manual', async () => {
+        const gameTime = getGameState()?.gameTime ?? getRecentGameSnapshots().at(-1)?.gameTime ?? 0;
+        const saved = await saveManualClip(Math.round(gameTime));
+        return { success: !!saved, path: saved, status: getClipperStatus() };
+    });
+
     ipcMain.handle('lcu-request', async (_event, method, endpoint, body) => {
         try {
             const response = await makeLCURequest(method, endpoint, body);
@@ -625,7 +642,8 @@ app.whenReady().then(() => {
         }
     });
 
-    // Live Client Data (in-game, including Practice Tool)
+    // Live Client Data (in-game, including Practice Tool).
+    // Debug/diagnostic only — the app's live path is the State Service.
     ipcMain.handle('live-client-data', async () => {
         try {
             const data = await fetchLiveClientData();
@@ -635,6 +653,35 @@ app.whenReady().then(() => {
             return { success: false, error: err.message || 'Unknown error' };
         }
     });
+
+    /* ------------------------------------------------------------------ *
+     * Phase 1 — State Service diagnostics.
+     *
+     * Debug surface for the Phase 1 acceptance test: it makes the event
+     * cursor, objective timers and the rotating state log observable without
+     * needing any new UI. No renderer writes go through here.
+     * ------------------------------------------------------------------ */
+    ipcMain.handle('state-service-status', () => ({
+        success: true,
+        status: getStateServiceStatus(),
+        timers: getObjectiveTimers(),
+    }));
+
+    ipcMain.handle('state-service-events', () => ({
+        success: true,
+        events: getRecentGameEvents(),
+        snapshots: getRecentGameSnapshots().length,
+    }));
+
+    ipcMain.handle('state-service-log', (_event, limit?: number) => ({
+        success: true,
+        log: getStateServiceLog(typeof limit === 'number' ? limit : 200),
+    }));
+
+    ipcMain.handle('state-service-state', () => ({
+        success: true,
+        state: getGameState(),
+    }));
 
     // Overlay controls
     ipcMain.handle('overlay-toggle', async () => {

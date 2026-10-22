@@ -84,6 +84,15 @@ jobs:
       - name: Play moment cues
         run: npm run verify:play-moments
 
+      - name: Live coach rule engine
+        run: npm run verify:coach
+
+      - name: Clip planner math
+        run: npm run verify:clipper
+
+      - name: State service (Live Client event cursor, objective timers)
+        run: npm run verify:game-state
+
       - name: Windows packaging metadata
         run: npm run verify:packaging
 
