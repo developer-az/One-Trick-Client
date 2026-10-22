@@ -220,27 +220,3 @@ export function verifyHudGeometry(): boolean {
     return ok;
 }
 
-// --- CLI entry (npx tsx verify_hud_geometry.ts) ---
-import fs from 'fs';
-import path from 'path';
-
-if (process.argv[1] && import.meta.url.endsWith(path.basename(process.argv[1]))) {
-    const matrixOk = verifyHudGeometry();
-    const seedPath = path.join('out', 'rois-seed.json');
-    fs.mkdirSync('out', { recursive: true });
-    fs.writeFileSync(
-        seedPath,
-        JSON.stringify(
-            {
-                version: 1,
-                input: { width: 1920, height: 1080, hudScale: 100, mapScale: 100, minimapSide: 'right' },
-                rois: buildHudGeometry({ width: 1920, height: 1080, hudScale: 100, mapScale: 100, minimapSide: 'right' }),
-            },
-            null,
-            2
-        )
-    );
-    console.log(`Wrote seed ${seedPath}`);
-    process.exit(matrixOk ? 0 : 1);
-}
-
