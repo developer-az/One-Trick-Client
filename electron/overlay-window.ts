@@ -1,4 +1,5 @@
 import { app, BrowserWindow, screen } from 'electron';
+import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
@@ -513,7 +514,7 @@ export function isOverlayUserHidden(): boolean {
 }
 
 function settingsPath(): string {
-    return path.join(app.getPath('userData'), 'overlay-settings.json');
+    return path.join(userDataDir(), 'overlay-settings.json');
 }
 
 function ensureSettingsLoaded(): void {
@@ -788,6 +789,11 @@ export function hideOverlay(): void {
 }
 
 export function destroyOverlay(): void {
+    if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+        writeSettingsNow(true);
+    }
     for (const timer of emptyGrace.values()) clearTimeout(timer);
     emptyGrace.clear();
     emptySlots.clear();

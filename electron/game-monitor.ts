@@ -134,6 +134,7 @@ let onGameStateChange: ((active: boolean) => void) | null = null;
 let onMatchStartHotkeys: (() => void) | null = null;
 let lastMatchEndReason: string | null = null;
 let playMomentSnapshot: PlayMomentSnapshot | null = null;
+let lastPlayOverlayState: PlayOverlayState | null = null;
 
 export function getLastChampSelectEnemies(): CachedEnemy[] {
     return lastChampSelectEnemies;
@@ -354,7 +355,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
     if (clip) {
         lastClipboardWrite = Date.now();
         try {
-            clipboard.writeText(clip);
+            clipboard?.writeText(clip);
         } catch {
             // ignore clipboard failures
         }
@@ -755,6 +756,7 @@ function resetMatchCaches(): void {
     lastLiveProofAt = 0;
     trustedGameTime = 0;
     playMomentSnapshot = null;
+    lastPlayOverlayState = null;
     mayhemOfferIds = [];
     mayhemPicksAtWindowOpen = 0;
     mayhemPickSessionActive = false;
@@ -776,7 +778,8 @@ function resetMatchCaches(): void {
 
 function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): ReturnType<typeof buildOverlayPayload> {
     const state = { ...payload, inGame: true } as PlayOverlayState;
-    const { cues, recap } = tickPlayMoments(playMomentSnapshot, state);
+    const { cues, recap } = tickPlayMoments(playMomentSnapshot, state, lastPlayOverlayState);
+    lastPlayOverlayState = state;
     playMomentSnapshot = snapshotFromState(state);
     appendPlayRecap(recap);
 
@@ -1114,6 +1117,9 @@ export function refreshLiveCadence(): void {
     scheduleLive();
 }
 
+const onStateChange = () => scheduleLive();
+const onChampSelect = (session: unknown) => ingestChampSelectSession(session);
+
 export function startGameMonitor(): void {
     if (monitorStarted) return;
     monitorStarted = true;
@@ -1122,8 +1128,8 @@ export function startGameMonitor(): void {
     startStateService();
     void startClipper();
     lcuSocket.on('phase', onPhase);
-    lcuSocket.on('state', () => scheduleLive());
-    lcuSocket.on('champSelect', (session) => ingestChampSelectSession(session));
+    lcuSocket.on('state', onStateChange);
+    lcuSocket.on('champSelect', onChampSelect);
     lcuSocket.start();
     // Catch a match that is already running when the app opens.
     void liveTick().finally(scheduleLive);
@@ -1133,9 +1139,18 @@ export function stopGameMonitor(): void {
     monitorStarted = false;
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = null;
+    if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
+    destroyOverlayTimer = null;
+    stopMayhemPoll();
+    void setClipperActive(false);
     stopStateService();
+    lcuSocket.off('phase', onPhase);
+    lcuSocket.off('state', onStateChange);
+    lcuSocket.off('champSelect', onChampSelect);
     lcuSocket.stop();
 }
 
 /** Re-export for main-process IPC handlers that need a one-off LCU read. */
 export { makeLCURequest };
+
+export { buildOverlayPayload, overlayFingerprint, withPlayMoments, resetMatchCaches, liveTick };

@@ -94,6 +94,21 @@ jobs:
       - name: State service (Live Client event cursor, objective timers)
         run: npm run verify:game-state
 
+      - name: Clipper lifecycle and stitch queue
+        run: npm run verify:clipper-lifecycle
+
+      - name: State service module and lifecycle
+        run: npm run verify:state-service
+
+      - name: Game monitor HUD tick and fingerprint
+        run: npm run verify:game-monitor
+
+      - name: IPC surface handlers
+        run: npm run verify:ipc-surface
+
+      - name: Vision HUD geometry matrix
+        run: npm run verify:hud-geometry
+
       - name: Build TypeScript
         run: npm run electron:build
 

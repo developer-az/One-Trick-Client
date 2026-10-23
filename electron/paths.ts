@@ -1,3 +1,4 @@
+import os from 'os';
 import path from 'path';
 import { app } from 'electron';
 import { distDirForAppPath } from './path-logic';
@@ -31,6 +32,16 @@ export function nativeKeyHookPath(): string {
         return path.join(process.resourcesPath, 'onetrick-keys.exe');
     }
     return path.join(appRoot(), 'native', 'bin', 'onetrick-keys.exe');
+}
+
+/** Application user data directory, with graceful fallback for test harnesses outside Electron. */
+export function userDataDir(): string {
+    try {
+        if (typeof app?.getPath === 'function') return app.getPath('userData');
+    } catch {
+        // Fallback for tests / non-Electron environments
+    }
+    return process.env.ONETRICK_USER_DATA || path.join(os.tmpdir(), 'onetrick-userdata');
 }
 
 export { distDirForAppPath } from './path-logic';

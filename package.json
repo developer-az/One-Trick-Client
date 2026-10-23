@@ -98,7 +98,7 @@
     "verify:packaging": "npx --yes tsx verify_packaging.ts",
     "verify:ranked": "npx --yes tsx verify_ranked.ts && npx --yes tsx verify_aram_profile.ts",
     "verify:one-trick": "npx --yes tsx verify_one_trick.ts",
-    "verify:release": "npm run lint && npm run verify:cues && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-bounds && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:game-state && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit",
+    "verify:release": "npm run lint && npm run verify:cues && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-bounds && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:clipper-lifecycle && npm run verify:game-state && npm run verify:state-service && npm run verify:game-monitor && npm run verify:ipc-surface && npm run verify:hud-geometry && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
@@ -110,7 +110,12 @@
     "website:dev": "npm --prefix website run dev",
     "website:build": "npm --prefix website run build",
     "icons": "node scripts/generate-icons.mjs",
-    "build:keyhook": "node scripts/build-keyhook.mjs"
+    "build:keyhook": "node scripts/build-keyhook.mjs",
+    "verify:hud-geometry": "npx --yes tsx verify_hud_geometry.ts",
+    "verify:state-service": "npx --yes tsx verify_state_service.ts",
+    "verify:clipper-lifecycle": "npx --yes tsx verify_clipper_lifecycle.ts",
+    "verify:game-monitor": "npx --yes tsx verify_game_monitor.ts",
+    "verify:ipc-surface": "npx --yes tsx verify_ipc_surface.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
