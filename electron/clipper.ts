@@ -18,7 +18,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { app } from 'electron';
+import { userDataDir } from './paths';
 import {
     clipFileName,
     clipSidecarName,
@@ -43,9 +43,11 @@ let statusDetail = 'Not started';
 let ffmpegPath: string | null = null;
 let ffmpegProc: ChildProcessWithoutNullStreams | null = null;
 let recording = false;
+let activeStitches = 0;
+let stitchQueue: Promise<unknown> = Promise.resolve();
 
 function clipsDir(): string {
-    return path.join(app.getPath('userData'), 'clips');
+    return path.join(userDataDir(), 'clips');
 }
 
 function segmentsDir(): string {
@@ -100,6 +102,7 @@ export async function startClipper(): Promise<void> {
     try {
         fs.mkdirSync(segmentsDir(), { recursive: true });
         fs.mkdirSync(clipsDir(), { recursive: true });
+        pruneOldSegments();
     } catch (error) {
         status = 'error';
         statusDetail = `Cannot create clip folders: ${String(error)}`;
@@ -122,7 +125,7 @@ export function setClipperActive(active: boolean): void {
 }
 
 function startRecording(): void {
-    if (!ffmpegPath) return;
+    if (!ffmpegPath || recording || ffmpegProc) return;
     const dir = segmentsDir();
     // Clear stale segments from a previous session first.
     try {
@@ -228,38 +231,47 @@ export async function saveClip(opts: {
         return null;
     }
 
-    const prevStatus = status;
+    activeStitches += 1;
     status = 'stitching';
     statusDetail = 'Stitching clip…';
     const name = clipFileName(opts.gameTimeSec, opts.label);
+    fs.mkdirSync(clipsDir(), { recursive: true });
     const outPath = path.join(clipsDir(), name);
-    try {
-        await stitch(plan.parts, outPath);
-        fs.writeFileSync(
-            path.join(clipsDir(), clipSidecarName(name)),
-            JSON.stringify(
-                {
-                    label: opts.label,
-                    score: opts.score ?? null,
-                    reasons: opts.reasons ?? [],
-                    gameTimeSec: opts.gameTimeSec,
-                    savedAt: Date.now(),
-                    truncatedLead: plan.truncatedLead,
-                },
-                null,
-                2
-            ),
-            'utf8'
-        );
-        status = prevStatus;
-        statusDetail = `Saved ${name}`;
-        pruneOldSegments();
-        return outPath;
-    } catch (error) {
-        status = prevStatus;
-        statusDetail = `Stitch failed: ${String(error)}`;
-        return null;
-    }
+
+    const task = stitchQueue.then(async () => {
+        try {
+            await stitch(plan.parts, outPath);
+            fs.writeFileSync(
+                path.join(clipsDir(), clipSidecarName(name)),
+                JSON.stringify(
+                    {
+                        label: opts.label,
+                        score: opts.score ?? null,
+                        reasons: opts.reasons ?? [],
+                        gameTimeSec: opts.gameTimeSec,
+                        savedAt: Date.now(),
+                        truncatedLead: plan.truncatedLead,
+                    },
+                    null,
+                    2
+                ),
+                'utf8'
+            );
+            statusDetail = `Saved ${name}`;
+            pruneOldSegments();
+            return outPath;
+        } catch (error) {
+            statusDetail = `Stitch failed: ${String(error)}`;
+            return null;
+        } finally {
+            activeStitches -= 1;
+            if (activeStitches === 0) {
+                status = recording ? 'recording' : 'idle';
+            }
+        }
+    });
+    stitchQueue = task.then(() => {}, () => {});
+    return task;
 }
 
 /**
@@ -282,11 +294,12 @@ function stitch(
             outPath,
         ]);
     }
+    const jobId = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const manifest: string[] = [];
     const tmpFiles: string[] = [];
     const cutNext = (index: number): Promise<void> => {
         if (index >= parts.length) {
-            const listFile = path.join(dir, 'clip-parts.txt');
+            const listFile = path.join(dir, `clip-parts-${jobId}.txt`);
             fs.writeFileSync(listFile, manifest.join('\n'), 'utf8');
             return runFfmpeg([
                 '-hide_banner', '-loglevel', 'error', '-y',
@@ -311,8 +324,9 @@ function stitch(
             });
         }
         const p = parts[index];
-        const tmp = path.join(dir, `clip-part-${index}.mp4`);
+        const tmp = path.join(dir, `clip-part-${jobId}-${index}.mp4`);
         tmpFiles.push(tmp);
+        manifest.push(`file '${tmp.replace(/\\/g, '/')}'`);
         return runFfmpeg([
             '-hide_banner', '-loglevel', 'error', '-y',
             '-ss', p.startSec.toFixed(3),
@@ -325,7 +339,10 @@ function stitch(
     return cutNext(0);
 }
 
+let ffmpegRunner: ((args: string[]) => Promise<void>) | null = null;
+
 function runFfmpeg(args: string[]): Promise<void> {
+    if (ffmpegRunner) return ffmpegRunner(args);
     return new Promise((resolve, reject) => {
         if (!ffmpegPath) {
             reject(new Error('ffmpeg missing'));
@@ -369,3 +386,9 @@ export async function saveManualClip(gameTimeSec: number): Promise<string | null
     });
 }
 
+
+export function setFfmpegPathForTest(p: string | null): void { ffmpegPath = p; }
+export function setStatusForTest(s: ClipperStatus, detail: string): void { status = s; statusDetail = detail; }
+export function setFfmpegRunnerForTest(r: ((args: string[]) => Promise<void>) | null): void { ffmpegRunner = r; }
+export function resetClipperForTest(): void { ffmpegRunner = null;  stopRecording(); status = "disabled"; statusDetail = "Not started"; ffmpegPath = null; activeStitches = 0; stitchQueue = Promise.resolve(); }
+export { runFfmpeg, stitch, segmentsDir, clipsDir, pruneOldSegments, startRecording, stopRecording, listSegments };

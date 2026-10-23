@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 
@@ -42,7 +42,7 @@ let gpuAtLaunch: boolean | null = null;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 
 function settingsFile(): string {
-    return path.join(app.getPath('userData'), 'app-settings.json');
+    return path.join(userDataDir(), 'app-settings.json');
 }
 
 function normalize(raw: unknown): AppSettings {
@@ -87,4 +87,16 @@ export function updateAppSettings(patch: unknown): { settings: AppSettings; rest
             .catch((error) => console.warn('[settings] save failed:', error));
     }, 150);
     return { settings: { ...next }, restartRequired: next.gpuAcceleration !== gpuAtLaunch };
+}
+
+export function flushAppSettings(): void {
+    if (writeTimer) {
+        clearTimeout(writeTimer);
+        writeTimer = null;
+        try {
+            fs.writeFileSync(settingsFile(), JSON.stringify(current || DEFAULTS, null, 2), 'utf8');
+        } catch (error) {
+            console.warn('[settings] flush failed:', error);
+        }
+    }
 }

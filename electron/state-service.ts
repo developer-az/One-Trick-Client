@@ -14,7 +14,7 @@
  * the League process.
  */
 
-import { app } from 'electron';
+import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 import {
@@ -63,7 +63,7 @@ let logBuffer: string[] = [];
 let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function logFilePath(): string {
-    return path.join(app.getPath('userData'), 'logs', 'state-service.log');
+    return path.join(userDataDir(), 'logs', 'state-service.log');
 }
 
 /** Size-capped rotation: state-service.log → state-service.log.1, then start fresh. */
@@ -105,11 +105,14 @@ function mirrorNewLogLines(): void {
     }
     logBuffer.push(...lines.slice(loggedLines));
     loggedLines = lines.length;
-    if (logBuffer.length >= 40) {
+    if (logBuffer.length >= 40 || !engaged) {
         flushLog();
         return;
     }
-    if (!logFlushTimer) logFlushTimer = setTimeout(flushLog, 2000);
+    if (!logFlushTimer) {
+        logFlushTimer = setTimeout(flushLog, 2000);
+        logFlushTimer?.unref?.();
+    }
 }
 
 /**
@@ -179,14 +182,14 @@ async function tick(): Promise<void> {
     inFlight = true;
     try {
         await ensureEngine().pollOnce();
-        mirrorNewLogLines();
+        if (engaged) mirrorNewLogLines();
     } catch (error) {
         // The engine already turns read failures into state. This catch is for
         // anything the engine could not absorb, and must not kill the loop.
         console.warn('[state] poll failed:', error);
     } finally {
         inFlight = false;
-        scheduleNext();
+        if (engaged) scheduleNext();
     }
 }
 
@@ -213,6 +216,10 @@ export function stopStateService(): void {
     timer = null;
     ensureEngine().setPolling(false);
     lastBoard = null;
+    lastClock = null;
+    lastPlayers = null;
+    lastAbilities = null;
+    pollIndex = 0;
     flushLog();
 }
 /**
@@ -294,6 +301,11 @@ export function onGameState(
 export function resetStateService(reason = 'match start'): void {
     lastBoard = null;
     lastClock = null;
+    lastPlayers = null;
+    lastAbilities = null;
+    pollIndex = 0;
     ensureEngine().reset(reason);
 }
 
+
+export { rotateIfNeeded, LOG_MAX_BYTES, logFilePath, flushLog, fetchBoardParts };

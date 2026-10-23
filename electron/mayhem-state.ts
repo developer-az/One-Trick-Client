@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 
@@ -9,7 +9,7 @@ interface MayhemPersist {
   picksTaken?: number;
 }
 
-const FILE = (): string => path.join(app.getPath('userData'), 'mayhem-owned.json');
+const FILE = (): string => path.join(userDataDir(), 'mayhem-owned.json');
 
 function read(): MayhemPersist {
   try {
@@ -22,7 +22,9 @@ function read(): MayhemPersist {
 
 function write(data: MayhemPersist): void {
   try {
-    fs.writeFileSync(FILE(), JSON.stringify(data), 'utf8');
+    const file = FILE();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data), 'utf8');
   } catch (error) {
     console.warn('[mayhem] failed to save state:', error);
   }
