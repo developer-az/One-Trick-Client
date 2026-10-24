@@ -1,8 +1,10 @@
 /**
  * Clip planner — pure math for the ring-buffer recorder.
  *
- * The recorder (electron/clipper.ts) writes fixed-length segments named
- * `seg-<startWallMs>.mp4`. When a play moment fires, this module decides
+ * The recorder (electron/clipper.ts) writes fixed-length segments. A planned
+ * clip names them `seg-<startWallMs>.mp4`. ffmpeg's segment muxer writes
+ * `seg-<index>.mp4` instead, and the recorder maps that index through
+ * `segmentStartFromCounter` before calling `planClip`. When a play moment fires, this module decides
  * which segments cover [event - leadSec, event + tailSec] and what cut
  * ranges to use, so a clip starts before the fight and ends after it.
  *
@@ -52,11 +54,23 @@ export function segmentFileName(startMs: number): string {
     return `${SEG_PREFIX}${Math.round(startMs)}${SEG_SUFFIX}`;
 }
 
-/** Parse a segment file name back to its start time; null for anything else. */
+/**
+ * Parse a segment file name.
+ * Wall-clock names (`seg-<ms>.mp4`) and ffmpeg's counter (`seg-0000000000000.mp4`)
+ * both parse. Index 0 is the first segment of a session, so 0 is valid.
+ * Anything that is not an integer is null.
+ */
 export function parseSegmentFileName(file: string): number | null {
     if (!file.startsWith(SEG_PREFIX) || !file.endsWith(SEG_SUFFIX)) return null;
-    const n = Number(file.slice(SEG_PREFIX.length, -SEG_SUFFIX.length));
-    return Number.isFinite(n) && n > 0 ? n : null;
+    const raw = file.slice(SEG_PREFIX.length, -SEG_SUFFIX.length);
+    if (!/^\d+$/.test(raw)) return null;
+    const n = Number(raw);
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+/** Map ffmpeg's segment counter onto the wall clock the session started at. */
+export function segmentStartFromCounter(index: number, epochMs: number, segmentSec: number): number {
+    return epochMs + index * segmentSec * 1000;
 }
 
 /**

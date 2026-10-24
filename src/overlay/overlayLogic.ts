@@ -287,7 +287,8 @@ function cueConfidenceScore(cue: OverlayCue): number {
     info: 36,
   };
   let score = urgencyScore[cue.urgency];
-  if (/^(ult-online|pan-ult|yone-ult|sum-flash)$/.test(cue.id)) score += 18;
+  if (/^moment-/.test(cue.id)) score += 28;
+  else if (/^(ult-online|pan-ult|yone-ult|sum-flash)$/.test(cue.id)) score += 18;
   else if (/^(threat-|roam-cannon|cannon-shove)/.test(cue.id)) score += 14;
   else if (/^(swap-oracle|xp-hold|pan-behind|pan-ahead|prey-focus)/.test(cue.id)) score += 10;
   else if (/^boot-slot-sell/.test(cue.id)) score += 16;

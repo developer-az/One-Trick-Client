@@ -38,6 +38,8 @@ declare global {
         autoImport: boolean;
         /** Also set summoner spells on lock-in. */
         autoSpells: boolean;
+        /** Record the match and save a clip on Great / Brilliant plays. Off by default. */
+        autoClip: boolean;
     }
 
     interface MatchSummary {
@@ -64,6 +66,9 @@ declare global {
         label: string;
         detail: string;
         hint?: string;
+        score?: number;
+        playLabel?: 'Brilliant' | 'Great' | 'Good' | 'Mistake' | 'Blunder';
+        reasons?: string[];
     }
 
     interface PerfProcessStat {

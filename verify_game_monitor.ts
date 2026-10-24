@@ -12,6 +12,7 @@ import {
     resetMatchCaches,
     stopGameMonitor,
 } from './electron/game-monitor';
+import { getPlayRecap } from './electron/play-recap';
 import type { LiveClientAllGameData } from './electron/live-client';
 
 function ok(cond: boolean, msg: string): void {
@@ -138,7 +139,7 @@ async function run(): Promise<void> {
     const pDeath = buildOverlayPayload(makeMockBoard({ championName: 'Pyke', gameTime: 102, currentGold: 500, isDead: true }), 'InProgress');
     ok(fp1 !== overlayFingerprint(pDeath), 'fingerprint updates on death');
 
-    console.log('--- verify:game-monitor: withPlayMoments & low-HP Brilliant path ---');
+    console.log('--- verify:game-monitor: withPlayMoments names the kill ---');
     resetMatchCaches();
 
     // Tick 1: Pyke engaged at 25% HP, enemy alive at 100% HP, 0 kills
@@ -165,6 +166,12 @@ async function run(): Promise<void> {
     const res2 = withPlayMoments(postKillPayload);
 
     ok(Array.isArray(res2.momentCues), 'momentCues populated after scored moment');
+    const logged = getPlayRecap();
+    const line = logged.find((entry) => entry.detail.includes('Jinx') || entry.label.includes('Jinx'));
+    ok(!!line, 'the kill names Jinx');
+    ok(!line?.detail.includes('Convert to plate'), 'the kill is not the canned convert tip');
+    ok(line?.playLabel === 'Good', `ordinary kill stays Good without victim HP (got ${line?.playLabel})`);
+    ok(!!line?.detail.includes('Jinx was 0/0'), `the tip cites her scoreline (got ${line?.detail})`);
 
     console.log('--- verify:game-monitor: stopGameMonitor cleanup ---');
     stopGameMonitor();

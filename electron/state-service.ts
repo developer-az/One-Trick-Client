@@ -78,6 +78,8 @@ function rotateIfNeeded(file: string): void {
     }
 }
 
+let logChain: Promise<void> = Promise.resolve();
+
 function flushLog(): void {
     if (logFlushTimer) {
         clearTimeout(logFlushTimer);
@@ -86,14 +88,17 @@ function flushLog(): void {
     if (!logBuffer.length) return;
     const chunk = `${logBuffer.join('\n')}\n`;
     logBuffer = [];
-    try {
-        const file = logFilePath();
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        rotateIfNeeded(file);
-        fs.appendFileSync(file, chunk, 'utf8');
-    } catch {
-        // Logging must never break the state loop.
-    }
+    // Disk IO stays off the Live Client poll. A sync append here hitches the match.
+    logChain = logChain
+        .then(async () => {
+            const file = logFilePath();
+            await fs.promises.mkdir(path.dirname(file), { recursive: true });
+            rotateIfNeeded(file);
+            await fs.promises.appendFile(file, chunk, 'utf8');
+        })
+        .catch(() => {
+            // Logging must never break the state loop.
+        });
 }
 
 function mirrorNewLogLines(): void {

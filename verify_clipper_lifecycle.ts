@@ -19,6 +19,7 @@ import {
     pruneOldSegments,
     listSegments,
     saveManualClip,
+    setAutoClipEnabledForTest,
 } from './electron/clipper';
 
 function ok(cond: boolean, msg: string): void {
@@ -38,6 +39,7 @@ async function run(): Promise<void> {
     fs.mkdirSync(testDir, { recursive: true });
 
     resetClipperForTest();
+    setAutoClipEnabledForTest(true);
     ok(getClipperStatus().status === 'disabled', 'initial status is disabled');
 
     // startClipper with non-existent binary should gracefully stay disabled

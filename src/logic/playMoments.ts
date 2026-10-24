@@ -1,5 +1,6 @@
-import { inferSituation } from './situation';
-import { scorePlay, type ScoringContext, type PlayLabel } from './scoring';
+import { inferSituation, type ProfileSituation } from './situation';
+import { scorePlay, SCORING_CONFIG, type ScoringContext, type PlayLabel } from './scoring';
+import { readMomentEvents, type MomentFacts } from './playFacts';
 
 export interface PlayMomentCue {
   id: string;
@@ -58,6 +59,9 @@ export interface PlayOverlayState {
 
 export type PlayMomentKind = 'blunder' | 'brilliant' | 'enemy';
 
+/** Grade shown in review. Deaths use Mistake / Blunder; kills use the scorer. */
+export type RecapGrade = PlayLabel | 'Mistake' | 'Blunder';
+
 export interface PlayRecapEntry {
   gameTime: number;
   kind: PlayMomentKind;
@@ -66,8 +70,22 @@ export interface PlayRecapEntry {
   hint?: string;
   /** Phase 2 — weighted score + label from the scoring engine. */
   score?: number;
-  playLabel?: PlayLabel;
+  playLabel?: RecapGrade;
   reasons?: string[];
+}
+
+export function recapGrade(entry: PlayRecapEntry): RecapGrade {
+  if (
+    entry.playLabel === 'Brilliant' ||
+    entry.playLabel === 'Great' ||
+    entry.playLabel === 'Good' ||
+    entry.playLabel === 'Mistake' ||
+    entry.playLabel === 'Blunder'
+  ) {
+    return entry.playLabel;
+  }
+  if (entry.kind === 'blunder') return 'Mistake';
+  return 'Good';
 }
 
 export interface PlayMomentSnapshot {
@@ -78,6 +96,8 @@ export interface PlayMomentSnapshot {
   localDead: boolean;
   localLevel: number;
   enemyDeaths: Map<string, number>;
+  /** Game-times of our kills in the last 10s, so a double across two ticks still counts. */
+  recentKillTimes: number[];
 }
 
 export function snapshotFromState(state: PlayOverlayState): PlayMomentSnapshot | null {
@@ -95,15 +115,22 @@ export function snapshotFromState(state: PlayOverlayState): PlayMomentSnapshot |
     localDead: state.localPlayer.isDead,
     localLevel: state.localPlayer.level ?? 1,
     enemyDeaths,
+    recentKillTimes: [],
   };
 }
 
-function momentCue(id: string, label: string, urgency: PlayMomentCue['urgency'], maxAgeSec = 18): PlayMomentCue {
+function momentCue(
+  id: string,
+  label: string,
+  urgency: PlayMomentCue['urgency'],
+  maxAgeSec = 18,
+  detail = ''
+): PlayMomentCue {
   const t = label.replace(/\s+/g, ' ').trim();
   return {
     id,
     label: t.length <= 18 ? t : `${t.slice(0, 16).trimEnd()}…`,
-    detail: '',
+    detail: detail.replace(/\s+/g, ' ').trim(),
     urgency,
     maxAgeSec,
   };
@@ -116,6 +143,15 @@ function enemyFlashUp(lanes: PlayOverlayState['enemyBotSummoners'], champ: strin
   return !!flash?.ready;
 }
 
+/** True only when we actually track this champion's Flash and it is down. Unknown is not "down". */
+function enemyFlashDown(lanes: PlayOverlayState['enemyBotSummoners'], champ: string): boolean {
+  if (!lanes?.length || !champ) return false;
+  const lane = lanes.find((l) => l.championName.toLowerCase() === champ.toLowerCase());
+  const flash = lane?.spells.find((s) => s.name === 'Flash');
+  if (!flash) return false;
+  return !flash.ready;
+}
+
 /**
  * Build a Phase 2 scoring context from the pre- and post-event states.
  *
@@ -123,49 +159,144 @@ function enemyFlashUp(lanes: PlayOverlayState['enemyBotSummoners'], champ: strin
  * compiling; the scoring engine treats a missing HP/bounty as "unknown" and
  * skips those rules.
  */
-function scoringContextFrom(prevState: PlayOverlayState | null, next: PlayOverlayState): ScoringContext {
-  const victimNext = (next.enemies || []).find((e) => e.isDead) || null;
-  // Victim HP/bounty must come from the pre-fight state — post-kill they are
-  // dead (hpPct 0), which would never satisfy the "victim HP >60%" rule.
+function freshVictims(prev: PlayMomentSnapshot | null, state: PlayOverlayState): NonNullable<PlayOverlayState['enemies']> {
+  return (state.enemies || []).filter((e) => e.isDead && !prev?.enemyDeaths.get(e.championName));
+}
+
+function kdaBefore(prevState: PlayOverlayState | null, championName: string, fallbackDeaths: number): { kills: number; deaths: number } {
+  const prev = (prevState?.enemies || []).find((e) => e.championName === championName);
+  if (prev?.scores) return { kills: prev.scores.kills ?? 0, deaths: prev.scores.deaths ?? 0 };
+  // The post-kill row already counted this death.
+  return { kills: 0, deaths: Math.max(0, fallbackDeaths - 1) };
+}
+
+/**
+ * Build a Phase 2 scoring context from the pre- and post-event states.
+ *
+ * Victim HP has to come from the pre-fight row. After the kill the API (and
+ * the overlay) report them dead, which would never satisfy "victim HP > 60%".
+ * A champion who was already dead is not this kill's victim.
+ */
+function scoringContextFrom(
+  prev: PlayMomentSnapshot | null,
+  prevState: PlayOverlayState | null,
+  next: PlayOverlayState,
+  killStreak: number,
+  objectiveStolen: boolean
+): ScoringContext {
+  const victim = freshVictims(prev, next)[0] || null;
   const victimPrev =
-    victimNext && prevState
-      ? (prevState.enemies || []).find((e) => e.championName === victimNext.championName) || null
+    victim && prevState
+      ? (prevState.enemies || []).find((e) => e.championName === victim.championName) || null
       : null;
-  const victimAlive = victimPrev ?? victimNext;
+  const record = victim ? kdaBefore(prevState, victim.championName, victim.scores?.deaths ?? 0) : null;
   return {
     prevSelfHpPct: prevState?.localPlayer?.hpPct ?? null,
     nextSelfHpPct: next.localPlayer?.hpPct ?? null,
-    victimHpPct: victimAlive?.hpPct ?? null,
-    victimBounty: victimAlive?.bounty ?? null,
-    victimWasFed: (victimAlive?.scores?.kills ?? 0) - (victimAlive?.scores?.deaths ?? 0) >= 3,
+    victimHpPct: victimPrev?.hpPct ?? null,
+    victimBounty: victimPrev?.bounty ?? victim?.bounty ?? null,
+    victimWasFed: !!record && record.kills - record.deaths >= 3,
     enemiesNear: next.enemiesNear ?? 0,
     alliesNear: next.alliesNear ?? 0,
     towersNear: next.towersNear ?? 0,
     survivedSec: next.survivedSec ?? null,
     spellCastInWindow: next.spellCastInWindow ?? null,
-    killStreak: next.killStreak ?? 1,
-    objectiveStolen: next.objectiveStolen ?? false,
+    killStreak: Math.max(1, killStreak, next.killStreak ?? 1),
+    objectiveStolen: objectiveStolen || !!next.objectiveStolen,
   };
 }
 
+function joinSentences(parts: Array<string | null | undefined>): string {
+  const clean = parts
+    .map((part) => (part || '').replace(/\s+/g, ' ').trim().replace(/\.+$/, ''))
+    .filter((part) => part.length > 0);
+  if (!clean.length) return '';
+  return `${clean.join('. ')}.`;
+}
+
+function describeDeath(
+  situation: ProfileSituation,
+  deaths: number,
+  killer: string | null,
+  assists: number
+): { label: string; detail: string; hint?: string; playLabel: RecapGrade } {
+  const ahead = situation.state === 'ahead';
+  const who = killer ? (assists > 0 ? `${killer} +${assists}` : killer) : null;
+  const label = who ? `Died to ${who}` : situation.state === 'behind' ? 'Death while behind' : `Death ${deaths}`;
+  const next =
+    ahead
+      ? 'You were ahead — this hands them a shutdown window.'
+      : situation.state === 'behind'
+        ? 'Catch the wave before you fight again.'
+        : 'Fix the wave before you walk back up.';
+  return {
+    label,
+    detail: joinSentences([who ? `Killed by ${who}` : `Death ${deaths}`, situation.reasons[0], next]),
+    hint: situation.state === 'behind' ? 'Farm the next wave before you fight.' : undefined,
+    playLabel: ahead ? 'Blunder' : 'Mistake',
+  };
+}
+
+function describeKill(
+  resultLabel: PlayLabel,
+  reasons: string[],
+  victims: NonNullable<PlayOverlayState['enemies']>,
+  prevState: PlayOverlayState | null,
+  flashPick: boolean,
+  firstBlood: boolean,
+  objectiveName: string | null,
+  situation: ProfileSituation
+): { label: string; detail: string; hint?: string } {
+  const names = victims.map((v) => v.championName).filter((name) => !!name);
+  const who = names.length ? names.join(' + ') : null;
+  const record = victims[0] ? kdaBefore(prevState, victims[0].championName, victims[0].scores?.deaths ?? 0) : null;
+  const recordLine = who && record ? `${who} was ${record.kills}/${record.deaths}` : who;
+  const action = flashPick
+    ? 'Walk up before Flash is back'
+    : objectiveName
+      ? `You stole ${objectiveName} — leave before they collapse`
+      : situation.state === 'behind'
+        ? 'Do not walk it back in — catch the wave first'
+        : situation.state === 'ahead'
+          ? 'Push the lead onto a plate, then rotate'
+          : names.length > 1
+            ? 'Push the wave or take the objective, then leave'
+            : 'Take the plate or the wave, then leave';
+  const why = [firstBlood ? 'First blood' : null, ...reasons].filter((part): part is string => !!part);
+  return {
+    label: flashPick ? 'Pick — Flash down' : who ? `${resultLabel} on ${who}` : `${resultLabel} kill`,
+    detail: joinSentences([why.join(' · ') || null, recordLine, action]),
+    hint: flashPick ? 'Capitalize before sums return.' : undefined,
+  };
+}
+
+const MULTIKILL_WINDOW_SEC = 10;
+
 /**
  * Compare snapshots and live state — overlay cues + recap lines for this tick.
- * Kill recaps are scored by the Phase 2 engine (`scorePlay`), so a low-HP
- * turnaround is labelled Brilliant with its reasons, not a generic line.
- * `prevState` (the fight-start state, optional for old callers) is what makes
- * the low-HP and victim-HP rules work.
+ * Kill recaps are scored by the Phase 2 engine (`scorePlay`). The sentence
+ * names who died and why this fight scored, so two Good kills do not share
+ * one canned tip. `prevState` is the fight-start overlay row (HP, KDA).
+ * `facts` is the Live Client event list, when the caller has it.
  */
 export function tickPlayMoments(
   prev: PlayMomentSnapshot | null,
   state: PlayOverlayState,
-  prevState?: PlayOverlayState | null
-): { cues: PlayMomentCue[]; recap: PlayRecapEntry[] } {
+  prevState?: PlayOverlayState | null,
+  facts?: MomentFacts | null
+): { cues: PlayMomentCue[]; recap: PlayRecapEntry[]; snapshot: PlayMomentSnapshot | null } {
   const cues: PlayMomentCue[] = [];
   const recap: PlayRecapEntry[] = [];
   const next = snapshotFromState(state);
-  if (!next || !state.inGame) return { cues, recap };
+  if (!next || !state.inGame) return { cues, recap, snapshot: prev };
 
   const gt = next.gameTime;
+  const priorTimes = (prev?.recentKillTimes || []).filter((t) => gt - t <= MULTIKILL_WINDOW_SEC && gt - t >= 0);
+  const gainedKills = prev ? Math.max(0, next.localKills - prev.localKills) : 0;
+  const recentKillTimes = [...priorTimes];
+  for (let i = 0; i < gainedKills; i++) recentKillTimes.push(gt);
+  const snapshot: PlayMomentSnapshot = { ...next, recentKillTimes };
+
   const situation = inferSituation({
     level: next.localLevel,
     enemyLevels: (state.enemies || []).map((e) => e.level || 0),
@@ -173,53 +304,91 @@ export function tickPlayMoments(
     enemyScores: (state.enemies || []).map((e) => e.scores || {}),
     gameTime: gt,
   });
+  const events = readMomentEvents(facts, prev?.gameTime ?? gt, gt, state.localPlayer?.championName || '');
 
   if (prev) {
     if (next.localDeaths > prev.localDeaths && next.localDead) {
-      const behind = situation.state === 'behind';
-      const label = behind ? 'Death while behind' : 'You died';
-      const detail = behind
-        ? situation.reasons[0] || 'Play safer until items spike.'
-        : 'Reset wave / sum timers before re-engage.';
-      cues.push(momentCue('moment-you-died', label, 'warn', 22));
+      const death = describeDeath(situation, next.localDeaths, events.deathKiller, events.deathAssists);
+      cues.push(momentCue('moment-you-died', death.label, 'warn', 22, death.detail));
       recap.push({
         gameTime: gt,
         kind: 'blunder',
-        label,
-        detail,
-        hint: behind ? 'Farm catch-up before fighting.' : undefined,
+        label: death.label,
+        detail: death.detail,
+        hint: death.hint,
+        playLabel: death.playLabel,
       });
     }
 
-    if (next.localKills > prev.localKills) {
-      const ctx = scoringContextFrom(prevState ?? null, state);
-      const result = scorePlay(ctx);
-      const flashPick = (state.enemies || []).some(
-        (e) => e.isDead && !enemyFlashUp(state.enemyBotSummoners, e.championName)
+    if (gainedKills > 0) {
+      const victims = freshVictims(prev, state);
+      const ctx = scoringContextFrom(
+        prev,
+        prevState ?? null,
+        state,
+        Math.max(recentKillTimes.length, events.killStreakFromEvent),
+        events.objectiveStolen
       );
-      const detail = result.reasons.length > 0 ? result.reasons.join(' · ') : 'Convert to plate / obj if safe.';
-
-      if (flashPick) {
-        cues.push(momentCue('moment-pick', 'Pick — Flash down', 'spike', 20));
-      }
+      const result = scorePlay(ctx);
+      const flashPick = victims.some((e) => enemyFlashDown(state.enemyBotSummoners, e.championName));
+      const told = describeKill(
+        result.label,
+        result.reasons,
+        victims,
+        prevState ?? null,
+        flashPick,
+        events.firstBlood,
+        events.objectiveName,
+        situation
+      );
+      const urgency = result.label === 'Good' ? 'info' : 'spike';
+      cues.push(momentCue(`moment-kill-${Math.round(gt)}`, told.label, urgency, result.label === 'Good' ? 12 : 20, told.detail));
       recap.push({
         gameTime: gt,
         kind: 'brilliant',
-        label: flashPick ? 'Pick with Flash down' : `${result.label} play`,
-        detail,
-        hint: flashPick ? 'Capitalize before sums return.' : undefined,
+        label: told.label,
+        detail: told.detail,
+        hint: told.hint,
         score: result.score,
         playLabel: result.label,
         reasons: result.reasons,
       });
-    }
-
-    if (next.localAssists > prev.localAssists && next.localKills === prev.localKills) {
+    } else if (events.objectiveStolen && events.objectiveName) {
       recap.push({
         gameTime: gt,
         kind: 'brilliant',
-        label: 'Assist',
-        detail: 'Stay on tempo with your team.',
+        label: `Stole ${events.objectiveName}`,
+        detail: `Stole ${events.objectiveName}. Leave before they collapse on the pit.`,
+        score: SCORING_CONFIG.objectiveSteal,
+        playLabel: SCORING_CONFIG.objectiveSteal >= SCORING_CONFIG.thresholds.brilliant
+          ? 'Brilliant'
+          : SCORING_CONFIG.objectiveSteal >= SCORING_CONFIG.thresholds.great
+            ? 'Great'
+            : 'Good',
+        reasons: ['Objective steal'],
+      });
+      cues.push(
+        momentCue(
+          `moment-steal-${Math.round(gt)}`,
+          `Stole ${events.objectiveName}`,
+          'spike',
+          18,
+          `Stole ${events.objectiveName}. Leave before they collapse on the pit.`
+        )
+      );
+    }
+
+    if (next.localAssists > prev.localAssists && gainedKills === 0) {
+      const helped = freshVictims(prev, state);
+      const who = helped[0]?.championName;
+      recap.push({
+        gameTime: gt,
+        kind: 'brilliant',
+        label: who ? `Assist on ${who}` : 'Assist',
+        detail: who
+          ? `Assist on ${who}. Hold the wave with the teammate who took the kill.`
+          : 'Hold the wave with the teammate who took the kill.',
+        playLabel: 'Good',
       });
     }
 
@@ -228,18 +397,19 @@ export function tickPlayMoments(
       const wasDead = prev.enemyDeaths.get(e.championName);
       if (wasDead) continue;
       if (enemyFlashUp(state.enemyBotSummoners, e.championName)) {
-        cues.push(momentCue(`moment-enemy-${norm(e.championName)}`, 'Enemy died w/ Flash', 'info', 16));
+        const detail = `${e.championName} died with Flash still up. Punish before they respawn.`;
+        cues.push(momentCue(`moment-enemy-${norm(e.championName)}`, 'Enemy died w/ Flash', 'info', 16, detail));
         recap.push({
           gameTime: gt,
           kind: 'enemy',
           label: `${e.championName} died with Flash up`,
-          detail: 'Punish before they respawn.',
+          detail,
         });
       }
     }
   }
 
-  return { cues, recap };
+  return { cues, recap, snapshot };
 }
 
 function norm(name: string): string {
