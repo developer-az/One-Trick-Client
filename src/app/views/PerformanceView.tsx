@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { isDesktop, useAppSettings } from '../hooks';
+import { recapGrade, type RecapGrade } from '../../logic/playMoments';
 import { Card, CardHeader, Pill, SettingRow, Switch, type Tone } from '../ui';
+
+const GRADE_TONE: Record<RecapGrade, Tone> = {
+  Brilliant: 'live',
+  Great: 'live',
+  Good: 'muted',
+  Mistake: 'bad',
+  Blunder: 'bad',
+};
 
 const PHASE_LABEL: Record<string, string> = {
   None: 'Home screen',
@@ -184,6 +193,17 @@ export const PerformanceView: React.FC = () => {
                 }
               />
               <SettingRow
+                title="Auto-clip moments"
+                hint="Saves a short clip when a play scores Great or Brilliant. Off by default — capturing the screen costs frames. Needs ffmpeg installed."
+                control={
+                  <Switch
+                    label="Auto-clip moments"
+                    checked={settings.autoClip}
+                    onChange={(v) => update({ autoClip: v })}
+                  />
+                }
+              />
+              <SettingRow
                 title="Use the GPU for One Trick"
                 hint="Off by default so League keeps the GPU. Needs a restart."
                 control={
@@ -211,18 +231,22 @@ export const PerformanceView: React.FC = () => {
           />
           {recap.length ? (
             <ul className="space-y-2 text-sm max-h-56 overflow-y-auto">
-              {recap.map((entry, i) => (
+              {recap.map((entry, i) => {
+                const grade = recapGrade(entry);
+                return (
                 <li key={`${entry.gameTime}-${entry.label}-${i}`} className="border-b border-[color:var(--ot-border)] pb-2 last:border-0">
                   <div className="flex items-center gap-2">
-                    <Pill tone={entry.kind === 'brilliant' ? 'live' : entry.kind === 'blunder' ? 'bad' : 'muted'}>
+                    <span className="ot-num text-xs ot-faint">
                       {Math.floor(entry.gameTime / 60)}:{String(Math.floor(entry.gameTime % 60)).padStart(2, '0')}
-                    </Pill>
+                    </span>
+                    <Pill tone={GRADE_TONE[grade]}>{grade}</Pill>
                     <span className="font-medium">{entry.label}</span>
                   </div>
                   <p className="ot-muted mt-1 text-[13px]">{entry.detail}</p>
                   {entry.hint ? <p className="ot-faint mt-0.5 text-xs">{entry.hint}</p> : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           ) : (
             <p className="text-sm ot-muted">Play a match with the overlay on. Moments appear here when the game ends.</p>

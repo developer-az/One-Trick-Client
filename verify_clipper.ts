@@ -11,6 +11,7 @@ import {
     planClip,
     pruneSegments,
     segmentFileName,
+    segmentStartFromCounter,
     type SegmentInfo,
 } from './src/logic/clipper-plan';
 
@@ -33,6 +34,9 @@ const BASE = 1_737_600_000_000;
 ok(parseSegmentFileName(segmentFileName(12345)) === 12345, 'segment name round-trips');
 ok(parseSegmentFileName('clip-part-0.mp4') === null, 'non-segment files are ignored');
 ok(parseSegmentFileName('seg-bad.mp4') === null, 'garbage segment names parse to null');
+ok(parseSegmentFileName('seg-0000000000000.mp4') === 0, 'ffmpeg segment index 0 is a real file');
+ok(segmentStartFromCounter(0, 5_000, 5) === 5_000, 'index 0 starts at the session epoch');
+ok(segmentStartFromCounter(2, 5_000, 5) === 15_000, 'index 2 is two segments later');
 
 /* 2. A kill mid-buffer picks 4-5 segments covering [-20, +8]. */
 const buffer = Array.from({ length: 24 }, (_, i) => seg(BASE + i * 5000));

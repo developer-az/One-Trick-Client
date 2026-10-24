@@ -11,9 +11,10 @@ import {
     stopStateService,
     getGameState,
     getObjectiveTimers,
+    getRecentGameEvents,
 } from './state-service';
 import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
-import { startClipper, setClipperActive, saveClip } from './clipper';
+import { setClipperActive, queueClip, syncAutoClip } from './clipper';
 
 /** A play at or above this weighted score becomes a clip trigger (Great+). */
 const CLIP_TRIGGER_SCORE = 45;
@@ -47,7 +48,7 @@ import {
 } from './summoner-tracker';
 import { clipboard } from 'electron';
 import { getAppSettings } from './app-settings';
-import { snapshotFromState, tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
+import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
@@ -776,11 +777,26 @@ function resetMatchCaches(): void {
     resetCoachCooldowns();
 }
 
+function selfHpFromStats(stats: { currentHealth?: number; maxHealth?: number } | null | undefined): number | null {
+    const current = stats?.currentHealth;
+    const max = stats?.maxHealth;
+    if (typeof current !== 'number' || typeof max !== 'number' || !(max > 0)) return null;
+    return Math.max(0, Math.min(1, current / max));
+}
+
 function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): ReturnType<typeof buildOverlayPayload> {
-    const state = { ...payload, inGame: true } as PlayOverlayState;
-    const { cues, recap } = tickPlayMoments(playMomentSnapshot, state, lastPlayOverlayState);
+    const hp = selfHpFromStats(payload.championStats);
+    const state = {
+        ...payload,
+        inGame: true,
+        localPlayer: payload.localPlayer ? { ...payload.localPlayer, hpPct: hp } : null,
+    } as PlayOverlayState;
+    const { cues, recap, snapshot } = tickPlayMoments(playMomentSnapshot, state, lastPlayOverlayState, {
+        events: getRecentGameEvents(),
+        now: getGameState(),
+    });
     lastPlayOverlayState = state;
-    playMomentSnapshot = snapshotFromState(state);
+    playMomentSnapshot = snapshot;
     appendPlayRecap(recap);
 
     // Live coach: one rule-engine tip per tick at most, riding the same
@@ -806,13 +822,13 @@ function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): Retur
     // clip trigger. Fire-and-forget — stitching must never block the HUD tick.
     const trigger = recap.find((r) => typeof r.score === 'number' && r.score >= CLIP_TRIGGER_SCORE);
     if (trigger) {
-        void saveClip({
+        queueClip({
             eventMs: Date.now(),
             gameTimeSec: trigger.gameTime,
             label: trigger.label,
             score: trigger.score,
             reasons: trigger.reasons,
-        }).catch((error) => console.warn('[clipper] trigger failed:', error));
+        });
     }
 
     if (!allCues.length) return payload;
@@ -1126,7 +1142,7 @@ export function startGameMonitor(): void {
     // The State Service samples the Live Client; this monitor renders at its own
     // (slower) cadence off the service's cache.
     startStateService();
-    void startClipper();
+    syncAutoClip(getAppSettings().autoClip, false);
     lcuSocket.on('phase', onPhase);
     lcuSocket.on('state', onStateChange);
     lcuSocket.on('champSelect', onChampSelect);

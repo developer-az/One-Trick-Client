@@ -39,7 +39,7 @@ import {
 } from './game-monitor';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
-import { getClipperStatus, saveManualClip } from './clipper';
+import { getClipperStatus, saveManualClip, syncAutoClip } from './clipper';
 import {
     destroyOverlay,
     toggleOverlayVisibility,
@@ -484,6 +484,9 @@ app.whenReady().then(() => {
         }
         if (before.overlayHoldToShow !== result.settings.overlayHoldToShow) refreshOverlayVisibility();
         if (before.overlayHideFromCapture !== result.settings.overlayHideFromCapture) refreshOverlayCaptureProtection();
+        if (before.autoClip !== result.settings.autoClip) {
+            syncAutoClip(result.settings.autoClip, result.settings.autoClip && isCurrentlyInGame());
+        }
         return result;
     });
     ipcMain.handle('app-relaunch', () => {

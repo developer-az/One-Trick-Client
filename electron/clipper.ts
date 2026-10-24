@@ -1,15 +1,18 @@
 /**
- * Medal-style auto-clipping — ffmpeg ring buffer of the League window.
+ * Medal-style auto-clipping — ffmpeg ring buffer of the desktop.
  *
- * Writes fixed-length segments while a match runs and League is focused, then
- * stitches [event - lead, event + tail] into clips/ when a trigger fires.
- * Triggers come from the play-moment engine (scored Brilliant/Great plays) or
- * the dashboard's manual button.
+ * Writes fixed-length segments while a match runs, then stitches
+ * [event - lead, event + tail] into clips/ when a Great+ play fires.
+ * The stitch waits out the tail so the file includes the aftermath, not just
+ * the frames already on disk when the kill happened.
  *
  * Design notes:
+ * - **Off unless the user turns Auto-clip on.** A desktop capture costs frames.
+ *   The rest of the app must fully work with it off.
  * - **ffmpeg is optional.** If no binary is found, the recorder stays disabled
- *   and reports why — the app must fully work without it.
- * - Recording pauses when the game ends or League loses focus.
+ *   and reports why.
+ * - Recording runs for the match and stops when the match ends or Auto-clip is
+ *   turned off. It does not watch foreground focus.
  * - Nothing here sends input or reads memory: it records the screen the user
  *   already sees, exactly like OBS/Medal do.
  */
@@ -25,6 +28,7 @@ import {
     planClip,
     pruneSegments,
     parseSegmentFileName,
+    segmentStartFromCounter,
     type SegmentInfo,
 } from '../src/logic/clipper-plan';
 
@@ -32,9 +36,14 @@ const SEGMENT_SEC = 5;
 const RETENTION_SEC = 120;
 const CLIP_LEAD_SEC = 20;
 const CLIP_TAIL_SEC = 8;
-/** Recording fps + size. 720p keeps CPU/GPU cost low; quality setting later. */
-const FPS = 30;
+/**
+ * 12fps 720p ultrafast. Capture still reads the desktop, so this stays off
+ * until the user opts in. 30fps veryfast was enough to cost a ranked game frames.
+ */
+const FPS = 12;
 const CAPTURE_H = 720;
+/** Numbers at least this large are wall-clock ms, not ffmpeg's segment counter. */
+const WALL_CLOCK_MIN_MS = 1e11;
 
 export type ClipperStatus = 'disabled' | 'idle' | 'recording' | 'stitching' | 'error';
 
@@ -45,6 +54,28 @@ let ffmpegProc: ChildProcessWithoutNullStreams | null = null;
 let recording = false;
 let activeStitches = 0;
 let stitchQueue: Promise<unknown> = Promise.resolve();
+/** User setting. Off by default so a match does not start a screen capture. */
+let autoClipEnabled = false;
+/** Wall-clock ms of segment index 0 for the current recording session. */
+let segmentEpochMs = 0;
+let starting: Promise<void> | null = null;
+
+interface QueuedClip {
+    timer: ReturnType<typeof setTimeout>;
+    opts: ClipRequest;
+}
+
+const queued = new Map<string, QueuedClip>();
+
+interface ClipRequest {
+    eventMs: number;
+    gameTimeSec: number;
+    label: string;
+    score?: number;
+    reasons?: string[];
+    leadSec?: number;
+    tailSec?: number;
+}
 
 function clipsDir(): string {
     return path.join(userDataDir(), 'clips');
@@ -90,7 +121,22 @@ function probeFfmpeg(candidate: string): Promise<boolean> {
 
 /** Start the recorder if ffmpeg exists. Idempotent and failure-tolerant. */
 export async function startClipper(): Promise<void> {
+    if (!autoClipEnabled) {
+        if (!recording && status !== 'error') {
+            status = 'idle';
+            statusDetail = 'Auto-clip is off. Turn it on in Performance to record moments.';
+        }
+        return;
+    }
     if (recording || status === 'stitching') return;
+    if (starting) return starting;
+    starting = prepareClipper().finally(() => {
+        starting = null;
+    });
+    return starting;
+}
+
+async function prepareClipper(): Promise<void> {
     if (!ffmpegPath) {
         ffmpegPath = await findFfmpeg();
         if (!ffmpegPath) {
@@ -108,13 +154,44 @@ export async function startClipper(): Promise<void> {
         statusDetail = `Cannot create clip folders: ${String(error)}`;
         return;
     }
-    statusDetail = 'Ready — recording starts with the next match.';
-    status = 'idle';
+    if (!recording) {
+        statusDetail = 'Ready — recording starts with the next match.';
+        status = 'idle';
+    }
 }
 
-/** Pause when the game ends or focus is lost; segments stay for later triggers. */
+/**
+ * Apply the Auto-clip setting. When it is on and a match is running, recording
+ * starts. When it is off, any capture stops and ffmpeg is not probed.
+ */
+export function syncAutoClip(enabled: boolean, recordNow: boolean): void {
+    autoClipEnabled = enabled;
+    if (!enabled) {
+        if (recording) stopRecording();
+        else if (status !== 'error') {
+            status = 'idle';
+            statusDetail = 'Auto-clip is off. Turn it on in Performance to record moments.';
+        }
+        return;
+    }
+    void startClipper().then(() => {
+        if (autoClipEnabled) setClipperActive(recordNow);
+    });
+}
+
+/** Pause when the game ends; segments stay so a queued tail can still stitch. */
 export function setClipperActive(active: boolean): void {
-    if (!ffmpegPath) return;
+    if (!autoClipEnabled) {
+        if (recording) stopRecording();
+        return;
+    }
+    if (!ffmpegPath) {
+        if (!active) return;
+        void startClipper().then(() => {
+            if (autoClipEnabled && !recording) startRecording();
+        });
+        return;
+    }
     if (active && !recording) {
         startRecording();
     } else if (!active && recording) {
@@ -125,7 +202,7 @@ export function setClipperActive(active: boolean): void {
 }
 
 function startRecording(): void {
-    if (!ffmpegPath || recording || ffmpegProc) return;
+    if (!autoClipEnabled || !ffmpegPath || recording || ffmpegProc) return;
     const dir = segmentsDir();
     // Clear stale segments from a previous session first.
     try {
@@ -135,21 +212,28 @@ function startRecording(): void {
     } catch {
         /* ignore */
     }
+    segmentEpochMs = Date.now();
+    const gop = String(FPS * SEGMENT_SEC);
     const args = [
         '-hide_banner',
         '-loglevel', 'error',
         '-fflags', '+genpts',
         '-f', 'gdigrab',
         '-framerate', String(FPS),
-        '-draw_mouse', '1',
+        '-draw_mouse', '0',
         '-i', 'desktop',
         '-vf', `scale=-2:${CAPTURE_H}`,
+        '-an',
         '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-crf', '28',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-crf', '32',
         '-pix_fmt', 'yuv420p',
+        '-g', gop,
+        '-keyint_min', gop,
         '-f', 'segment',
         '-segment_time', String(SEGMENT_SEC),
+        '-segment_start_number', '0',
         '-reset_timestamps', '1',
         path.join(dir, 'seg-%013d.mp4'),
     ];
@@ -187,18 +271,40 @@ function stopRecording(): void {
         ffmpegProc = null;
     }
     recording = false;
+    // A kill that was still waiting for its tail should stitch whatever was captured.
+    flushQueued();
 }
 
 function listSegments(): SegmentInfo[] {
     const dir = segmentsDir();
     try {
-        return fs
-            .readdirSync(dir)
-            .map((file) => {
-                const startMs = parseSegmentFileName(file);
-                return startMs === null ? null : { startMs, file, durationSec: SEGMENT_SEC };
-            })
-            .filter((s): s is SegmentInfo => !!s);
+        const rows: Array<{ file: string; startMs: number; index: number | null }> = [];
+        for (const file of fs.readdirSync(dir)) {
+            const n = parseSegmentFileName(file);
+            if (n === null) continue;
+            if (n >= WALL_CLOCK_MIN_MS) {
+                rows.push({ file, startMs: n, index: null });
+                continue;
+            }
+            if (segmentEpochMs <= 0) continue;
+            rows.push({
+                file,
+                startMs: segmentStartFromCounter(n, segmentEpochMs, SEGMENT_SEC),
+                index: n,
+            });
+        }
+        let maxIndex = -1;
+        for (const row of rows) {
+            if (row.index !== null && row.index > maxIndex) maxIndex = row.index;
+        }
+        const now = Date.now();
+        return rows.map((row) => {
+            let durationSec = SEGMENT_SEC;
+            if (row.index !== null && row.index === maxIndex) {
+                durationSec = Math.min(SEGMENT_SEC, Math.max(0, (now - row.startMs) / 1000));
+            }
+            return { file: row.file, startMs: row.startMs, durationSec };
+        });
     } catch {
         return [];
     }
@@ -208,13 +314,7 @@ function listSegments(): SegmentInfo[] {
  * Stitch a clip for a scored moment. `gameTimeSec` labels the file; the
  * wall-clock trigger is `eventMs`. Returns the clip path, or null.
  */
-export async function saveClip(opts: {
-    eventMs: number;
-    gameTimeSec: number;
-    label: string;
-    score?: number;
-    reasons?: string[];
-}): Promise<string | null> {
+export async function saveClip(opts: ClipRequest): Promise<string | null> {
     if (!ffmpegPath) return null;
     const segments = listSegments();
     if (!segments.length) {
@@ -223,8 +323,8 @@ export async function saveClip(opts: {
     }
     const plan = planClip(segments, {
         eventMs: opts.eventMs,
-        leadSec: CLIP_LEAD_SEC,
-        tailSec: CLIP_TAIL_SEC,
+        leadSec: opts.leadSec ?? CLIP_LEAD_SEC,
+        tailSec: opts.tailSec ?? CLIP_TAIL_SEC,
     });
     if (!plan) {
         statusDetail = 'Trigger arrived but the ring buffer does not cover it.';
@@ -377,18 +477,59 @@ export function getClipperStatus(): { status: ClipperStatus; detail: string; cli
     return { status, detail: statusDetail, clipsDir: clipsDir() };
 }
 
-/** Manual trigger from the dashboard: save the last ~28s with a generic label. */
+/** Manual trigger from the dashboard: save what is already in the buffer. */
 export async function saveManualClip(gameTimeSec: number): Promise<string | null> {
     return saveClip({
         eventMs: Date.now(),
         gameTimeSec,
         label: 'manual',
+        tailSec: 1,
     });
 }
 
+/**
+ * Save a moment after the tail has been recorded. Calling saveClip on the
+ * kill frame would end the file at "now" and drop the 8s after the fight.
+ */
+export function queueClip(opts: ClipRequest): void {
+    if (!autoClipEnabled || !ffmpegPath || !recording) return;
+    const key = `${Math.round(opts.eventMs / 1000)}:${opts.label}`;
+    if (queued.has(key)) return;
+    const delay = (CLIP_TAIL_SEC + SEGMENT_SEC) * 1000 + 700;
+    const timer = setTimeout(() => {
+        queued.delete(key);
+        void saveClip(opts).catch((error) => console.warn('[clipper] trigger failed:', error));
+    }, delay);
+    queued.set(key, { timer, opts });
+}
+
+function flushQueued(): void {
+    const jobs = [...queued.values()];
+    queued.clear();
+    for (const job of jobs) {
+        clearTimeout(job.timer);
+        void saveClip(job.opts).catch((error) => console.warn('[clipper] trigger failed:', error));
+    }
+}
+
+export function setAutoClipEnabledForTest(enabled: boolean): void {
+    autoClipEnabled = enabled;
+}
 
 export function setFfmpegPathForTest(p: string | null): void { ffmpegPath = p; }
 export function setStatusForTest(s: ClipperStatus, detail: string): void { status = s; statusDetail = detail; }
 export function setFfmpegRunnerForTest(r: ((args: string[]) => Promise<void>) | null): void { ffmpegRunner = r; }
-export function resetClipperForTest(): void { ffmpegRunner = null;  stopRecording(); status = "disabled"; statusDetail = "Not started"; ffmpegPath = null; activeStitches = 0; stitchQueue = Promise.resolve(); }
+export function resetClipperForTest(): void {
+    for (const job of queued.values()) clearTimeout(job.timer);
+    queued.clear();
+    autoClipEnabled = false;
+    segmentEpochMs = 0;
+    ffmpegRunner = null;
+    stopRecording();
+    status = 'disabled';
+    statusDetail = 'Not started';
+    ffmpegPath = null;
+    activeStitches = 0;
+    stitchQueue = Promise.resolve();
+}
 export { runFfmpeg, stitch, segmentsDir, clipsDir, pruneOldSegments, startRecording, stopRecording, listSegments };

@@ -24,6 +24,11 @@ export interface AppSettings {
     autoImport: boolean;
     /** Also set summoner spells on lock-in (keeps Flash on the key you use). */
     autoSpells: boolean;
+    /**
+     * Record the match and save a clip on Great / Brilliant plays.
+     * Off by default: a desktop capture costs frames even at 12fps.
+     */
+    autoClip: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -34,6 +39,7 @@ const DEFAULTS: AppSettings = {
     overlayHideFromCapture: true,
     autoImport: true,
     autoSpells: false,
+    autoClip: false,
 };
 
 let current: AppSettings | null = null;
