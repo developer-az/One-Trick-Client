@@ -144,6 +144,8 @@ const pinnedByRole = new Map<TrackedRole, { championId?: number; norm: string }>
 /** False until the first event batch of a match has been seen. */
 let eventsPrimed = false;
 let processedEventIds = new Set<number>();
+/** Index we have already walked. The Live Client resends the whole match; only the tail is new. */
+let eventListCursor = 0;
 let lastFingerprint = '';
 /** Focus lane Flash/sums coming back — clipboard auto-copy. */
 let pendingClipboardText: string | null = null;
@@ -167,6 +169,7 @@ export function resetSummonerTracker(): void {
   trackedLanes = [];
   pinnedByRole.clear();
   processedEventIds = new Set();
+  eventListCursor = 0;
   eventsPrimed = false;
   lastFingerprint = '';
   pendingClipboardText = null;
@@ -438,7 +441,9 @@ export function ingestLiveEvents(
     return nameToChampion.get(raw) || nameToChampion.get(raw.split('#')[0]) || raw;
   };
 
-  for (const ev of events) {
+  const start = events.length < eventListCursor ? 0 : Math.max(0, eventListCursor - 8);
+  for (let i = start; i < events.length; i++) {
+    const ev = events[i];
     if (ev.EventName !== 'ChampionKill' || ev.EventID == null) continue;
     if (processedEventIds.has(ev.EventID)) continue;
     processedEventIds.add(ev.EventID);
@@ -489,6 +494,7 @@ export function ingestLiveEvents(
     }
   }
 
+  eventListCursor = events.length;
   eventsPrimed = true;
   detectFocusSumsComingUp();
 }

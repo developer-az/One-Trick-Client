@@ -5,6 +5,7 @@ import {
     ipcMain,
     globalShortcut,
     clipboard,
+    shell,
     Menu,
     Tray,
     nativeImage,
@@ -39,7 +40,7 @@ import {
 } from './game-monitor';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
-import { getClipperStatus, saveManualClip, syncAutoClip } from './clipper';
+import { ensureClipperProbed, getClipperStatus, saveManualClip, syncAutoClip } from './clipper';
 import {
     destroyOverlay,
     toggleOverlayVisibility,
@@ -538,7 +539,20 @@ app.whenReady().then(() => {
     ipcMain.handle('match-recap-get', () => getPlayRecap());
 
     // Auto-clipping: status for the Performance tab + manual "save last 30s".
-    ipcMain.handle('clipper-status', () => getClipperStatus());
+    ipcMain.handle('clipper-status', async () => {
+        await ensureClipperProbed();
+        return getClipperStatus();
+    });
+    ipcMain.handle('clip-reveal', async (_event, target: unknown) => {
+        const dir = path.resolve(getClipperStatus().clipsDir);
+        const raw = typeof target === 'string' && target.length > 0 ? target : dir;
+        const resolved = path.resolve(raw);
+        const prefix = dir.endsWith(path.sep) ? dir : dir + path.sep;
+        const inside = resolved === dir || resolved.toLowerCase().startsWith(prefix.toLowerCase());
+        if (!inside) return { success: false, error: 'Not a clip path' };
+        const error = await shell.openPath(resolved);
+        return { success: error.length === 0, error: error || undefined };
+    });
     ipcMain.handle('clip-save-manual', async () => {
         try {
             const gameTime = getGameState()?.gameTime ?? getRecentGameSnapshots().at(-1)?.gameTime ?? 0;

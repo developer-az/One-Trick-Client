@@ -5,9 +5,13 @@
  */
 
 import {
+    CLIP_GREAT_SCORE,
+    CLIP_MAX_PER_MATCH,
+    CLIP_MIN_GAP_MS,
     clipFileName,
     clipSidecarName,
     parseSegmentFileName,
+    pickClipMoment,
     planClip,
     pruneSegments,
     segmentFileName,
@@ -95,6 +99,28 @@ const unordered = planClip(shuffled, { eventMs: killAt, leadSec: 20, tailSec: 8 
 ok(
     !!unordered && unordered.parts.every((p, i) => i === 0 || p.startSec >= 0),
     'unordered segments still produce per-segment cuts'
+);
+
+const kill = { gameTime: 100, label: 'Good on Jinx', kind: 'brilliant', score: 10 };
+const great = { gameTime: 200, label: 'Great on Jinx', kind: 'brilliant', score: CLIP_GREAT_SCORE };
+const death = { gameTime: 300, label: 'Died to Jinx', kind: 'blunder' };
+const assist = { gameTime: 400, label: 'Assist', kind: 'brilliant' };
+
+ok(pickClipMoment([assist], { clipsSoFar: 0, msSinceLast: 0 }) === null, 'an assist does not become a clip');
+ok(pickClipMoment([kill], { clipsSoFar: 0, msSinceLast: Number.POSITIVE_INFINITY })?.label === kill.label, 'the first kill of a match is clipped');
+ok(
+    pickClipMoment([kill], { clipsSoFar: 1, msSinceLast: CLIP_MIN_GAP_MS - 1 }) === null,
+    'a Good play inside the gap does not queue another stitch'
+);
+ok(
+    pickClipMoment([great], { clipsSoFar: 1, msSinceLast: 0 })?.label === great.label,
+    'a Great play is kept even inside the gap'
+);
+ok(pickClipMoment([death], { clipsSoFar: 0, msSinceLast: Number.POSITIVE_INFINITY })?.label === death.label, 'a death is clipped');
+ok(pickClipMoment([kill], { clipsSoFar: CLIP_MAX_PER_MATCH, msSinceLast: Number.POSITIVE_INFINITY }) === null, 'the per-match cap stops further clips');
+ok(
+    pickClipMoment([kill, great], { clipsSoFar: 0, msSinceLast: 0 })?.score === CLIP_GREAT_SCORE,
+    'the higher-scored fight in one tick wins'
 );
 
 if (!process.exitCode) console.log('verify:clipper ok');

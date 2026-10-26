@@ -48,6 +48,44 @@ export interface ClipPlan {
 }
 
 const SEG_PREFIX = 'seg-';
+
+/** Hard stop so one match cannot queue a stitch for every fight. */
+export const CLIP_MAX_PER_MATCH = 12;
+/** Good plays inside this window share one clip. Great and above still save. */
+export const CLIP_MIN_GAP_MS = 20_000;
+/** Matches the scorer's Great threshold. */
+export const CLIP_GREAT_SCORE = 45;
+
+export interface ClipMoment {
+    gameTime: number;
+    label: string;
+    kind: string;
+    score?: number;
+    reasons?: string[];
+}
+
+/**
+ * One clip per HUD tick. Kills (any score) and deaths are eligible. Assists
+ * and "enemy died" notes are not. A Good play inside the gap is skipped so
+ * a skirmish does not stitch three files; Great and Brilliant are not.
+ */
+export function pickClipMoment(
+    entries: ClipMoment[],
+    opts: { clipsSoFar: number; msSinceLast: number }
+): ClipMoment | null {
+    if (opts.clipsSoFar >= CLIP_MAX_PER_MATCH) return null;
+    let best: ClipMoment | null = null;
+    for (const entry of entries) {
+        const fight = entry.kind === 'blunder' || typeof entry.score === 'number';
+        if (!fight) continue;
+        const score = entry.score ?? 0;
+        if (!best || score > (best.score ?? -1)) best = entry;
+    }
+    if (!best) return null;
+    const important = (best.score ?? 0) >= CLIP_GREAT_SCORE;
+    if (!important && opts.msSinceLast < CLIP_MIN_GAP_MS) return null;
+    return best;
+}
 const SEG_SUFFIX = '.mp4';
 
 export function segmentFileName(startMs: number): string {

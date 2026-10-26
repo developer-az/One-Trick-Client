@@ -620,8 +620,12 @@ export const OverlayApp: React.FC = () => {
       hudModules.sums &&
       slotHasModule('sums') &&
       layoutElement(hudLayout, 'sums')?.visible !== false;
+    // Match what this window actually paints. A module that is toggled on but
+    // draws nothing must not keep a transparent HWND over the game.
+    const sumsHasRows = sumsModuleOn && (state.enemyBotSummoners?.length ?? 0) > 0;
     return (
-      sumsModuleOn ||
+      sumsHasRows ||
+      (hudModules.frames && slotHasModule('frames')) ||
       (!inAram && hudModules.gank && !!gankStatus && slotHasModule('gank')) ||
       (!inAram && mismatch && slotHasModule('gank')) ||
       (!mayhemPanelActive && hudModules.vision && !!wardStatus && slotHasModule('vision')) ||

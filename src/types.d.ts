@@ -38,8 +38,23 @@ declare global {
         autoImport: boolean;
         /** Also set summoner spells on lock-in. */
         autoSpells: boolean;
-        /** Record the match and save a clip on Great / Brilliant plays. Off by default. */
+        /** Record the match and save a clip on a kill, death, or Great play. Off by default. */
         autoClip: boolean;
+    }
+
+    interface SavedClipInfo {
+        name: string;
+        path: string;
+        bytes: number;
+        mtimeMs: number;
+    }
+
+    interface ClipperStatusInfo {
+        status: 'disabled' | 'idle' | 'recording' | 'stitching' | 'error';
+        detail: string;
+        clipsDir: string;
+        ffmpeg: 'ready' | 'missing' | 'unknown';
+        clips: SavedClipInfo[];
     }
 
     interface MatchSummary {
@@ -179,6 +194,8 @@ declare global {
             relaunchApp?: () => Promise<void>;
             getPerfStats?: () => Promise<PerfStats>;
             getMatchRecap?: () => Promise<PlayRecapEntry[]>;
+            getClipperStatus?: () => Promise<ClipperStatusInfo>;
+            revealClip?: (target?: string) => Promise<{ success: boolean; error?: string }>;
             getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
             getMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown }>;
             refreshMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown; fromNetwork?: boolean; error?: string }>;

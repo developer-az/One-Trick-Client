@@ -93,5 +93,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     relaunchApp: () => ipcRenderer.invoke('app-relaunch'),
     getPerfStats: () => ipcRenderer.invoke('perf-stats'),
     getMatchRecap: () => ipcRenderer.invoke('match-recap-get'),
+    getClipperStatus: () => ipcRenderer.invoke('clipper-status'),
+    revealClip: (target?: string) => ipcRenderer.invoke('clip-reveal', target),
     reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),
 });

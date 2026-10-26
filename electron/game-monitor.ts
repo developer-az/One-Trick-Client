@@ -17,7 +17,8 @@ import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
 import { setClipperActive, queueClip, syncAutoClip } from './clipper';
 
 /** A play at or above this weighted score becomes a clip trigger (Great+). */
-const CLIP_TRIGGER_SCORE = 45;
+let clipsQueued = 0;
+let lastClipQueuedAt = 0;
 import {
     describeEndMatchReason,
     isInGamePhase,
@@ -49,6 +50,7 @@ import {
 import { clipboard } from 'electron';
 import { getAppSettings } from './app-settings';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
+import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
@@ -468,6 +470,8 @@ let mayhemPickPhase: MayhemPickPhase = {
 };
 let mayhemWasDead = false;
 let mayhemLastEventScanId = 0;
+/** How far into the last Live Client event list this scan walked. */
+let mayhemEventScanFrom = 0;
 let mayhemPicksAtWindowOpen = 0;
 let mayhemPickSessionActive = false;
 /** Page Down with a single OCR hit — allow HUD until timeout or off-screen OCR. */
@@ -569,15 +573,20 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
     mayhemWasDead = isDead;
     const events = live.events?.Events;
     if (events?.length && isMayhemGame(live.gameData?.gameMode, live.gameData?.mapName)) {
-        for (const ev of events) {
-            if (ev.EventID <= mayhemLastEventScanId) continue;
+        const start = events.length + 8 < mayhemEventScanFrom ? 0 : Math.max(0, mayhemEventScanFrom - 4);
+        let maxId = mayhemLastEventScanId;
+        for (let i = start; i < events.length; i++) {
+            const ev = events[i];
+            const id = ev.EventID ?? 0;
+            if (id > maxId) maxId = id;
+            if (id <= mayhemLastEventScanId) continue;
             const name = ev.EventName || '';
             if (/augment|mayhem|kiwi|arena/i.test(name)) {
                 console.info('[mayhem-live-event]', name, ev.EventTime);
             }
         }
-        const maxId = events.reduce((m, e) => Math.max(m, e.EventID ?? 0), 0);
-        if (maxId > mayhemLastEventScanId) mayhemLastEventScanId = maxId;
+        mayhemLastEventScanId = maxId;
+        mayhemEventScanFrom = events.length;
     }
 }
 
@@ -655,6 +664,7 @@ function startMayhemPoll(): void {
     mayhemBurstUntilMs = 0;
     mayhemWasDead = false;
     mayhemLastEventScanId = 0;
+    mayhemEventScanFrom = 0;
     mayhemPicksAtWindowOpen = 0;
     mayhemPickSessionActive = false;
     mayhemManualScanUntilMs = 0;
@@ -770,11 +780,14 @@ function resetMatchCaches(): void {
     mayhemLastLevel = 0;
     mayhemWasDead = false;
     mayhemLastEventScanId = 0;
+    mayhemEventScanFrom = 0;
     resetMayhemOcrCache();
     stopMayhemPoll();
     resetJungleThreatClock();
     resetSummonerTracker();
     resetCoachCooldowns();
+    clipsQueued = 0;
+    lastClipQueuedAt = 0;
 }
 
 function selfHpFromStats(stats: { currentHealth?: number; maxHealth?: number } | null | undefined): number | null {
@@ -818,10 +831,15 @@ function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): Retur
 
     const allCues = coachCue ? [coachCue, ...cues] : cues;
 
-    // Auto-clip: the first scored Brilliant/Great play in this tick becomes a
-    // clip trigger. Fire-and-forget — stitching must never block the HUD tick.
-    const trigger = recap.find((r) => typeof r.score === 'number' && r.score >= CLIP_TRIGGER_SCORE);
+    // Auto-clip: one fight per tick (kill, death, or steal). The planner
+    // caps how many a match can queue so stitching cannot pile up.
+    const trigger = pickClipMoment(recap, {
+        clipsSoFar: clipsQueued,
+        msSinceLast: lastClipQueuedAt === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastClipQueuedAt,
+    });
     if (trigger) {
+        clipsQueued += 1;
+        lastClipQueuedAt = Date.now();
         queueClip({
             eventMs: Date.now(),
             gameTimeSec: trigger.gameTime,

@@ -196,6 +196,25 @@ export function clusterOverlayWindows(opts: {
     });
 }
 
+/**
+ * Whether a locked overlay window should exist on screen.
+ * A live match does not override this: an empty transparent HWND over League
+ * keeps DWM compositing the game even when the slot has nothing to draw.
+ */
+export function overlayWindowWanted(opts: {
+    userHidden: boolean;
+    overlayEnabled: boolean;
+    locked: boolean;
+    holdToShow: boolean;
+    holdDown: boolean;
+    emptySlot: boolean;
+}): boolean {
+    if (opts.userHidden || !opts.overlayEnabled) return false;
+    if (!opts.locked) return true;
+    if (opts.holdToShow && !opts.holdDown) return false;
+    return !opts.emptySlot;
+}
+
 export function estimateModuleRect(
     id: string,
     xNorm: number,

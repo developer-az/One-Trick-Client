@@ -29,7 +29,7 @@ import {
     type LivePlayerLike,
     type LiveRawEventLike,
 } from './src/logic/gameState';
-import { createStateEngine, mergeLiveBoard, type LiveBoardParts } from './src/logic/stateEngine';
+import { EVENT_RING, createStateEngine, mergeLiveBoard, type LiveBoardParts } from './src/logic/stateEngine';
 
 const ok = (c: boolean, m: string) => {
     if (!c) {
@@ -309,6 +309,24 @@ async function engineTests(): Promise<void> {
     const bad = await throwing.pollOnce();
     ok(!bad.ok && throwing.status().errorCount === 1, 'a throwing fetcher is counted as an error, not a crash');
     ok(throwing.status().lastError === 'Error: boom', 'the error is kept for the debug log');
+
+    const many: LiveRawEventLike[] = [ev(1, 'DragonKill', 300, { DragonType: 'Fire' })];
+    for (let id = 2; id <= EVENT_RING + 80; id++) many.push(ev(id, 'ChampionKill', 300 + id));
+    const manyBoard = mergeLiveBoard({
+        events: { Events: many },
+        activePlayer,
+        players: TEAM,
+        gameData: { gameTime: 900, gameMode: 'CLASSIC' },
+    });
+    const ring = createStateEngine({ fetchBoard: async () => manyBoard, now: () => 2_000_000 });
+    await ring.pollOnce();
+    ok(ring.events().length === EVENT_RING, `event ring stays at ${EVENT_RING} (got ${ring.events().length})`);
+    ok(ring.events()[0].id > 1, 'the ring drops the oldest rows');
+    ok(ring.timers().dragon?.killedAt === 300, 'the dragon timer survives after its event leaves the ring');
+    ok(
+        ring.events().every((event, index, list) => index === 0 || event.id >= list[index - 1].id),
+        'the ring stays in id order without sorting the whole match'
+    );
 }
 
 /* ------------------------------------------------------------------ *

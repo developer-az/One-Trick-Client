@@ -210,23 +210,36 @@ export interface EventDiff {
  * Pure: same inputs, same output, no cursor state held here.
  */
 export function diffNewEvents(seenMaxEventId: number, rawEvents: LiveRawEventLike[] | undefined): EventDiff {
-    const events = (rawEvents || [])
-        .map(toGameEvent)
-        .filter((e): e is GameEvent => !!e)
-        .sort((a, b) => a.id - b.id);
-
-    if (!events.length) {
+    const raw = rawEvents || [];
+    if (!raw.length) {
         return { events: [], maxEventId: seenMaxEventId, restarted: false };
     }
 
-    const highest = events[events.length - 1].id;
-    if (highest < seenMaxEventId) {
-        return { events: [], maxEventId: highest, restarted: true };
+    // One pass over the payload. Sorting the whole match history every poll
+    // was the growing cost; only the handful of new ids need an order.
+    let payloadMax = -1;
+    const seenIds = new Set<number>();
+    const fresh: GameEvent[] = [];
+    for (const item of raw) {
+        const event = toGameEvent(item);
+        if (!event) continue;
+        if (event.id > payloadMax) payloadMax = event.id;
+        if (event.id <= seenMaxEventId || seenIds.has(event.id)) continue;
+        seenIds.add(event.id);
+        fresh.push(event);
     }
 
+    if (payloadMax < 0) {
+        return { events: [], maxEventId: seenMaxEventId, restarted: false };
+    }
+    if (payloadMax < seenMaxEventId) {
+        return { events: [], maxEventId: payloadMax, restarted: true };
+    }
+
+    fresh.sort((a, b) => a.id - b.id);
     return {
-        events: events.filter((e) => e.id > seenMaxEventId),
-        maxEventId: highest > seenMaxEventId ? highest : seenMaxEventId,
+        events: fresh,
+        maxEventId: payloadMax > seenMaxEventId ? payloadMax : seenMaxEventId,
         restarted: false,
     };
 }
@@ -436,7 +449,7 @@ export function buildGameState({ board, events, ts, minimap = null }: BuildGameS
     const players = derivePlayerSnapshots(rows, activePlayer);
     const selfIndex = players.findIndex((p) => p.isSelf);
     const selfPlayerLike = selfIndex >= 0 ? rows[selfIndex] : undefined;
-    const sorted = [...events].sort((a, b) => a.id - b.id);
+    const sorted = eventsInIdOrder(events);
 
     return {
         ts,
@@ -450,6 +463,15 @@ export function buildGameState({ board, events, ts, minimap = null }: BuildGameS
     };
 }
 
+
+function eventsInIdOrder(events: GameEvent[]): GameEvent[] {
+    for (let i = 1; i < events.length; i++) {
+        if (events[i].id < events[i - 1].id) {
+            return [...events].sort((a, b) => a.id - b.id);
+        }
+    }
+    return events;
+}
 
 function asFiniteNumber(value: unknown): number | null {
     const n = typeof value === 'number' ? value : Number(value);

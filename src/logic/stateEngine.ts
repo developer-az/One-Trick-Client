@@ -19,6 +19,7 @@ import {
     diffNewEvents,
     emptyGameState,
     EMPTY_TIMERS,
+    objectiveKeyForEvent,
     type GameEvent,
     type GameState,
     type LiveActivePlayerLike,
@@ -35,6 +36,13 @@ const FAILURES_TO_NOT_IN_GAME = 3;
 const DEFAULT_SNAPSHOT_WINDOW_MS = 10_000;
 /** Bounded debug log ring. */
 const LOG_LIMIT = 500;
+/**
+ * Fight facts only need the last few seconds of events. The full match log
+ * was copied and scanned on every 400 ms poll. Objective kills are kept
+ * separately so a dragon timer still resolves after this ring drops the row.
+ */
+export const EVENT_RING = 96;
+const OBJECTIVE_EVENT_CAP = 24;
 
 export interface StateEngineStatus {
     inGame: boolean;
@@ -89,6 +97,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
 
     let eventCursor = 0;
     let allEvents: GameEvent[] = [];
+    let objectiveEvents: GameEvent[] = [];
     let state: GameState = emptyGameState(now());
     let timers: ObjectiveTimers = { ...EMPTY_TIMERS };
     let failures = 0;
@@ -148,6 +157,18 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         if (firstInside > 0) snapshots = snapshots.slice(firstInside);
     }
 
+    function retainEvents(incoming: GameEvent[]): void {
+        const merged = allEvents.concat(incoming);
+        allEvents = merged.length <= EVENT_RING ? merged : merged.slice(-EVENT_RING);
+        for (const event of incoming) {
+            if (!objectiveKeyForEvent(event)) continue;
+            objectiveEvents.push(event);
+        }
+        if (objectiveEvents.length > OBJECTIVE_EVENT_CAP) {
+            objectiveEvents = objectiveEvents.slice(-OBJECTIVE_EVENT_CAP);
+        }
+    }
+
     function emitEvent(event: GameEvent): void {
         const raw = event.raw as Record<string, unknown>;
         const who = raw.KillerName ? ` killer=${String(raw.KillerName)}` : '';
@@ -168,6 +189,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         state = emptyGameState(now());
         timers = { ...EMPTY_TIMERS };
         allEvents = [];
+        objectiveEvents = [];
         eventCursor = 0;
         snapshots = [];
         if (wasInGame) log(`[state] match end (${reason})`);
@@ -207,14 +229,15 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         if (diff.restarted) {
             log('[state] event ids restarted — new match detected');
             allEvents = [];
+            objectiveEvents = [];
         }
         eventCursor = diff.maxEventId;
-        if (diff.events.length) allEvents = [...allEvents, ...diff.events];
+        if (diff.events.length) retainEvents(diff.events);
 
         const gameTime = typeof board.gameData?.gameTime === 'number' ? board.gameData.gameTime : 0;
         const next = buildGameState({ board, events: allEvents, ts: now() });
         state = next;
-        timers = deriveObjectiveTimers(allEvents, gameTime);
+        timers = deriveObjectiveTimers(objectiveEvents, gameTime);
 
         if (!wasInGame) log(`[state] match start (champion=${next.self.champion || '?'})`);
 
