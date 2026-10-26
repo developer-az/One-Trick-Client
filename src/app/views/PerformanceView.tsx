@@ -25,6 +25,33 @@ const PHASE_LABEL: Record<string, string> = {
   EndOfGame: 'Post game',
 };
 
+function formatClipSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function useClips(): ClipperStatusInfo | null {
+  const [lib, setLib] = useState<ClipperStatusInfo | null>(null);
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getClipperStatus) return;
+    let cancelled = false;
+    const load = () => {
+      if (document.hidden) return;
+      void api.getClipperStatus?.().then((next) => {
+        if (!cancelled && next) setLib(next);
+      });
+    };
+    load();
+    const id = window.setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+  return lib;
+}
+
 function usePerfStats(): PerfStats | null {
   const [stats, setStats] = useState<PerfStats | null>(null);
   useEffect(() => {
@@ -47,6 +74,7 @@ function usePerfStats(): PerfStats | null {
 
 export const PerformanceView: React.FC = () => {
   const stats = usePerfStats();
+  const clips = useClips();
   const { settings, update, restartRequired } = useAppSettings();
   const [recap, setRecap] = React.useState<PlayRecapEntry[]>([]);
 
@@ -143,6 +171,45 @@ export const PerformanceView: React.FC = () => {
         <Stat label="Game reads" value={stats ? String(stats.liveReads) : '–'} hint="Live Client requests this session" />
       </div>
 
+      <Card className="mb-5">
+        <CardHeader
+          title="Clips"
+          sub="Turn Auto-clip on before the next game. A kill, a death, or a Great play saves a video here."
+          action={
+            <button type="button" className="ot-btn ot-btn-sm" onClick={() => void window.electronAPI?.revealClip?.()}>
+              Open folder
+            </button>
+          }
+        />
+        <p className="text-sm">
+          {clips?.detail || 'Checking the recorder…'}
+        </p>
+        {clips?.ffmpeg === 'missing' ? (
+          <div className="ot-callout ot-callout-warn mt-3">
+            ffmpeg is not installed, so One Trick cannot write video yet. Install ffmpeg and leave it on PATH, then turn Auto-clip on.
+          </div>
+        ) : null}
+        {clips?.clips.length ? (
+          <ul className="mt-3 divide-y divide-[color:var(--ot-border)] text-sm">
+            {clips.clips.map((clip) => (
+              <li key={clip.path} className="flex items-center justify-between gap-3 py-2">
+                <span className="min-w-0 truncate">{clip.name}</span>
+                <span className="ot-faint shrink-0">{formatClipSize(clip.bytes)}</span>
+                <button
+                  type="button"
+                  className="ot-btn ot-btn-sm shrink-0"
+                  onClick={() => void window.electronAPI?.revealClip?.(clip.path)}
+                >
+                  Play
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm ot-muted">No clips saved yet.</p>
+        )}
+      </Card>
+
       <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader title="Right now" />
@@ -194,7 +261,7 @@ export const PerformanceView: React.FC = () => {
               />
               <SettingRow
                 title="Auto-clip moments"
-                hint="Saves a short clip when a play scores Great or Brilliant. Off by default — capturing the screen costs frames. Needs ffmpeg installed."
+                hint="Off until you turn it on. Records the desktop during the match and saves a clip on a kill, death, or Great play. Needs ffmpeg. Capture costs frames, so leave it off in a close ranked game."
                 control={
                   <Switch
                     label="Auto-clip moments"

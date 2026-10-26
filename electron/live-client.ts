@@ -3,7 +3,15 @@ import https from 'https';
 
 const LIVE_CLIENT_BASE = 'https://127.0.0.1:2999/liveclientdata';
 
-const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+// Reuse one socket pool. A fresh TLS handshake to 127.0.0.1:2999 on every
+// 400 ms sample (events + active player + stats) stalls both this process and
+// League's Live Client thread. Same reason the LCU agent stays keep-alive.
+const httpsAgent = new https.Agent({
+    rejectUnauthorized: false,
+    keepAlive: true,
+    maxSockets: 4,
+    keepAliveMsecs: 15_000,
+});
 
 export interface LiveClientItem {
     itemID: number;

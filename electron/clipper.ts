@@ -23,6 +23,7 @@ import os from 'os';
 import path from 'path';
 import { userDataDir } from './paths';
 import {
+    CLIP_MAX_PER_MATCH,
     clipFileName,
     clipSidecarName,
     planClip,
@@ -50,6 +51,8 @@ export type ClipperStatus = 'disabled' | 'idle' | 'recording' | 'stitching' | 'e
 let status: ClipperStatus = 'disabled';
 let statusDetail = 'Not started';
 let ffmpegPath: string | null = null;
+let ffmpegKnown = false;
+let locateFfmpegTask: Promise<string | null> | null = null;
 let ffmpegProc: ChildProcessWithoutNullStreams | null = null;
 let recording = false;
 let activeStitches = 0;
@@ -100,6 +103,23 @@ async function findFfmpeg(): Promise<string | null> {
     return null;
 }
 
+function locateFfmpeg(): Promise<string | null> {
+    if (ffmpegPath) return Promise.resolve(ffmpegPath);
+    if (!locateFfmpegTask) {
+        locateFfmpegTask = findFfmpeg().then((found) => {
+            ffmpegKnown = true;
+            ffmpegPath = found;
+            return found;
+        });
+    }
+    return locateFfmpegTask;
+}
+
+/** Probe ffmpeg once so the Performance page can say why no videos exist. Does not record. */
+export function ensureClipperProbed(): Promise<void> {
+    return locateFfmpeg().then(() => undefined);
+}
+
 function probeFfmpeg(candidate: string): Promise<boolean> {
     return new Promise((resolve) => {
         try {
@@ -138,7 +158,7 @@ export async function startClipper(): Promise<void> {
 
 async function prepareClipper(): Promise<void> {
     if (!ffmpegPath) {
-        ffmpegPath = await findFfmpeg();
+        await locateFfmpeg();
         if (!ffmpegPath) {
             status = 'disabled';
             statusDetail = 'ffmpeg not found — auto-clipping off. Install ffmpeg or bundle it to enable.';
@@ -358,6 +378,7 @@ export async function saveClip(opts: ClipRequest): Promise<string | null> {
                 'utf8'
             );
             statusDetail = `Saved ${name}`;
+            clipListCache = null;
             pruneOldSegments();
             return outPath;
         } catch (error) {
@@ -378,11 +399,16 @@ export async function saveClip(opts: ClipRequest): Promise<string | null> {
  * Re-encode only what must change. First and last parts are cut with -ss/-t;
  * multi-segment clips go through the concat demuxer so middle parts copy.
  */
+const MAX_STITCH_PARTS = 16;
+
 function stitch(
     parts: { file: string; startSec: number; durationSec: number }[],
     outPath: string
 ): Promise<void> {
     const dir = segmentsDir();
+    if (parts.length > MAX_STITCH_PARTS) {
+        return Promise.reject(new Error('clip span too long'));
+    }
     if (parts.length === 1) {
         const p = parts[0];
         return runFfmpeg([
@@ -472,9 +498,61 @@ function pruneOldSegments(): void {
     }
 }
 
+export interface SavedClip {
+    name: string;
+    path: string;
+    bytes: number;
+    mtimeMs: number;
+}
+
+const CLIP_LIST_LIMIT = 24;
+const CLIP_LIST_STAT_CAP = 200;
+const CLIP_LIST_CACHE_MS = 4_000;
+let clipListCache: { at: number; clips: SavedClip[] } | null = null;
+
+function listSavedClips(): SavedClip[] {
+    const now = Date.now();
+    if (clipListCache && now - clipListCache.at < CLIP_LIST_CACHE_MS) return clipListCache.clips;
+    const dir = clipsDir();
+    let clips: SavedClip[] = [];
+    try {
+        const names = fs.readdirSync(dir).filter((name) => name.endsWith('.mp4'));
+        const capped = names.length > CLIP_LIST_STAT_CAP ? names.slice(0, CLIP_LIST_STAT_CAP) : names;
+        const rows: SavedClip[] = [];
+        for (const name of capped) {
+            try {
+                const full = path.join(dir, name);
+                const st = fs.statSync(full);
+                if (!st.isFile()) continue;
+                rows.push({ name, path: full, bytes: st.size, mtimeMs: st.mtimeMs });
+            } catch {
+                /* a file can disappear between read and stat */
+            }
+        }
+        rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
+        clips = rows.slice(0, CLIP_LIST_LIMIT);
+    } catch {
+        clips = [];
+    }
+    clipListCache = { at: now, clips };
+    return clips;
+}
+
 /** Current recorder state for the Performance tab. */
-export function getClipperStatus(): { status: ClipperStatus; detail: string; clipsDir: string } {
-    return { status, detail: statusDetail, clipsDir: clipsDir() };
+export function getClipperStatus(): {
+    status: ClipperStatus;
+    detail: string;
+    clipsDir: string;
+    ffmpeg: 'ready' | 'missing' | 'unknown';
+    clips: SavedClip[];
+} {
+    return {
+        status,
+        detail: statusDetail,
+        clipsDir: clipsDir(),
+        ffmpeg: ffmpegPath ? 'ready' : ffmpegKnown ? 'missing' : 'unknown',
+        clips: listSavedClips(),
+    };
 }
 
 /** Manual trigger from the dashboard: save what is already in the buffer. */
@@ -493,6 +571,7 @@ export async function saveManualClip(gameTimeSec: number): Promise<string | null
  */
 export function queueClip(opts: ClipRequest): void {
     if (!autoClipEnabled || !ffmpegPath || !recording) return;
+    if (queued.size >= CLIP_MAX_PER_MATCH) return;
     const key = `${Math.round(opts.eventMs / 1000)}:${opts.label}`;
     if (queued.has(key)) return;
     const delay = (CLIP_TAIL_SEC + SEGMENT_SEC) * 1000 + 700;
@@ -529,6 +608,9 @@ export function resetClipperForTest(): void {
     status = 'disabled';
     statusDetail = 'Not started';
     ffmpegPath = null;
+    ffmpegKnown = false;
+    locateFfmpegTask = null;
+    clipListCache = null;
     activeStitches = 0;
     stitchQueue = Promise.resolve();
 }

@@ -1,7 +1,7 @@
 {
   "name": "one-trick",
   "private": true,
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {

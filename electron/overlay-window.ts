@@ -3,7 +3,7 @@ import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
-import { clusterOverlayWindows, type OverlayCluster } from './overlay-bounds';
+import { clusterOverlayWindows, overlayWindowWanted, type OverlayCluster } from './overlay-bounds';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
 export interface FrameCalibration {
@@ -36,15 +36,36 @@ function overlayWindows(): BrowserWindow[] {
     return list;
 }
 
-/** When the overlay is hidden, allow Chromium to throttle it and free GPU/CPU for League. */
-function setOverlayThrottling(enabled: boolean): void {
-    for (const win of overlayWindows()) {
-        try {
-            win.webContents.setBackgroundThrottling(enabled);
-        } catch {
-            // Older Electron builds — ignore
-        }
+/** Shown HUD rate. The clock moves once a second; 60 software frames of a transparent window hitch League. */
+const OVERLAY_SHOWN_FPS = 12;
+
+/**
+ * Visible windows paint at a low HUD rate. Hidden ones are throttled so a
+ * transparent Chromium process is not compositing while League has the screen.
+ */
+function applyWindowPaintBudget(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    const shown = win.isVisible();
+    try {
+        win.webContents.setBackgroundThrottling(!shown);
+        win.webContents.setFrameRate(shown ? OVERLAY_SHOWN_FPS : 1);
+    } catch {
+        // Older Electron builds — ignore
     }
+}
+
+function syncOverlayPaintBudget(): void {
+    for (const win of overlayWindows()) applyWindowPaintBudget(win);
+}
+
+/** Last ignore-mouse value applied. Re-binding the same flag freezes the cursor over League. */
+const mouseIgnored = new WeakMap<BrowserWindow, boolean>();
+
+function setMouseIgnored(win: BrowserWindow, ignored: boolean): void {
+    if (win.isDestroyed()) return;
+    if (mouseIgnored.get(win) === ignored) return;
+    mouseIgnored.set(win, ignored);
+    win.setIgnoreMouseEvents(ignored);
 }
 
 let clickThrough = true;
@@ -63,31 +84,14 @@ const lastRendererReload = new WeakMap<BrowserWindow, number>();
 
 /** Tab is held down (reported by the native key helper). */
 let holdDown = false;
-/** While a match is live, never hide every locked window at once. */
-let overlayMatchActive = false;
 
-export function setOverlayMatchActive(active: boolean): void {
-    overlayMatchActive = active;
-    if (active) {
-        for (const timer of emptyGrace.values()) clearTimeout(timer);
-        emptyGrace.clear();
-        emptySlots.clear();
-        for (const win of overlayWindows()) {
-            try {
-                syncWindowVisibility(win);
-            } catch {
-                // ignore
-            }
-        }
-    }
-}
-
-function wouldHideAllSlots(nextEmptyId: number): boolean {
-    const wins = overlayWindows();
-    if (!wins.length) return false;
-    return wins.every(
-        (w) => w.webContents.id === nextEmptyId || emptySlots.has(w.webContents.id)
-    );
+/**
+ * Match start used to clear the empty set and force every overlay HWND on
+ * screen for the whole game. That is the DWM cost this module exists to avoid.
+ * Callers still notify match start and end; visibility follows content.
+ */
+export function setOverlayMatchActive(_active: boolean): void {
+    void _active;
 }
 
 function lockedLayout(): boolean {
@@ -103,13 +107,14 @@ export function holdToShowActive(): boolean {
 }
 
 function shouldShowWindow(win: BrowserWindow): boolean {
-    if (userHidden || !getAppSettings().overlayEnabled) return false;
-    // Unlocked / align modes are for arranging panels: always visible.
-    if (!lockedLayout()) return true;
-    if (holdToShowActive() && !holdDown) return false;
-    // During a live match, do not hide the HUD because a module had nothing to draw.
-    if (overlayMatchActive) return true;
-    return !emptySlots.has(win.webContents.id);
+    return overlayWindowWanted({
+        userHidden,
+        overlayEnabled: getAppSettings().overlayEnabled,
+        locked: lockedLayout(),
+        holdToShow: holdToShowActive(),
+        holdDown,
+        emptySlot: emptySlots.has(win.webContents.id),
+    });
 }
 
 /** Tab down/up. Shows or hides the locked overlay windows in hold-to-show mode. */
@@ -154,7 +159,12 @@ function syncWindowVisibility(win: BrowserWindow): void {
     if (win.isDestroyed()) return;
     const want = shouldShowWindow(win);
     if (want && !win.isVisible()) win.showInactive();
-    else if (!want && win.isVisible()) win.hide();
+    else if (!want && win.isVisible()) {
+        win.hide();
+        // Hide/show drops the OS click-through flag. Forget it so the next show re-applies once.
+        mouseIgnored.delete(win);
+    }
+    applyWindowPaintBudget(win);
 }
 
 /** Renderer reports whether its slot has content (see OverlayApp). */
@@ -170,11 +180,9 @@ export function setOverlaySlotContent(webContentsId: number, hasContent: boolean
         return;
     }
     // Already hidden, or already waiting out a blip.
-    if (overlayMatchActive) return;
     if (emptySlots.has(webContentsId) || pending) return;
     const timer = setTimeout(() => {
         emptyGrace.delete(webContentsId);
-        if (overlayMatchActive && wouldHideAllSlots(webContentsId)) return;
         emptySlots.add(webContentsId);
         syncSlotVisibility(webContentsId);
     }, EMPTY_HIDE_GRACE_MS);
@@ -463,7 +471,7 @@ function applyClusterToWindow(win: BrowserWindow, cluster: OverlayCluster, click
     });
     win.setMovable(false);
     win.setFocusable(false);
-    win.setIgnoreMouseEvents(clickPass);
+    setMouseIgnored(win, clickPass);
     syncWindowVisibility(win);
 }
 
@@ -652,9 +660,20 @@ export function syncScalesFromLeague(): {
     return { hudScale, mapScale, gameWidth, gameHeight };
 }
 
+const workspacePinned = new WeakSet<BrowserWindow>();
+
 function assertAlwaysOnTop(win: BrowserWindow): void {
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (win.isDestroyed()) return;
+    // Blur and the 20s keep-alive both call this. Repeating setAlwaysOnTop
+    // while League owns focus is a hitch, so only re-apply what was lost.
+    const needsTop = !win.isAlwaysOnTop();
+    const needsPin = !workspacePinned.has(win);
+    if (!needsTop && !needsPin) return;
+    if (needsTop) win.setAlwaysOnTop(true, 'screen-saver');
+    if (needsPin) {
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        workspacePinned.add(win);
+    }
 }
 
 export function createOverlayWindow(): BrowserWindow {
@@ -769,12 +788,12 @@ export function showOverlay(): void {
     if (userHidden || !getAppSettings().overlayEnabled) return;
 
     const win = createOverlayWindow();
-    setOverlayThrottling(false);
     if (clickThrough && !alignMode) {
         applyLockedClusters();
     } else if (!win.isVisible()) {
         win.showInactive();
     }
+    syncOverlayPaintBudget();
     assertAlwaysOnTop(win);
     // Re-apply click-through after show — Windows can drop ignore-mouse state on hide/show
     setClickThrough(clickThrough);
@@ -785,7 +804,7 @@ export function hideOverlay(): void {
         if (win.isVisible()) win.hide();
     }
     // Hidden overlay should not keep a hot compositor path against the game.
-    setOverlayThrottling(true);
+    syncOverlayPaintBudget();
 }
 
 export function destroyOverlay(): void {
@@ -870,7 +889,7 @@ export function setClickThrough(enabled: boolean): void {
         // No { forward: true }: forwarding still routes every mousemove through
         // Chromium for hit-testing, which hitchs the cursor over League. Locked
         // UI is paint-only (pointer-events: none) — OS pass-through is enough.
-        overlayWin.setIgnoreMouseEvents(true);
+        setMouseIgnored(overlayWin, true);
         // Never steal focus back from League when re-locking
         if (overlayWin.isVisible()) {
             overlayWin.showInactive();
@@ -881,7 +900,7 @@ export function setClickThrough(enabled: boolean): void {
         destroyExtraWindows();
         applyCompactPanelBounds();
         overlayWin.setFocusable(true);
-        overlayWin.setIgnoreMouseEvents(false);
+        setMouseIgnored(overlayWin, false);
         // showInactive — do NOT focus() or League loses input / can flicker the overlay
         overlayWin.showInactive();
     }
@@ -919,7 +938,7 @@ export function setAlignMode(enabled: boolean): boolean {
         destroyExtraWindows();
         applyFullscreenBounds();
         overlayWin.setFocusable(true);
-        overlayWin.setIgnoreMouseEvents(false);
+        setMouseIgnored(overlayWin, false);
         // showInactive — focus() steals input from League and can freeze the cursor
         overlayWin.showInactive();
     } else {
@@ -929,7 +948,7 @@ export function setAlignMode(enabled: boolean): boolean {
         destroyExtraWindows();
         applyCompactPanelBounds();
         overlayWin.setFocusable(true);
-        overlayWin.setIgnoreMouseEvents(false);
+        setMouseIgnored(overlayWin, false);
         overlayWin.showInactive();
     }
     broadcastOverlayMeta();

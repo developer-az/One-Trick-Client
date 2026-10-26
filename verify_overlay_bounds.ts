@@ -1,4 +1,4 @@
-import { clusterOverlayWindows, letterboxGame, overlayScaleFromHud } from './electron/overlay-bounds';
+import { clusterOverlayWindows, letterboxGame, overlayScaleFromHud, overlayWindowWanted } from './electron/overlay-bounds';
 import { recordersFromTasklist } from './electron/environment';
 import { dualRailLayout, compactRightLayout } from './src/overlay/hudLayout';
 import { minimapScaleToSlider } from './electron/league-settings';
@@ -85,3 +85,19 @@ const recorders = recordersFromTasklist(
 );
 assert(JSON.stringify(recorders) === JSON.stringify(['Medal', 'OBS']), `recorders: ${JSON.stringify(recorders)}`);
 console.log('recorder detection ok');
+
+const wanted = (emptySlot: boolean, extra?: Partial<Parameters<typeof overlayWindowWanted>[0]>) =>
+  overlayWindowWanted({
+    userHidden: false,
+    overlayEnabled: true,
+    locked: true,
+    holdToShow: false,
+    holdDown: false,
+    emptySlot,
+    ...extra,
+  });
+assert(wanted(false) === true, 'a slot with content stays up during a match');
+assert(wanted(true) === false, 'an empty slot stays hidden during a match');
+assert(wanted(false, { holdToShow: true, holdDown: false }) === false, 'hold-to-show still hides until Tab');
+assert(wanted(true, { locked: false }) === true, 'align and unlocked modes stay visible');
+console.log('empty overlay windows stay off the game');
