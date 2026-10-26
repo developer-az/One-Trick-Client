@@ -61,6 +61,10 @@
       {
         "from": "native/bin/onetrick-keys.exe",
         "to": "onetrick-keys.exe"
+      },
+      {
+        "from": "native/bin/ffmpeg.exe",
+        "to": "ffmpeg.exe"
       }
     ]
   },

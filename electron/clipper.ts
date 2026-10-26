@@ -94,6 +94,7 @@ async function findFfmpeg(): Promise<string | null> {
         process.env.ONETRICK_FFMPEG || '',
         path.join(process.resourcesPath || '', 'ffmpeg.exe'),
         path.join(process.resourcesPath || '', 'ffmpeg'),
+        path.join(process.cwd(), 'native', 'bin', 'ffmpeg.exe'),
         'ffmpeg',
     ].filter((p) => p.length > 0);
     for (const candidate of candidates) {

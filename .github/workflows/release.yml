@@ -183,6 +183,18 @@ jobs:
         shell: pwsh
         run: if (-not (Test-Path "native/bin/onetrick-keys.exe")) { throw "Missing native/bin/onetrick-keys.exe hotkey helper" }
 
+      - name: Bundle ffmpeg
+        shell: pwsh
+        run: |
+          npm install --no-save ffmpeg-static@5.3.0
+          $bin = node -p "require('ffmpeg-static')"
+          if (-not $bin -or -not (Test-Path -LiteralPath $bin)) { throw "ffmpeg-static did not provide a binary" }
+          New-Item -ItemType Directory -Force -Path native/bin | Out-Null
+          Copy-Item -LiteralPath $bin -Destination native/bin/ffmpeg.exe -Force
+          $size = (Get-Item native/bin/ffmpeg.exe).Length
+          if ($size -lt 1MB) { throw "ffmpeg.exe looks too small ($size bytes)" }
+          Write-Host "Bundled ffmpeg.exe ($size bytes)"
+
       - name: Build Web
         run: npm run build
 
@@ -271,6 +283,8 @@ jobs:
             - **Page Down** scan / **Page Up** dismiss augment overlay in Mayhem
             - Ranked & SR: summoner timers, gank, vision, buy, jungle/wave cues unchanged; Mayhem off by default
             - Live catalog API so every champion resolves (authored Pyke / Pantheon / Yone stay deep)
+            - Empty overlay windows stay off League. Shown panels paint at a low rate so the HUD is not a fullscreen compositor
+            - **Clips** on the Performance page. Auto-clip is off until you turn it on. The Windows build includes ffmpeg. A kill, a death, or a Great play saves a video, up to 12 per match
             - HUD studio: drag modules and chrome stickers onto the League HUD / minimap map
             - Locked overlay uses slim rail windows — not a fullscreen transparent layer over League
             - Next-move cue ranking with a 6s hold / +12 switch margin

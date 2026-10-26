@@ -261,7 +261,7 @@ export const PerformanceView: React.FC = () => {
               />
               <SettingRow
                 title="Auto-clip moments"
-                hint="Off until you turn it on. Records the desktop during the match and saves a clip on a kill, death, or Great play. Needs ffmpeg. Capture costs frames, so leave it off in a close ranked game."
+                hint="Off until you turn it on. Records the desktop during the match and saves a clip on a kill, death, or Great play. The installed build includes ffmpeg. Capture costs frames, so leave it off in a close ranked game."
                 control={
                   <Switch
                     label="Auto-clip moments"
