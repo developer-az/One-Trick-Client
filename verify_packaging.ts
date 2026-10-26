@@ -89,9 +89,47 @@ function entryCopiesScript(entry: ExtraEntry): boolean {
     return INJECT_SCRIPT.startsWith(`${raw}/`);
 }
 
+type AsarModule = {
+    createPackage: (source: string, dest: string) => Promise<void>;
+    listPackage: (archivePath: string) => string[];
+    uncache: (archivePath: string) => boolean;
+    uncacheAll: () => void;
+};
+
+function loadAsar(): AsarModule {
+    return nodeRequire('@electron/asar') as AsarModule;
+}
+
+/** Drop asar's filesystem cache so Windows can delete the archive afterward. */
+function releaseAsarHandles(archivePath?: string): void {
+    try {
+        const asar = loadAsar();
+        if (archivePath) asar.uncache(archivePath);
+        asar.uncacheAll();
+    } catch (error) {
+        console.warn('verify:packaging could not release asar handles:', error);
+    }
+}
+
+const TEMP_RM_OPTIONS: fs.RmOptions = {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+};
+
+/** Windows keeps the asar file locked briefly. A failed cleanup must not fail the check. */
+function removeTempDir(dir: string): void {
+    try {
+        fs.rmSync(dir, TEMP_RM_OPTIONS);
+    } catch (error) {
+        console.warn(`verify:packaging could not remove temp dir ${dir}:`, error);
+    }
+}
+
 function collectInjectionScripts(dir: string): string[] {
     const hits: string[] = [];
-    const asar = nodeRequire('@electron/asar') as { listPackage: (archivePath: string) => string[] };
+    const asar = loadAsar();
     const walk = (current: string): void => {
         for (const ent of fs.readdirSync(current, { withFileTypes: true })) {
             const full = path.join(current, ent.name);
@@ -101,10 +139,13 @@ function collectInjectionScripts(dir: string): string[] {
             }
             const rel = full.replace(/\\/g, '/');
             if (ent.name === 'inject-test-keys.ps1' || rel.endsWith('/inject-test-keys.ps1')) hits.push(full);
-            if (ent.name.endsWith('.asar')) {
+            if (!ent.name.endsWith('.asar')) continue;
+            try {
                 for (const packed of asar.listPackage(full)) {
                     if (packed.replace(/\\/g, '/').includes('inject-test-keys.ps1')) hits.push(`${full}:${packed}`);
                 }
+            } finally {
+                asar.uncache(full);
             }
         }
     };
@@ -112,8 +153,36 @@ function collectInjectionScripts(dir: string): string[] {
     return hits;
 }
 
+function selfTestCleanupSurvivesLockedDir(): void {
+    const realRm = fs.rmSync;
+    let seen: fs.RmOptions | undefined;
+    fs.rmSync = ((target: fs.PathLike, options?: fs.RmOptions) => {
+        seen = options;
+        const err = new Error(`ENOTEMPTY: directory not empty, rm '${String(target)}'`) as NodeJS.ErrnoException;
+        err.code = 'ENOTEMPTY';
+        throw err;
+    }) as typeof fs.rmSync;
+    const realWarn = console.warn;
+    let warned = false;
+    console.warn = () => {
+        warned = true;
+    };
+    try {
+        removeTempDir(path.join(os.tmpdir(), 'ot-pack-guard-locked'));
+    } finally {
+        fs.rmSync = realRm;
+        console.warn = realWarn;
+    }
+    assert(
+        seen?.recursive === true && seen.force === true && seen.maxRetries === 5 && seen.retryDelay === 200,
+        'temp cleanup retries a locked Windows directory'
+    );
+    assert(warned, 'temp cleanup warns instead of failing the check');
+}
+
 async function selfTestArtifactScan(): Promise<void> {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ot-pack-guard-'));
+    let archivePath: string | undefined;
     try {
         const loose = path.join(root, 'loose');
         fs.mkdirSync(loose);
@@ -123,19 +192,18 @@ async function selfTestArtifactScan(): Promise<void> {
         const src = path.join(root, 'src');
         fs.mkdirSync(src);
         fs.writeFileSync(path.join(src, 'inject-test-keys.ps1'), 'test');
-        const asar = nodeRequire('@electron/asar') as {
-            createPackage: (source: string, dest: string) => Promise<void>;
-        };
         const packed = path.join(root, 'packed');
         fs.mkdirSync(packed);
-        await asar.createPackage(src, path.join(packed, 'app.asar'));
+        archivePath = path.join(packed, 'app.asar');
+        await loadAsar().createPackage(src, archivePath);
         const packedHits = collectInjectionScripts(packed);
         assert(
             packedHits.some((hit) => hit.includes('inject-test-keys.ps1')),
             'inject-test-keys.ps1 inside app.asar must fail the packaging scan'
         );
     } finally {
-        fs.rmSync(root, { recursive: true, force: true });
+        releaseAsarHandles(archivePath);
+        removeTempDir(root);
     }
 }
 
@@ -212,6 +280,7 @@ async function main(): Promise<void> {
     const shell = fs.readFileSync('src/app/App.tsx', 'utf8');
     assert(shell.includes('GPL-3.0'), 'desktop shell must carry the FFmpeg GPL notice');
 
+    selfTestCleanupSurvivesLockedDir();
     await selfTestArtifactScan();
 
     const releaseDir = pkg.build.directories?.output ?? 'release';
