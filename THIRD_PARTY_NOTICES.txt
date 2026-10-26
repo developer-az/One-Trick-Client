@@ -1,0 +1,47 @@
+Third-party notices
+
+One Trick's own code is under the MIT license (see LICENSE).
+The Windows build also ships a separate FFmpeg program under GPL-3.0.
+
+FFmpeg
+------
+Package: ffmpeg-static 5.3.0
+Binary: Windows x64 static executable, installed as resources/ffmpeg.exe
+Build: 6.1.1-essentials_build-www.gyan.dev
+Publisher: https://www.gyan.dev/ffmpeg/builds/
+License: GNU General Public License version 3 (GPL-3.0)
+License text shipped with this app: licenses/GPL-3.0.txt
+Upstream license file for this exact binary:
+  https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/win32-x64.LICENSE
+Build configuration and enabled libraries:
+  https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/win32-x64.README
+
+This essentials build is GPL-3.0. It statically links GPL components,
+including libx264, libx265, and libxvid, so GPL-3.0 applies to the whole
+FFmpeg binary.
+
+Copyright (C) 2000-2023 the FFmpeg developers, and the authors of the
+libraries named in the build README above.
+
+One Trick runs this binary as a separate program (ffmpeg.exe). It does not
+link FFmpeg into the One Trick executable.
+
+Source offer
+------------
+Corresponding source for this binary is the FFmpeg source at
+https://github.com/FFmpeg/FFmpeg/commit/e38092ef93
+as identified by the gyan.dev essentials build README, together with the
+external library versions named in that README and the scripts used to
+build them.
+
+For at least three years after a One Trick release that includes this
+binary is published, that source is available at no charge from the
+locations above. If those locations are unavailable, open an issue at
+https://github.com/developer-az/One-Trick-Client/issues and ask for the
+corresponding source for FFmpeg 6.1.1-essentials_build-www.gyan.dev
+shipped with this version.
+
+You may copy, modify, and redistribute ffmpeg.exe under GPL-3.0. A copy
+of the license is in licenses/GPL-3.0.txt. To run a modified build,
+replace resources/ffmpeg.exe in this folder and keep the file name
+ffmpeg.exe.

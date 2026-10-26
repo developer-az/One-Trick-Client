@@ -9,4 +9,7 @@ Start League of Legends, then One Trick.
 Set League's display mode to Borderless.
 
 Clips are off until you turn on Auto-clip in Performance, before the game.
-A kill, a death, or a Great play saves a video there. This build includes ffmpeg.
+A kill, a death, or a Great play saves a video there. This build includes FFmpeg 6.1.1
+(gyan.dev essentials, GPL-3.0) as a separate program. One Trick itself stays under
+its own license. See THIRD_PARTY_NOTICES.txt in this folder for the copyright,
+the license, and the source offer. A copy of GPL-3.0 is in licenses/GPL-3.0.txt.

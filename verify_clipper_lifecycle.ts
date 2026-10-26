@@ -20,6 +20,7 @@ import {
     listSegments,
     saveManualClip,
     setAutoClipEnabledForTest,
+    listSavedClips,
 } from './electron/clipper';
 
 function ok(cond: boolean, msg: string): void {
@@ -160,8 +161,50 @@ async function run(): Promise<void> {
         /* ignore */
     }
 
+    await verifySavedClipOrder();
+
     if (!process.exitCode) {
         console.log('verify:clipper-lifecycle ok');
+    }
+}
+
+/** Newest clips must survive a directory listing longer than the stat cap. */
+async function verifySavedClipOrder(): Promise<void> {
+    console.log('--- verify:clipper: saved clips sort before cap ---');
+    resetClipperForTest();
+    const names = Array.from({ length: 210 }, (_, i) => `clip-${String(i).padStart(4, '0')}.mp4`);
+    const newest = names[names.length - 1];
+    const mtimes = new Map(names.map((name, i) => [name, 1_700_000_000_000 + i * 1000]));
+    const realReaddir = fs.promises.readdir;
+    const realStat = fs.promises.stat;
+    let readdirCalls = 0;
+    let statCalls = 0;
+    fs.promises.readdir = (async () => {
+        readdirCalls += 1;
+        return names;
+    }) as typeof fs.promises.readdir;
+    fs.promises.stat = (async (target: fs.PathLike) => {
+        statCalls += 1;
+        const base = path.basename(String(target));
+        const mtimeMs = mtimes.get(base);
+        if (mtimeMs == null) throw new Error(`unexpected stat ${base}`);
+        return { isFile: () => true, size: 128, mtimeMs } as fs.Stats;
+    }) as typeof fs.promises.stat;
+    try {
+        const clips = await listSavedClips();
+        ok(clips[0]?.name === newest, `newest clip is first (got ${clips[0]?.name})`);
+        ok(clips.some((clip) => clip.name === newest), 'newest clip is kept when it sits past the first 200 names');
+        ok(clips.length === 24, `display cap stays 24 (got ${clips.length})`);
+        ok(statCalls === names.length, `stats every clip before capping (got ${statCalls})`);
+        const newestFirst = clips.every((clip, i) => i === 0 || clips[i - 1].mtimeMs >= clip.mtimeMs);
+        ok(newestFirst, 'clips are newest first');
+        const again = await listSavedClips();
+        ok(again[0]?.name === newest, 'cache returns the same newest clip');
+        ok(readdirCalls === 1, `cache skips a second directory read (got ${readdirCalls})`);
+    } finally {
+        fs.promises.readdir = realReaddir;
+        fs.promises.stat = realStat;
+        resetClipperForTest();
     }
 }
 

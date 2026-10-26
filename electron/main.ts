@@ -40,7 +40,7 @@ import {
 } from './game-monitor';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
-import { ensureClipperProbed, getClipperStatus, saveManualClip, syncAutoClip } from './clipper';
+import { ensureClipperProbed, getClipperStatus, listSavedClips, saveManualClip, syncAutoClip } from './clipper';
 import {
     destroyOverlay,
     toggleOverlayVisibility,
@@ -541,6 +541,7 @@ app.whenReady().then(() => {
     // Auto-clipping: status for the Performance tab + manual "save last 30s".
     ipcMain.handle('clipper-status', async () => {
         await ensureClipperProbed();
+        await listSavedClips();
         return getClipperStatus();
     });
     ipcMain.handle('clip-reveal', async (_event, target: unknown) => {
@@ -557,6 +558,7 @@ app.whenReady().then(() => {
         try {
             const gameTime = getGameState()?.gameTime ?? getRecentGameSnapshots().at(-1)?.gameTime ?? 0;
             const saved = await saveManualClip(Math.round(gameTime));
+            await listSavedClips();
             return { success: !!saved, path: saved, status: getClipperStatus() };
         } catch (error) {
             return { success: false, path: null, error: String(error), status: getClipperStatus() };
