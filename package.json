@@ -1,7 +1,7 @@
 {
   "name": "one-trick",
   "private": true,
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
@@ -20,7 +20,8 @@
       "dist/**/*",
       "dist-electron/**/*",
       "src/data/mayhem/bundle.json",
-      "electron/scripts/**/*"
+      "electron/scripts/**/*",
+      "!scripts/inject-test-keys.ps1"
     ],
     "npmRebuild": false,
     "nodeGypRebuild": false,
@@ -55,6 +56,14 @@
       {
         "from": "packaging/INSTALL.txt",
         "to": "INSTALL.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
+      },
+      {
+        "from": "packaging/licenses/GPL-3.0.txt",
+        "to": "licenses/GPL-3.0.txt"
       }
     ],
     "extraResources": [

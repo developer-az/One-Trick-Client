@@ -144,7 +144,11 @@ export const App: React.FC = () => {
           </button>
         ))}
         <div className="mt-auto px-3 pt-6 text-xs ot-faint leading-relaxed">
-          {isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games
+          <p>{isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games</p>
+          <p className="mt-2">
+            Auto-clip plays FFmpeg 6.1.1 as a separate program. That build is GPL-3.0. License and source are in
+            THIRD_PARTY_NOTICES.txt.
+          </p>
         </div>
       </nav>
 

@@ -9,7 +9,30 @@ on:
       - main
 
 jobs:
+  no-agent-attribution:
+    name: No AI agent commit attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            RANGE="origin/${{ github.base_ref }}..HEAD"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="${{ github.event.before }}..${{ github.sha }}"
+          else
+            RANGE="HEAD"
+          fi
+          python3 scripts/check-agent-commit-trailers.py "$RANGE"
+
   lint-and-build:
+    needs: no-agent-attribution
     runs-on: ubuntu-latest
     
     steps:

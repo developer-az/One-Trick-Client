@@ -379,7 +379,7 @@ export async function saveClip(opts: ClipRequest): Promise<string | null> {
                 'utf8'
             );
             statusDetail = `Saved ${name}`;
-            clipListCache = null;
+            invalidateSavedClipCache();
             pruneOldSegments();
             return outPath;
         } catch (error) {
@@ -510,33 +510,60 @@ const CLIP_LIST_LIMIT = 24;
 const CLIP_LIST_STAT_CAP = 200;
 const CLIP_LIST_CACHE_MS = 4_000;
 let clipListCache: { at: number; clips: SavedClip[] } | null = null;
+let clipListEpoch = 0;
+let clipListInflight: Promise<SavedClip[]> | null = null;
 
-function listSavedClips(): SavedClip[] {
-    const now = Date.now();
-    if (clipListCache && now - clipListCache.at < CLIP_LIST_CACHE_MS) return clipListCache.clips;
+function invalidateSavedClipCache(): void {
+    clipListEpoch += 1;
+    clipListCache = null;
+    clipListInflight = null;
+}
+
+/**
+ * Stat every mp4, then sort by mtime. Capping the directory listing first
+ * drops newer clips once the folder passes the cap, because readdir order
+ * is not time order.
+ */
+async function readSavedClipsFromDisk(): Promise<SavedClip[]> {
     const dir = clipsDir();
-    let clips: SavedClip[] = [];
-    try {
-        const names = fs.readdirSync(dir).filter((name) => name.endsWith('.mp4'));
-        const capped = names.length > CLIP_LIST_STAT_CAP ? names.slice(0, CLIP_LIST_STAT_CAP) : names;
-        const rows: SavedClip[] = [];
-        for (const name of capped) {
+    const names = (await fs.promises.readdir(dir)).filter((name) => name.endsWith('.mp4'));
+    const stats = await Promise.all(
+        names.map(async (name) => {
             try {
                 const full = path.join(dir, name);
-                const st = fs.statSync(full);
-                if (!st.isFile()) continue;
-                rows.push({ name, path: full, bytes: st.size, mtimeMs: st.mtimeMs });
+                const st = await fs.promises.stat(full);
+                if (!st.isFile()) return null;
+                return { name, path: full, bytes: st.size, mtimeMs: st.mtimeMs };
             } catch {
-                /* a file can disappear between read and stat */
+                return null;
             }
-        }
-        rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
-        clips = rows.slice(0, CLIP_LIST_LIMIT);
-    } catch {
-        clips = [];
-    }
-    clipListCache = { at: now, clips };
-    return clips;
+        })
+    );
+    const rows = stats.filter((row): row is SavedClip => row !== null);
+    rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+    return rows.slice(0, CLIP_LIST_STAT_CAP).slice(0, CLIP_LIST_LIMIT);
+}
+
+/** Newest clips for the Performance page. Cached so the 4s poll does not restat every time. */
+export async function listSavedClips(): Promise<SavedClip[]> {
+    const now = Date.now();
+    if (clipListCache && now - clipListCache.at < CLIP_LIST_CACHE_MS) return clipListCache.clips;
+    if (clipListInflight) return clipListInflight;
+    const epoch = clipListEpoch;
+    const task = readSavedClipsFromDisk()
+        .then((clips) => {
+            if (epoch === clipListEpoch) clipListCache = { at: Date.now(), clips };
+            return epoch === clipListEpoch ? clips : (clipListCache?.clips ?? clips);
+        })
+        .catch(() => {
+            if (epoch === clipListEpoch) clipListCache = { at: Date.now(), clips: [] };
+            return clipListCache?.clips ?? [];
+        })
+        .finally(() => {
+            if (epoch === clipListEpoch) clipListInflight = null;
+        });
+    clipListInflight = task;
+    return task;
 }
 
 /** Current recorder state for the Performance tab. */
@@ -552,7 +579,7 @@ export function getClipperStatus(): {
         detail: statusDetail,
         clipsDir: clipsDir(),
         ffmpeg: ffmpegPath ? 'ready' : ffmpegKnown ? 'missing' : 'unknown',
-        clips: listSavedClips(),
+        clips: clipListCache?.clips ?? [],
     };
 }
 
@@ -611,7 +638,7 @@ export function resetClipperForTest(): void {
     ffmpegPath = null;
     ffmpegKnown = false;
     locateFfmpegTask = null;
-    clipListCache = null;
+    invalidateSavedClipCache();
     activeStitches = 0;
     stitchQueue = Promise.resolve();
 }

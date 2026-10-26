@@ -234,6 +234,9 @@ jobs:
           $blockmaps = Get-ChildItem -Path "release" -Filter "*.exe.blockmap" -Recurse
           if (-not $blockmaps) { throw "Missing blockmap artifacts" }
 
+      - name: Fail if test key injection script was packaged
+        run: npm run verify:packaging
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:

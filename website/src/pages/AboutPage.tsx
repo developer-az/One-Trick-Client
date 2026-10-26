@@ -30,6 +30,15 @@ export function AboutPage() {
       <h2>Which Windows versions?</h2>
       <p>Windows 10 or newer, 64-bit. There is no macOS build.</p>
 
+      <h2>Does the Windows build include FFmpeg?</h2>
+      <p>
+        Yes. Auto-clip runs FFmpeg 6.1.1 as a separate program (the gyan.dev essentials build shipped through
+        ffmpeg-static 5.3.0). That binary is GNU General Public License version 3 (GPL-3.0). One Trick's own
+        code remains MIT. The install folder includes THIRD_PARTY_NOTICES.txt, a copy of GPL-3.0, and the
+        source offer. FFmpeg source for this build is commit{' '}
+        <a href="https://github.com/FFmpeg/FFmpeg/commit/e38092ef93">e38092ef93</a>.
+      </p>
+
       <h2>Is this a Riot product?</h2>
       <p>
         No. One Trick is an unofficial fan tool. It is not endorsed by Riot Games and does not reflect the views of
