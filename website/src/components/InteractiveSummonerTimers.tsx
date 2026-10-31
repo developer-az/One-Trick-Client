@@ -4,8 +4,10 @@ export function InteractiveSummonerTimers() {
   const [flashCd, setFlashCd] = useState<number>(0)
   const [igniteCd, setIgniteCd] = useState<number>(0)
 
+  const active = flashCd > 0 || igniteCd > 0
+
   useEffect(() => {
-    if (flashCd <= 0 && igniteCd <= 0) return
+    if (!active) return
 
     const interval = setInterval(() => {
       setFlashCd((prev) => (prev > 0 ? prev - 1 : 0))
@@ -13,22 +15,14 @@ export function InteractiveSummonerTimers() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [flashCd, igniteCd])
+  }, [active])
 
   const toggleFlash = () => {
-    if (flashCd > 0) {
-      setFlashCd(0)
-    } else {
-      setFlashCd(300)
-    }
+    setFlashCd((prev) => (prev > 0 ? 0 : 300))
   }
 
   const toggleIgnite = () => {
-    if (igniteCd > 0) {
-      setIgniteCd(0)
-    } else {
-      setIgniteCd(180)
-    }
+    setIgniteCd((prev) => (prev > 0 ? 0 : 180))
   }
 
   const formatSec = (s: number) => {
@@ -38,114 +32,130 @@ export function InteractiveSummonerTimers() {
   }
 
   return (
-    <div className="rounded-xl border border-white/10 bg-[#0e0f14]/90 p-5 shadow-[0_24px_80px_rgba(0,0,0,0.5)] sm:p-7 gothic-bracket">
+    <div className="rounded-xl border border-white/10 bg-[#0c0d12] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)] sm:p-6 gothic-bracket">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
         <div>
-          <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-chrome-gold">
-            Global Keyboard Hook
+          <span className="font-mono text-xs uppercase tracking-wider text-zinc-400">
+            In-game overlay module
           </span>
-          <h3 className="font-display text-xl font-medium tracking-wide text-chrome-bright">
+          <h3 className="font-display text-xl font-semibold text-white tracking-wide">
             Summoner Spell Timers
           </h3>
         </div>
-        <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-emerald-400">
-          Native Windows Hook Active
+        <span className="rounded border border-emerald-500/30 bg-emerald-950/40 px-2.5 py-1 font-mono text-xs text-emerald-400">
+          Global keyboard hook
         </span>
       </div>
 
-      <p className="mt-4 text-sm leading-relaxed text-chrome-dim">
-        Never Alt-Tab or move your cursor. Press your configured hotkey while playing League to start or clear cooldowns. Click below to simulate:
+      <p className="mt-3 text-sm leading-relaxed text-zinc-300">
+        Tracks enemy cooldowns without moving your cursor. Tap the hotkey while playing League to start or clear the countdown:
       </p>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        {/* Flash Panel */}
-        <div
+      <div className="mt-5 space-y-3">
+        {/* Row 1: Caitlyn Flash */}
+        <button
+          type="button"
           onClick={toggleFlash}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') toggleFlash()
-          }}
-          className={`cursor-pointer rounded-lg border p-4 transition-all duration-150 ${
+          aria-pressed={flashCd > 0}
+          aria-label={
             flashCd > 0
-              ? 'border-red-500/40 bg-red-950/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-              : 'border-white/10 bg-black/30 hover:border-white/20'
+              ? `Caitlyn enemy Flash, ${formatSec(flashCd)} remaining. Activate to clear the timer.`
+              : 'Start the Caitlyn enemy Flash timer. Hotkey Page Up.'
+          }
+          className={`flex w-full items-center justify-between gap-4 rounded-lg border p-3 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-300 ${
+            flashCd > 0
+              ? 'border-rose-500/40 bg-rose-950/20'
+              : 'border-white/10 bg-black/40 hover:border-white/20'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-xs uppercase tracking-wider text-chrome-silver">
-              Enemy Flash
-            </span>
-            <kbd className="kbd-key">PageUp</kbd>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <span className="font-mono text-3xl font-semibold tracking-tight text-chrome-bright tabular-nums">
-              {flashCd > 0 ? formatSec(flashCd) : 'READY'}
-            </span>
-            <span
-              className={`text-xs font-medium uppercase tracking-wider ${
-                flashCd > 0 ? 'text-red-400' : 'text-emerald-400'
-              }`}
-            >
-              {flashCd > 0 ? 'On Cooldown' : 'Available'}
-            </span>
-          </div>
-          {flashCd > 0 && (
-            <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/10">
-              <div
-                className="h-full bg-red-500 transition-all duration-1000 linear"
-                style={{ width: `${(flashCd / 300) * 100}%` }}
-              />
+          <div className="flex items-center gap-3">
+            <img
+              src="https://ddragon.leagueoflegends.com/cdn/15.1.1/img/champion/Caitlyn.png"
+              alt=""
+              className="h-10 w-10 rounded border border-white/20"
+            />
+            <div>
+              <div className="text-sm font-medium text-white flex items-center gap-2">
+                <span>Caitlyn</span>
+                <span className="text-[10px] text-zinc-400 uppercase font-mono">ADC</span>
+              </div>
+              <div className="text-xs text-zinc-400">Enemy Flash</div>
             </div>
-          )}
-        </div>
+          </div>
 
-        {/* Combat Spell Panel */}
-        <div
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <img
+                src="https://ddragon.leagueoflegends.com/cdn/15.1.1/img/spell/SummonerFlash.png"
+                alt=""
+                className={`h-9 w-9 rounded border ${
+                  flashCd > 0 ? 'border-rose-500/60 opacity-60' : 'border-white/20'
+                }`}
+              />
+              {flashCd > 0 && (
+                <div className="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-rose-300 bg-black/70 rounded">
+                  {formatSec(flashCd)}
+                </div>
+              )}
+            </div>
+            <kbd aria-hidden="true" className="kbd-key text-zinc-200">PageUp</kbd>
+          </div>
+        </button>
+
+        {/* Row 2: Lux Ignite */}
+        <button
+          type="button"
           onClick={toggleIgnite}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') toggleIgnite()
-          }}
-          className={`cursor-pointer rounded-lg border p-4 transition-all duration-150 ${
+          aria-pressed={igniteCd > 0}
+          aria-label={
             igniteCd > 0
-              ? 'border-amber-500/40 bg-amber-950/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-              : 'border-white/10 bg-black/30 hover:border-white/20'
+              ? `Lux enemy Ignite, ${formatSec(igniteCd)} remaining. Activate to clear the timer.`
+              : 'Start the Lux enemy Ignite timer. Hotkey Page Down.'
+          }
+          className={`flex w-full items-center justify-between gap-4 rounded-lg border p-3 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-300 ${
+            igniteCd > 0
+              ? 'border-amber-500/40 bg-amber-950/20'
+              : 'border-white/10 bg-black/40 hover:border-white/20'
           }`}
         >
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-xs uppercase tracking-wider text-chrome-silver">
-              Ignite / Combat Sum
-            </span>
-            <kbd className="kbd-key">PageDown</kbd>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <span className="font-mono text-3xl font-semibold tracking-tight text-chrome-bright tabular-nums">
-              {igniteCd > 0 ? formatSec(igniteCd) : 'READY'}
-            </span>
-            <span
-              className={`text-xs font-medium uppercase tracking-wider ${
-                igniteCd > 0 ? 'text-amber-400' : 'text-emerald-400'
-              }`}
-            >
-              {igniteCd > 0 ? 'On Cooldown' : 'Available'}
-            </span>
-          </div>
-          {igniteCd > 0 && (
-            <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/10">
-              <div
-                className="h-full bg-amber-500 transition-all duration-1000 linear"
-                style={{ width: `${(igniteCd / 180) * 100}%` }}
-              />
+          <div className="flex items-center gap-3">
+            <img
+              src="https://ddragon.leagueoflegends.com/cdn/15.1.1/img/champion/Lux.png"
+              alt=""
+              className="h-10 w-10 rounded border border-white/20"
+            />
+            <div>
+              <div className="text-sm font-medium text-white flex items-center gap-2">
+                <span>Lux</span>
+                <span className="text-[10px] text-zinc-400 uppercase font-mono">Support</span>
+              </div>
+              <div className="text-xs text-zinc-400">Enemy Ignite</div>
             </div>
-          )}
-        </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <img
+                src="https://ddragon.leagueoflegends.com/cdn/15.1.1/img/spell/SummonerDot.png"
+                alt=""
+                className={`h-9 w-9 rounded border ${
+                  igniteCd > 0 ? 'border-amber-500/60 opacity-60' : 'border-white/20'
+                }`}
+              />
+              {igniteCd > 0 && (
+                <div className="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-amber-300 bg-black/70 rounded">
+                  {formatSec(igniteCd)}
+                </div>
+              )}
+            </div>
+            <kbd aria-hidden="true" className="kbd-key text-zinc-200">PageDown</kbd>
+          </div>
+        </button>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-3 text-[11px] text-chrome-dim">
-        <span>Fallback keys: Numpad 9 (Flash) · Numpad 3 (Combat)</span>
-        <span>Press again anytime to clear cooldown</span>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3 text-xs text-zinc-400 font-mono">
+        <span>Fallback keys: Num 9 / Num 3</span>
+        <span>Click row or press key again to clear</span>
       </div>
     </div>
   )

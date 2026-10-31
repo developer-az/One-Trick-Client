@@ -1,6 +1,12 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: [
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+    // The Studio renders the live overlay canvas, which lives in the Electron source tree.
+    '../src/overlay/**/*.{js,ts,jsx,tsx}',
+    '../src/components/GameIcons.tsx',
+  ],
   theme: {
     extend: {
       colors: {
