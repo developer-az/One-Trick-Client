@@ -70,7 +70,7 @@ export default function App() {
       <main>
         {/* Hero Section */}
         <section className="hero-band border-b border-white/10">
-          <div className="mx-auto grid w-full max-w-6xl items-center gap-12 px-5 py-16 sm:px-8 sm:py-24 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="mx-auto grid w-full max-w-6xl items-start gap-12 px-5 py-16 sm:px-8 sm:py-24 lg:grid-cols-[1.1fr_0.9fr]">
             <div>
               <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-black/40 px-3 py-1 text-[11px] font-mono tracking-wider text-zinc-300">
                 <span>WINDOWS</span>
@@ -116,6 +116,43 @@ export default function App() {
                   {release.kind === 'zip' ? 'Latest zip' : 'Latest file'}: {release.assetName}
                 </p>
               ) : null}
+
+              {/* Live client preview */}
+              <a
+                href="#demo-heading"
+                aria-label="See how champ select export works"
+                className="hero-preview gothic-bracket group mt-7 block rounded-xl no-underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-chrome-silver"
+              >
+                <div className="hero-preview-frame relative aspect-[19/10] overflow-hidden rounded-xl border border-white/10 bg-black">
+                  <img
+                    src={siteHref('/screenshots/hero-app.png')}
+                    alt=""
+                    width={838}
+                    height={577}
+                    loading="eager"
+                    decoding="async"
+                    fetchPriority="high"
+                    className="hero-preview-image h-full w-full object-cover object-center"
+                  />
+                  <div className="hero-preview-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
+                  <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 p-4 sm:p-5">
+                    <div className="min-w-0">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                        Live client
+                      </div>
+                      <div className="mt-1 truncate font-display text-base font-medium tracking-wide text-white sm:text-lg">
+                        Built before lock-in
+                      </div>
+                    </div>
+                    <span className="flex flex-none items-center gap-1.5 rounded border border-white/15 bg-black/60 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-200">
+                      <span className="hidden sm:inline">See the flow</span>
+                      <span aria-hidden="true" className="hero-preview-arrow">
+                        &rarr;
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </a>
             </div>
 
             {/* Right: Live Interactive Champion Doctrine Card */}
@@ -135,7 +172,7 @@ export default function App() {
                 </span>
                 <h2
                   id="demo-heading"
-                  className="mt-2 font-display text-3xl font-semibold tracking-wide text-white sm:text-4xl"
+                  className="mt-2 scroll-mt-28 font-display text-3xl font-semibold tracking-wide text-white sm:text-4xl"
                 >
                   How champ select export works
                 </h2>

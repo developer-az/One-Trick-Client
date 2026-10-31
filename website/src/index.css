@@ -225,6 +225,43 @@ body {
     linear-gradient(180deg, #161310 0%, #100e0c 55%, #0c0d10 100%);
 }
 
+.hero-preview-frame {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  transition: border-color 200ms ease;
+}
+
+.hero-preview-image {
+  opacity: 0.72;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 320ms ease, transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.hero-preview-vignette {
+  background:
+    radial-gradient(120% 100% at 50% 10%, transparent 38%, rgba(7, 8, 10, 0.9) 100%),
+    linear-gradient(180deg, rgba(7, 8, 10, 0.05) 20%, rgba(7, 8, 10, 0.82) 100%);
+}
+
+.hero-preview:hover .hero-preview-frame,
+.hero-preview:focus-visible .hero-preview-frame {
+  border-color: rgba(212, 216, 222, 0.32);
+}
+
+.hero-preview:hover .hero-preview-image,
+.hero-preview:focus-visible .hero-preview-image {
+  opacity: 0.95;
+  transform: translate3d(0, -1.2%, 0);
+}
+
+.hero-preview-arrow {
+  transition: transform 200ms ease;
+}
+
+.hero-preview:hover .hero-preview-arrow,
+.hero-preview:focus-visible .hero-preview-arrow {
+  transform: translateX(3px);
+}
+
 .feature-band {
   background: #0e0f12;
 }
@@ -375,6 +412,13 @@ details > summary::-webkit-details-marker {
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  .hero-preview-frame,
+  .hero-preview-image,
+  .hero-preview-arrow {
+    transition: none !important;
+    transform: none !important;
   }
 
   .reveal,
