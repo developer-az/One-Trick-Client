@@ -1,6 +1,12 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: [
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+    // The Studio renders the live overlay canvas, which lives in the Electron source tree.
+    '../src/overlay/**/*.{js,ts,jsx,tsx}',
+    '../src/components/GameIcons.tsx',
+  ],
   theme: {
     extend: {
       colors: {
@@ -17,7 +23,7 @@ export default {
       },
       fontFamily: {
         display: ['Cinzel', 'Palatino Linotype', 'Palatino', 'serif'],
-        sans: ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
+        sans: ['Inter Variable', 'Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
         mono: ['IBM Plex Mono', 'ui-monospace', 'monospace'],
       },
       keyframes: {

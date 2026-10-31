@@ -1,3 +1,9 @@
+@import '@fontsource/cinzel/500.css';
+@import '@fontsource/cinzel/600.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -19,7 +25,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   color: #c5c9d1;
   background: #12141a;
   overflow-x: hidden;
@@ -219,6 +225,43 @@ body {
     linear-gradient(180deg, #161310 0%, #100e0c 55%, #0c0d10 100%);
 }
 
+.hero-preview-frame {
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  transition: border-color 200ms ease;
+}
+
+.hero-preview-image {
+  opacity: 0.72;
+  transform: translate3d(0, 0, 0);
+  transition: opacity 320ms ease, transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.hero-preview-vignette {
+  background:
+    radial-gradient(120% 100% at 50% 10%, transparent 38%, rgba(7, 8, 10, 0.9) 100%),
+    linear-gradient(180deg, rgba(7, 8, 10, 0.05) 20%, rgba(7, 8, 10, 0.82) 100%);
+}
+
+.hero-preview:hover .hero-preview-frame,
+.hero-preview:focus-visible .hero-preview-frame {
+  border-color: rgba(212, 216, 222, 0.32);
+}
+
+.hero-preview:hover .hero-preview-image,
+.hero-preview:focus-visible .hero-preview-image {
+  opacity: 0.95;
+  transform: translate3d(0, -1.2%, 0);
+}
+
+.hero-preview-arrow {
+  transition: transform 200ms ease;
+}
+
+.hero-preview:hover .hero-preview-arrow,
+.hero-preview:focus-visible .hero-preview-arrow {
+  transform: translateX(3px);
+}
+
 .feature-band {
   background: #0e0f12;
 }
@@ -239,21 +282,35 @@ body {
 .btn-solid {
   color: #12141a;
   background: #f2f4f7;
+  border: 1px solid #12141a;
 }
 
 .btn-solid:hover {
+  color: #12141a;
   background: #ffffff;
 }
 
+.docs .btn-solid,
+.docs .btn-solid:hover {
+  color: #12141a;
+}
+
 .btn-line {
+  /* Opaque ink fill keeps the secondary action legible on dark and light surfaces. */
   color: var(--chrome-bright);
-  background: transparent;
+  background: #14161c;
   border: 1px solid rgba(242, 244, 247, 0.35);
 }
 
 .btn-line:hover {
-  border-color: rgba(232, 184, 74, 0.55);
-  background: rgba(232, 184, 74, 0.05);
+  color: var(--chrome-bright);
+  border-color: rgba(242, 244, 247, 0.6);
+  background: #1a1c23;
+}
+
+.docs .btn-line,
+.docs .btn-line:hover {
+  color: var(--chrome-bright);
 }
 
 .btn-solid:focus-visible,
@@ -309,13 +366,14 @@ body {
   margin-top: 0.45rem;
 }
 
-.docs a,
+/* Body-copy links stay gold; button anchors own their high-contrast colors. */
+.docs a:not([class*='btn-']),
 .feature-link {
   color: #e8b84a;
   text-underline-offset: 3px;
 }
 
-.docs a:hover,
+.docs a:not([class*='btn-']):hover,
 .feature-link:hover {
   color: #f6e2a8;
 }
@@ -371,6 +429,13 @@ details > summary::-webkit-details-marker {
     scroll-behavior: auto;
   }
 
+  .hero-preview-frame,
+  .hero-preview-image,
+  .hero-preview-arrow {
+    transition: none !important;
+    transform: none !important;
+  }
+
   .reveal,
   .animate-fade-up,
   .animate-drift,
@@ -380,4 +445,60 @@ details > summary::-webkit-details-marker {
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* Tactile micro-interactions (Emil Kowalski design engineering) */
+.btn-chrome:active,
+.btn-solid:active,
+.btn-ghost:active,
+.btn-line:active {
+  transform: scale(0.98);
+}
+
+.kbd-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  background: #18191f;
+  color: #f2f4f7;
+  border: 1px solid rgba(214, 219, 228, 0.2);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  letter-spacing: 0.05em;
+  user-select: none;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.kbd-key:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Authentic gothic bracketed corner markers */
+.gothic-bracket {
+  position: relative;
+}
+.gothic-bracket::before,
+.gothic-bracket::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+  border-color: rgba(212, 216, 222, 0.35);
+  border-style: solid;
+}
+.gothic-bracket::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+}
+.gothic-bracket::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 1px 1px 0;
 }

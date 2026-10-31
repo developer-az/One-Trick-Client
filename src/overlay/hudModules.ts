@@ -4,6 +4,9 @@ export const HUD_MODULE_IDS = ['sums', 'gank', 'vision', 'buy', 'action', 'mayhe
 
 export type HudModuleId = (typeof HUD_MODULE_IDS)[number];
 
+/** Modules the web HUD Studio stage can render as live pins. */
+export const HUD_STUDIO_MODULE_IDS: HudModuleId[] = ['sums', 'gank', 'vision', 'buy', 'action'];
+
 export type HudModules = Record<HudModuleId, boolean>;
 
 export const DEFAULT_HUD_MODULES: HudModules = {

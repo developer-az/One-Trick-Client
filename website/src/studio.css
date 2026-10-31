@@ -18,7 +18,7 @@
     linear-gradient(180deg, rgba(18, 20, 24, 0.92), rgba(7, 8, 10, 0.96)),
     repeating-linear-gradient(0deg, transparent 0 27px, rgba(212, 216, 222, 0.04) 27px 28px),
     repeating-linear-gradient(90deg, transparent 0 27px, rgba(212, 216, 222, 0.04) 27px 28px);
-  touch-action: none;
+  touch-action: pan-x;
 }
 
 .hud-studio-game {
@@ -70,6 +70,26 @@
   border: 1px solid rgba(212, 216, 222, 0.4);
   cursor: grab;
   user-select: none;
+  touch-action: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.hud-studio-pin:hover,
+.hud-studio-sticker:hover {
+  border-color: rgba(242, 244, 247, 0.72);
+}
+
+.hud-studio-pin.is-drag,
+.hud-studio-sticker.is-drag {
+  cursor: grabbing;
+  border-color: rgba(242, 244, 247, 0.9);
+  background: rgba(14, 15, 20, 0.94);
+}
+
+.hud-studio-pin:focus-visible,
+.hud-studio-sticker:focus-visible {
+  outline: 2px solid rgba(242, 244, 247, 0.9);
+  outline-offset: 2px;
 }
 
 .hud-studio-sticker {
@@ -83,4 +103,11 @@
   font-size: 10px;
   background: #111;
   color: #d4d8de;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-studio-pin,
+  .hud-studio-sticker {
+    transition: none;
+  }
 }

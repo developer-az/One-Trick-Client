@@ -1,4 +1,24 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+﻿import { useEffect, useRef, type ReactNode } from 'react'
+
+let sharedObserver: IntersectionObserver | null = null
+
+function getSharedObserver(): IntersectionObserver | null {
+  if (typeof window === 'undefined' || !('IntersectionObserver' in window)) return null
+  if (!sharedObserver) {
+    sharedObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-in')
+            sharedObserver?.unobserve(entry.target)
+          }
+        }
+      },
+      { threshold: 0.18, rootMargin: '0px 0px -8% 0px' },
+    )
+  }
+  return sharedObserver
+}
 
 export function Reveal({
   children,
@@ -20,18 +40,16 @@ export function Reveal({
       return
     }
 
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          el.classList.add('is-in')
-          observer.disconnect()
-        }
-      },
-      { threshold: 0.18, rootMargin: '0px 0px -8% 0px' },
-    )
+    const observer = getSharedObserver()
+    if (!observer) {
+      el.classList.add('is-in')
+      return
+    }
 
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      observer.unobserve(el)
+    }
   }, [])
 
   return (

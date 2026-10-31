@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
 import { IconDraft, IconGauge, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats, IconCheck } from './icons';

@@ -1,4 +1,4 @@
-import { ChromeMark } from './ChromeMark'
+﻿import { ChromeMark } from './ChromeMark'
 import { REPO_URL, headerLinks, isSitePath, siteHref } from '../lib/site'
 
 function GitHubMark() {
@@ -32,7 +32,7 @@ function NavLinks({ className }: { className: string }) {
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-30 border-b border-chrome-gold/20 bg-[#0b0c0e]/92 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-chrome-gold/20 bg-[#0b0c0e]/96">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-4 px-5 sm:px-8">
         <a href={siteHref('/')} className="flex items-center gap-2.5 text-chrome-bright no-underline">
           <ChromeMark size={22} className="text-chrome-gold" />
