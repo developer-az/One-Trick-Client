@@ -387,3 +387,59 @@ details > summary::-webkit-details-marker {
     transform: none !important;
   }
 }
+
+/* Tactile micro-interactions (Emil Kowalski design engineering) */
+.btn-chrome:active,
+.btn-solid:active,
+.btn-ghost:active,
+.btn-line:active {
+  transform: scale(0.98);
+}
+
+.kbd-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  background: #18191f;
+  color: #f2f4f7;
+  border: 1px solid rgba(214, 219, 228, 0.2);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  letter-spacing: 0.05em;
+  user-select: none;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.kbd-key:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Authentic gothic bracketed corner markers */
+.gothic-bracket {
+  position: relative;
+}
+.gothic-bracket::before,
+.gothic-bracket::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+  border-color: rgba(212, 216, 222, 0.35);
+  border-style: solid;
+}
+.gothic-bracket::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+}
+.gothic-bracket::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 1px 1px 0;
+}
