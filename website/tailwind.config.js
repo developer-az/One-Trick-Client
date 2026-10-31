@@ -17,7 +17,7 @@ export default {
       },
       fontFamily: {
         display: ['Cinzel', 'Palatino Linotype', 'Palatino', 'serif'],
-        sans: ['Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
+        sans: ['Inter Variable', 'Segoe UI Variable', 'Segoe UI', 'system-ui', 'sans-serif'],
         mono: ['IBM Plex Mono', 'ui-monospace', 'monospace'],
       },
       keyframes: {

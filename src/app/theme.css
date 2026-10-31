@@ -872,3 +872,17 @@ html:not(.overlay-root) .uppercase.tracking-wide {
 html:not(.overlay-root) ::selection {
   background: var(--ot-blood-soft);
 }
+
+/* Fast, GPU-accelerated view transitions for Electron views */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 150ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+}
