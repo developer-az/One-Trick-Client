@@ -282,21 +282,35 @@ body {
 .btn-solid {
   color: #12141a;
   background: #f2f4f7;
+  border: 1px solid #12141a;
 }
 
 .btn-solid:hover {
+  color: #12141a;
   background: #ffffff;
 }
 
+.docs .btn-solid,
+.docs .btn-solid:hover {
+  color: #12141a;
+}
+
 .btn-line {
+  /* Opaque ink fill keeps the secondary action legible on dark and light surfaces. */
   color: var(--chrome-bright);
-  background: transparent;
+  background: #14161c;
   border: 1px solid rgba(242, 244, 247, 0.35);
 }
 
 .btn-line:hover {
-  border-color: rgba(232, 184, 74, 0.55);
-  background: rgba(232, 184, 74, 0.05);
+  color: var(--chrome-bright);
+  border-color: rgba(242, 244, 247, 0.6);
+  background: #1a1c23;
+}
+
+.docs .btn-line,
+.docs .btn-line:hover {
+  color: var(--chrome-bright);
 }
 
 .btn-solid:focus-visible,
@@ -352,13 +366,14 @@ body {
   margin-top: 0.45rem;
 }
 
-.docs a,
+/* Body-copy links stay gold; button anchors own their high-contrast colors. */
+.docs a:not([class*='btn-']),
 .feature-link {
   color: #e8b84a;
   text-underline-offset: 3px;
 }
 
-.docs a:hover,
+.docs a:not([class*='btn-']):hover,
 .feature-link:hover {
   color: #f6e2a8;
 }
