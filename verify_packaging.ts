@@ -215,7 +215,7 @@ async function main(): Promise<void> {
     };
 
     assert(pkg.name === 'one-trick', `package name ${pkg.name}`);
-    assert(pkg.version === '1.6.5', `package version ${pkg.version}`);
+    assert(pkg.version === '1.7.0', `package version ${pkg.version}`);
     assert(pkg.build.productName === 'One Trick', `productName ${pkg.build.productName}`);
     assert(pkg.build.appId === 'com.onetrick.app', `appId ${pkg.build.appId}`);
     assert(pkg.build.win.executableName === 'OneTrick', `executableName ${pkg.build.win.executableName}`);
