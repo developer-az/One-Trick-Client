@@ -330,6 +330,133 @@ async function engineTests(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ *
+ * 5b. EventID 0 — the first Live Client event must not be dropped
+ * ------------------------------------------------------------------ */
+
+async function eventIdZeroTests(): Promise<void> {
+    console.log('\n--- verify:game-state: EventID 0 ---');
+
+    const zeroEvents = [
+        ev(0, 'GameStart', 0.05),
+        ev(1, 'MinionsSpawning', 0.1),
+        ev(2, 'FirstBlood', 30, { KillerName: 'Pyke', VictimName: 'Jinx' }),
+    ];
+
+    const zeroDiff = diffNewEvents(-1, zeroEvents);
+    ok(
+        zeroDiff.events.map((e) => e.id).join(',') === '0,1,2',
+        `diffNewEvents(-1) returns EventID 0 first, then 1 and 2 (got ${zeroDiff.events.map((e) => e.id).join(',')})`
+    );
+    ok(zeroDiff.events[0]?.name === 'GameStart', `diffNewEvents(-1) keeps GameStart as EventID 0 (got ${zeroDiff.events[0]?.name})`);
+    ok(zeroDiff.maxEventId === 2, `diffNewEvents(-1) advances the cursor to 2 (got ${zeroDiff.maxEventId})`);
+    ok(!zeroDiff.restarted, 'a first board starting at EventID 0 is not a restart');
+
+    const boardFor = (events: LiveRawEventLike[], gameTime = 1): ReturnType<typeof mergeLiveBoard> =>
+        mergeLiveBoard({
+            events: { Events: events },
+            activePlayer,
+            players: TEAM,
+            gameData: { gameTime, gameMode: 'CLASSIC' },
+        });
+
+    // Engine level: a fresh engine must emit EventID 0 on its first poll.
+    let zeroBoard = boardFor(zeroEvents, 31);
+    const zeroEngine = createStateEngine({
+        fetchBoard: async () => zeroBoard,
+        now: () => 3_000_000,
+    });
+    const zeroSeenIds: number[] = [];
+    const zeroSeenNames: string[] = [];
+    zeroEngine.onEvent((e) => {
+        zeroSeenIds.push(e.id);
+        zeroSeenNames.push(e.name);
+    });
+
+    const zeroPoll1 = await zeroEngine.pollOnce();
+    ok(zeroPoll1.ok, 'the first EventID 0 board is read successfully');
+    ok(
+        zeroPoll1.newEvents.map((e) => e.id).join(',') === '0,1,2',
+        `the first poll emits EventIDs 0,1,2 in order (got ${zeroPoll1.newEvents.map((e) => e.id).join(',')})`
+    );
+    ok(
+        zeroSeenIds.join(',') === '0,1,2',
+        `the event bus fires EventID 0,1,2 exactly once each (got ${zeroSeenIds.join(',')})`
+    );
+    ok(zeroSeenIds[0] === 0 && zeroSeenNames[0] === 'GameStart', `EventID 0 is emitted and is GameStart (got #${zeroSeenIds[0]} ${zeroSeenNames[0]})`);
+    ok(zeroEngine.status().eventCursor === 2, `the EventID 0 poll advances the cursor to 2 (got ${zeroEngine.status().eventCursor})`);
+
+    // A second identical poll must not replay EventID 0 (or anything else).
+    const seenBeforeRepoll = zeroSeenIds.length;
+    const zeroPoll2 = await zeroEngine.pollOnce();
+    ok(zeroPoll2.newEvents.length === 0, `a second identical poll emits nothing new (got ${zeroPoll2.newEvents.length})`);
+    ok(
+        zeroSeenIds.length === seenBeforeRepoll,
+        `a second identical poll does not replay EventID 0 (bus stays at ${seenBeforeRepoll}, got ${zeroSeenIds.length})`
+    );
+
+    // Restart: consuming 0..5 then seeing 0..1 must be flagged as a restart,
+    // and the new match's EventID 0 must still reach the bus.
+    let restartBoard = boardFor(
+        [0, 1, 2, 3, 4, 5].map((id) => ev(id, id === 0 ? 'GameStart' : id === 1 ? 'MinionsSpawning' : 'ChampionKill', id * 10)),
+        61
+    );
+    const restartEngine = createStateEngine({
+        fetchBoard: async () => restartBoard,
+        now: () => 4_000_000,
+    });
+    const restartSeenIds: number[] = [];
+    restartEngine.onEvent((e) => restartSeenIds.push(e.id));
+
+    await restartEngine.pollOnce();
+    ok(
+        restartSeenIds.join(',') === '0,1,2,3,4,5',
+        `the pre-restart board emits EventIDs 0..5 including GameStart (got ${restartSeenIds.join(',')})`
+    );
+
+    const beforeRestart = restartSeenIds.length;
+    restartBoard = boardFor([ev(0, 'GameStart', 0.05), ev(1, 'MinionsSpawning', 0.1)], 1);
+    const restartPoll = await restartEngine.pollOnce();
+    ok(restartPoll.restarted, 'lower EventIDs are signalled as a restart by the engine');
+
+    // The existing diff drops the restart payload. If that poll did not already
+    // deliver the new match, acknowledge the match start through the engine's
+    // reset path, then poll the board again. Either route may deliver 0 and 1,
+    // but they must arrive once each and EventID 0 must not be skipped.
+    if (!restartPoll.newEvents.length) restartEngine.reset('restart detected');
+    const restartRepoll = await restartEngine.pollOnce();
+    const afterRestartIds = restartSeenIds.slice(beforeRestart);
+    ok(
+        afterRestartIds.join(',') === '0,1',
+        `after the restart the new match emits EventID 0 then 1 (got ${afterRestartIds.join(',')})`
+    );
+    ok(afterRestartIds[0] === 0, `EventID 0 is the first event emitted after the restart (got #${afterRestartIds[0]})`);
+    ok(restartRepoll.ok, 'the engine keeps reading the restarted match');
+
+    // The engine's reset path means "new match": its next board starts at 0.
+    let resetBoard = boardFor([ev(3, 'DragonKill', 300), ev(4, 'ChampionKill', 360)], 400);
+    const resetEngine = createStateEngine({
+        fetchBoard: async () => resetBoard,
+        now: () => 5_000_000,
+    });
+    const resetSeenIds: number[] = [];
+    resetEngine.onEvent((e) => resetSeenIds.push(e.id));
+
+    await resetEngine.pollOnce();
+    resetEngine.reset('new match');
+    resetBoard = boardFor([ev(0, 'GameStart', 0.05), ev(1, 'MinionsSpawning', 0.1)], 1);
+
+    const beforeResetPoll = resetSeenIds.length;
+    const resetPoll = await resetEngine.pollOnce();
+    const afterResetIds = resetSeenIds.slice(beforeResetPoll);
+    ok(resetPoll.ok && resetPoll.gameState.inGame, 'the engine reports inGame after reset + a new board');
+    ok(
+        afterResetIds.join(',') === '0,1',
+        `after reset the next board starting at EventID 0 emits 0 then 1 (got ${afterResetIds.join(',')})`
+    );
+    ok(afterResetIds[0] === 0, `after reset EventID 0 is emitted, not skipped (got #${afterResetIds[0]})`);
+}
+
+/* ------------------------------------------------------------------ *
  * 6. Live harness — Practice Tool acceptance, no Electron needed
  * ------------------------------------------------------------------ */
 
@@ -428,6 +555,7 @@ async function liveHarness(): Promise<void> {
 }
 
 void engineTests().then(async () => {
+    await eventIdZeroTests();
     if (process.env.OT_LIVE_STATE === '1') await liveHarness();
     else console.log('\nskip live harness (set OT_LIVE_STATE=1 with Practice Tool running to execute it)');
     if (!process.exitCode) console.log('verify:game-state ok');

@@ -705,6 +705,31 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   return cues;
 }
 
+/** 1 Hz overlay clock gate — never tick while the HUD page is hidden. */
+export function shouldRunOverlayClock(input: {
+  inGame: boolean;
+  gameTime: number | null | undefined;
+  locked: boolean;
+  moduleIds: readonly string[];
+  pageVisible: boolean;
+}): boolean {
+  return (
+    input.pageVisible &&
+    input.inGame &&
+    (input.gameTime ?? 0) > 0 &&
+    (!input.locked || input.moduleIds.includes('sums'))
+  );
+}
+
+/** Mayhem dismiss-window tick gate — never tick while the HUD page is hidden. */
+export function shouldRunMayhemDismissTick(input: {
+  inMayhem: boolean;
+  dismissedAt: number | null | undefined;
+  pageVisible: boolean;
+}): boolean {
+  return input.pageVisible && input.inMayhem && input.dismissedAt != null;
+}
+
 export function formatGameTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);

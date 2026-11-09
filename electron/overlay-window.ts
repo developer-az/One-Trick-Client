@@ -70,6 +70,8 @@ function setMouseIgnored(win: BrowserWindow, ignored: boolean): void {
 
 let clickThrough = true;
 let userHidden = false;
+const USER_HIDDEN_DESTROY_MS = 10_000;
+let userHiddenDestroyTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * webContents ids of locked overlay windows whose slot has nothing to draw.
  * Those stay hidden: an empty transparent window still sits over League's swap
@@ -676,6 +678,16 @@ function assertAlwaysOnTop(win: BrowserWindow): void {
     }
 }
 
+const overlayWindowCreatedListeners = new Set<() => void>();
+
+/** Fires once per newly created main overlay window, after its renderer loads. */
+export function onOverlayWindowCreated(listener: () => void): () => void {
+    overlayWindowCreatedListeners.add(listener);
+    return () => {
+        overlayWindowCreatedListeners.delete(listener);
+    };
+}
+
 export function createOverlayWindow(): BrowserWindow {
     if (overlayWin && !overlayWin.isDestroyed()) {
         return overlayWin;
@@ -740,8 +752,18 @@ export function createOverlayWindow(): BrowserWindow {
             }
         }
     });
+    let notifiedCreated = false;
     overlayWin.webContents.on('did-finish-load', () => {
         broadcastOverlayMeta();
+        if (notifiedCreated) return;
+        notifiedCreated = true;
+        for (const listener of overlayWindowCreatedListeners) {
+            try {
+                listener();
+            } catch {
+                // A listener must not break overlay startup.
+            }
+        }
     });
 
     const url = getOverlayUrl();
@@ -807,7 +829,23 @@ export function hideOverlay(): void {
     syncOverlayPaintBudget();
 }
 
+function scheduleUserHiddenDestroy(): void {
+    cancelUserHiddenDestroy();
+    userHiddenDestroyTimer = setTimeout(() => {
+        userHiddenDestroyTimer = null;
+        if (userHidden) destroyOverlay();
+    }, USER_HIDDEN_DESTROY_MS);
+}
+
+function cancelUserHiddenDestroy(): void {
+    if (userHiddenDestroyTimer) {
+        clearTimeout(userHiddenDestroyTimer);
+        userHiddenDestroyTimer = null;
+    }
+}
+
 export function destroyOverlay(): void {
+    cancelUserHiddenDestroy();
     if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
@@ -827,7 +865,9 @@ export function toggleOverlayVisibility(): boolean {
     userHidden = !userHidden;
     if (userHidden) {
         hideOverlay();
+        scheduleUserHiddenDestroy();
     } else {
+        cancelUserHiddenDestroy();
         showOverlay();
     }
     broadcastOverlayMeta();
@@ -838,7 +878,9 @@ export function setOverlayUserHidden(hidden: boolean): void {
     userHidden = hidden;
     if (hidden) {
         hideOverlay();
+        scheduleUserHiddenDestroy();
     } else {
+        cancelUserHiddenDestroy();
         showOverlay();
     }
     broadcastOverlayMeta();

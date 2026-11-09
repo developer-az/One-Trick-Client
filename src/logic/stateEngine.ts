@@ -54,7 +54,7 @@ export interface StateEngineStatus {
     lastSuccessAt: number;
     /** ms since the last successful board read; 0 when never. */
     silenceMs: number;
-    /** Highest EventID consumed. */
+    /** Highest EventID consumed; -1 when nothing has been consumed yet. */
     eventCursor: number;
     polling: boolean;
 }
@@ -95,7 +95,9 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
     const now = deps.now ?? (() => Date.now());
     const snapshotWindowMs = deps.snapshotWindowMs ?? DEFAULT_SNAPSHOT_WINDOW_MS;
 
-    let eventCursor = 0;
+    // Highest EventID already consumed. -1 = nothing consumed, so EventID 0
+    // (GameStart) is a real event rather than a sentinel.
+    let eventCursor = -1;
     let allEvents: GameEvent[] = [];
     let objectiveEvents: GameEvent[] = [];
     let state: GameState = emptyGameState(now());
@@ -190,7 +192,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         timers = { ...EMPTY_TIMERS };
         allEvents = [];
         objectiveEvents = [];
-        eventCursor = 0;
+        eventCursor = -1;
         snapshots = [];
         if (wasInGame) log(`[state] match end (${reason})`);
     }
@@ -225,11 +227,16 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         lastSuccessAt = now();
         const wasInGame = state.inGame;
 
-        const diff = diffNewEvents(eventCursor, board.events?.Events);
-        if (diff.restarted) {
+        let diff = diffNewEvents(eventCursor, board.events?.Events);
+        const restarted = diff.restarted;
+        if (restarted) {
             log('[state] event ids restarted — new match detected');
             allEvents = [];
             objectiveEvents = [];
+            // The cursor belonged to the previous match. Re-diff the same
+            // payload from "nothing consumed" so the new match's events —
+            // including EventID 0 — are emitted exactly once, in id order.
+            diff = diffNewEvents(-1, board.events?.Events);
         }
         eventCursor = diff.maxEventId;
         if (diff.events.length) retainEvents(diff.events);
@@ -253,7 +260,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
             newEvents: diff.events,
             gameState: next,
             changed,
-            restarted: diff.restarted,
+            restarted,
         };
 
         for (const listener of [...stateListeners]) {

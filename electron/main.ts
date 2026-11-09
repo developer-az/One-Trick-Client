@@ -358,6 +358,17 @@ function registerFlashHotkeys(): void {
     }, 500);
 }
 
+function formatLatencyForDebug(latency: ReturnType<typeof getMonitorStats>['latency']): string {
+    const names = ['http.eventdata', 'poll', 'hud.build', 'ocr.mayhem'];
+    const parts = names
+        .map((name) => {
+            const stat = latency[name];
+            return stat ? `${name}=${stat.p50}/${stat.p95}` : null;
+        })
+        .filter((part): part is string => !!part);
+    return parts.length ? ` lat ${parts.join(' ')}` : '';
+}
+
 function registerOverlayHotkeys() {
     // Avoid Ctrl+Shift+I — Electron/Chromium reserves it for DevTools
     // Ctrl+Shift combos still use globalShortcut (rarely conflict with League).
@@ -504,7 +515,7 @@ app.whenReady().then(() => {
         setInterval(() => {
             const o = getOverlayWindowStats();
             const m = getMonitorStats();
-            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}`);
+            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}${formatLatencyForDebug(m.latency)}`);
         }, 5000);
     }
 
@@ -532,6 +543,7 @@ app.whenReady().then(() => {
             livePollMs: monitor.livePollMs,
             liveReads: monitor.liveReads,
             lastEndReason: monitor.lastEndReason,
+            latency: monitor.latency,
             environment: await overlayEnvironment(),
         };
     });

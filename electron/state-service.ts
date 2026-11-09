@@ -35,15 +35,21 @@ import {
     type LiveClientAllGameData,
     type LiveClientGameData,
 } from './live-client';
+import {
+    createLatencyRecorder,
+    timeAsync,
+    type LatencyRecorder,
+    type LatencySummary,
+} from '../src/logic/latencyStats';
 
 /** The State Service sample rate. Events must land within a fight's reaction window. */
-const POLL_MS = 400;
+export const POLL_MS = 400;
+/** In-game with the HUD hidden: still sample for timers/events, but far less often. */
+export const HIDDEN_POLL_MS = 4000;
 /** Idle probe: engaged but no match running yet (lobby / loading screen). */
-const IDLE_PROBE_MS = 2000;
+export const IDLE_PROBE_MS = 2000;
 /** `playerlist` is the big payload and changes slowly — read every Nth poll. */
 const PLAYERLIST_EVERY = 2;
-/** Abilities change on level-up only. */
-const ABILITIES_EVERY = 4;
 /** Debug log rotation cap. */
 const LOG_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -52,12 +58,24 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let engaged = false;
 let pollIndex = 0;
 let inFlight = false;
+/** Whether the HUD is currently hidden (user toggle or overlay disabled). */
+let hudHidden = false;
 /** Last good reads for the endpoints we poll less often. */
 let lastPlayers: LiveBoardParts['players'] = null;
 let lastAbilities: LiveBoardParts['abilities'] = null;
 let lastClock: LiveClientGameData | null = null;
+/** Self level from the most recent successful `activeplayer` read. */
+let lastSelfLevel: number | null = null;
+/** Self level at the last successful `activeplayerabilities` read. */
+let lastAbilitiesLevel: number | null = null;
+/** Polls since the last successful abilities read; drives unspent-point refreshes. */
+let pollsSinceAbilitiesFetch = 0;
+/** Date.now() when the observed self level last changed; null until a level is seen. */
+let lastSelfLevelChangeAt: number | null = null;
 /** Last merged board — what game-monitor reads instead of doing its own fetch. */
 let lastBoard: LiveClientAllGameData | null = null;
+/** Per-match latency samples for the endpoint reads and the engine poll/merge. */
+const latencyRecorder: LatencyRecorder = createLatencyRecorder();
 let loggedLines = 0;
 let logBuffer: string[] = [];
 let logFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -121,28 +139,107 @@ function mirrorNewLogLines(): void {
 }
 
 /**
+ * Pure cadence policy for `activeplayerabilities`: ability ranks only change on
+ * level-up, so fetch on the first read and afterwards only when the level from
+ * the most recent `activeplayer` read differs from the level at the last
+ * successful abilities fetch.
+ */
+export function shouldFetchAbilities(
+    lastFetchedLevel: number | null,
+    knownLevel: number | null
+): boolean {
+    return lastFetchedLevel === null || (knownLevel !== null && knownLevel !== lastFetchedLevel);
+}
+
+/**
+ * Pure refresh policy for the separate moments of a level-up and the skill point
+ * being spent. If the last abilities payload still shows an unspent point, poll
+ * it again a few times shortly after the level change instead of waiting for the
+ * next level-up to update the cached ranks.
+ */
+export function shouldRefreshUnspentAbilities(input: {
+    ranksSum: number | null;
+    level: number | null;
+    pollsSinceAbilitiesFetch: number;
+    msSinceLevelChange: number | null;
+}): boolean {
+    return (
+        input.ranksSum !== null &&
+        input.level !== null &&
+        input.ranksSum < input.level &&
+        input.pollsSinceAbilitiesFetch >= 5 &&
+        input.msSinceLevelChange !== null &&
+        input.msSinceLevelChange <= 30_000
+    );
+}
+
+const ABILITY_SLOTS = ['Q', 'W', 'E', 'R'] as const;
+
+/** Sum of the four basic ability ranks in an abilities payload, or null if none. */
+function abilityRanksSum(abilities: LiveBoardParts['abilities']): number | null {
+    if (!abilities) return null;
+    return ABILITY_SLOTS.reduce((sum, slot) => {
+        const rank = abilities[slot]?.abilityLevel;
+        return sum + (typeof rank === 'number' && Number.isFinite(rank) ? rank : 0);
+    }, 0);
+}
+
+/**
  * One board read across the granular endpoints.
  *
  * `gamestats` is fetched every poll because it is the liveness proof and the
- * cheap game clock. `playerlist` and `activeplayerabilities` are staggered; a
- * failed staggered read keeps its last good value instead of voiding the board.
+ * cheap game clock. `playerlist` is staggered every 2nd poll. `activeplayer` is
+ * read every poll and its level drives `activeplayerabilities`: abilities are
+ * fetched on the first read and then only when the level changes (ability ranks
+ * only change on level-up). A failed staggered read keeps its last good value
+ * instead of voiding the board; a failed abilities read leaves the level that
+ * triggered it untouched so it retries on the next poll.
  */
 async function fetchBoardParts(): Promise<LiveBoardLike | null> {
     pollIndex += 1;
+    pollsSinceAbilitiesFetch += 1;
+    const now = Date.now();
     const wantPlayers = pollIndex % PLAYERLIST_EVERY === 0;
-    const wantAbilities = pollIndex % ABILITIES_EVERY === 0;
+    const wantAbilities =
+        shouldFetchAbilities(lastAbilitiesLevel, lastSelfLevel) ||
+        shouldRefreshUnspentAbilities({
+            ranksSum: abilityRanksSum(lastAbilities),
+            level: lastSelfLevel,
+            pollsSinceAbilitiesFetch,
+            msSinceLevelChange:
+                lastSelfLevelChangeAt === null ? null : now - lastSelfLevelChangeAt,
+        });
 
     const [events, activePlayer, gameData, players, abilities] = await Promise.all([
-        fetchEventData(),
-        fetchActivePlayer(),
-        fetchGameStats(),
-        wantPlayers ? fetchPlayerList() : Promise.resolve(null),
-        wantAbilities ? fetchActivePlayerAbilities() : Promise.resolve(null),
+        timeAsync(latencyRecorder, 'http.eventdata', fetchEventData),
+        timeAsync(latencyRecorder, 'http.activeplayer', fetchActivePlayer),
+        timeAsync(latencyRecorder, 'http.gamestats', fetchGameStats),
+        wantPlayers
+            ? timeAsync(latencyRecorder, 'http.playerlist', fetchPlayerList)
+            : Promise.resolve(null),
+        wantAbilities
+            ? timeAsync(latencyRecorder, 'http.abilities', fetchActivePlayerAbilities)
+            : Promise.resolve(null),
     ]);
 
     if (players) lastPlayers = players;
-    if (abilities) lastAbilities = abilities;
     if (gameData) lastClock = gameData;
+    const activePlayerLevel =
+        typeof activePlayer?.level === 'number' && Number.isFinite(activePlayer.level)
+            ? activePlayer.level
+            : null;
+    if (abilities) {
+        lastAbilities = abilities;
+        // The level that triggered this read. First poll: take it from this
+        // poll's activeplayer if no earlier read had supplied one.
+        lastAbilitiesLevel = lastSelfLevel ?? activePlayerLevel;
+        pollsSinceAbilitiesFetch = 0;
+    }
+    // Remember the level from the most recent successful activeplayer read.
+    if (activePlayerLevel !== null && activePlayerLevel !== lastSelfLevel) {
+        lastSelfLevel = activePlayerLevel;
+        lastSelfLevelChangeAt = now;
+    }
 
     const board = mergeLiveBoard({
         events,
@@ -166,8 +263,38 @@ function ensureEngine(): StateEngine {
     return engine;
 }
 
+/**
+ * Pure cadence policy: idle probing ignores the HUD, in-game slows down when the
+ * HUD is hidden because nothing is rendering the samples.
+ */
+export function stateServiceCadence(inGame: boolean, hudHidden: boolean): number {
+    if (!inGame) return IDLE_PROBE_MS;
+    return hudHidden ? HIDDEN_POLL_MS : POLL_MS;
+}
+
 function cadence(): number {
-    return ensureEngine().status().inGame ? POLL_MS : IDLE_PROBE_MS;
+    return stateServiceCadence(ensureEngine().status().inGame, hudHidden);
+}
+
+/** The cadence the next schedule will use. */
+export function getStateServiceCadenceMs(): number {
+    return cadence();
+}
+
+/**
+ * Set whether the HUD is hidden. A change while engaged reschedules the pending
+ * timer so the new cadence takes effect immediately (going visible must not wait
+ * out a 4000 ms hidden interval). `scheduleNext` keeps a single timer and the
+ * `inFlight` guard keeps a second concurrent tick from starting.
+ */
+export function setStateServiceHudHidden(hidden: boolean): void {
+    if (hudHidden === hidden) return;
+    hudHidden = hidden;
+    if (engaged && timer) scheduleNext();
+}
+
+export function isStateServiceHudHidden(): boolean {
+    return hudHidden;
 }
 
 function scheduleNext(): void {
@@ -186,7 +313,8 @@ async function tick(): Promise<void> {
     }
     inFlight = true;
     try {
-        await ensureEngine().pollOnce();
+        // 'poll' covers the whole pollOnce, including the HTTP reads it drives.
+        await timeAsync(latencyRecorder, 'poll', () => ensureEngine().pollOnce());
         if (engaged) mirrorNewLogLines();
     } catch (error) {
         // The engine already turns read failures into state. This catch is for
@@ -224,7 +352,12 @@ export function stopStateService(): void {
     lastClock = null;
     lastPlayers = null;
     lastAbilities = null;
+    lastSelfLevel = null;
+    lastAbilitiesLevel = null;
+    pollsSinceAbilitiesFetch = 0;
+    lastSelfLevelChangeAt = null;
     pollIndex = 0;
+    latencyRecorder.reset();
     flushLog();
 }
 /**
@@ -282,6 +415,16 @@ export function getStateServiceStatus(): StateEngineStatus | null {
     return engine?.status() ?? null;
 }
 
+/** Latest per-name latency summary collected since the current match began. */
+export function getLatencySummary(): Record<string, LatencySummary> {
+    return latencyRecorder.summary();
+}
+
+/** Add a sample to the shared recorder (used by the HUD and OCR timers). */
+export function recordLatency(name: string, ms: number): void {
+    latencyRecorder.record(name, ms);
+}
+
 /** Rotating debug log — in-memory ring plus the size-capped file on disk. */
 export function getStateServiceLog(limit = 200): string[] {
     return engine?.log(limit) ?? [];
@@ -308,7 +451,12 @@ export function resetStateService(reason = 'match start'): void {
     lastClock = null;
     lastPlayers = null;
     lastAbilities = null;
+    lastSelfLevel = null;
+    lastAbilitiesLevel = null;
+    pollsSinceAbilitiesFetch = 0;
+    lastSelfLevelChangeAt = null;
     pollIndex = 0;
+    latencyRecorder.reset();
     ensureEngine().reset(reason);
 }
 

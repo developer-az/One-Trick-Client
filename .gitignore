@@ -33,3 +33,4 @@ native/bin
 
 # Local OCR / vision scratch output
 out/
+recordings/

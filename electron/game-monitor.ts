@@ -7,12 +7,16 @@ import {
     readLiveClock,
     resetStateService,
     setStateServiceEngaged,
+    setStateServiceHudHidden,
     startStateService,
     stopStateService,
     getGameState,
     getObjectiveTimers,
     getRecentGameEvents,
+    getLatencySummary,
+    recordLatency,
 } from './state-service';
+import type { LatencySummary } from '../src/logic/latencyStats';
 import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
 import { setClipperActive, queueClip, syncAutoClip } from './clipper';
 
@@ -31,6 +35,7 @@ import {
     setOverlayUserHidden,
     createOverlayWindow,
     destroyOverlay,
+    onOverlayWindowCreated,
     getOverlayWindow,
     syncScalesFromLeague,
     keepOverlayOnTop,
@@ -123,6 +128,8 @@ let lastChampSelectEnemies: CachedEnemy[] = [];
 let inGame = false;
 let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOverlayFingerprint = '';
+let lastSentOverlayPayload: unknown = null;
+let overlayWindowCreatedUnsubscribe: (() => void) | null = null;
 let currentPollMs = POLL_INGAME_MS;
 let liveReadsTotal = 0;
 /** Last time allgamedata or gamestats proved the game process is up. */
@@ -199,12 +206,14 @@ export function getMonitorStats(): {
     livePollMs: number | null;
     liveReads: number;
     lastEndReason: string | null;
+    latency: Record<string, LatencySummary>;
 } {
     return {
         inGame,
         livePollMs: liveTimer ? currentPollMs : null,
         liveReads: liveReadsTotal,
         lastEndReason: lastMatchEndReason,
+        latency: getLatencySummary(),
     };
 }
 
@@ -253,7 +262,7 @@ function ingestChampSelectSession(session: unknown): void {
         const fp = `pre:${summonerFingerprint()}`;
         if (fp !== lastOverlayFingerprint) {
             lastOverlayFingerprint = fp;
-            sendOverlayUpdate({
+            sendFullOverlayUpdate({
                 inGame: false,
                 enemyBotSummoners: summons,
                 cachedChampSelectEnemies: lastChampSelectEnemies,
@@ -700,7 +709,7 @@ function pushMayhemOverlayPatch(): void {
     if (fp === lastOverlayFingerprint) return;
     lastGoodPayload = payload;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(payload);
+    sendFullOverlayUpdate(payload);
 }
 
 /** Dashboard owned/roll edits — push merged offers without waiting for the next live poll. */
@@ -762,6 +771,7 @@ export function getMayhemLiveOfferIds(): string[] {
 function resetMatchCaches(): void {
     lastChampSelectEnemies = [];
     lastOverlayFingerprint = '';
+    lastSentOverlayPayload = null;
     lastGoodPayload = null;
     lastKeepOnTopAt = 0;
     lastLiveProofAt = 0;
@@ -919,7 +929,18 @@ function holdLastBoard(overlayHidden: boolean, gameTime?: number): void {
     const fp = overlayFingerprint(advanced);
     if (fp === lastOverlayFingerprint) return;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(advanced);
+    sendFullOverlayUpdate(advanced);
+}
+
+function sendFullOverlayUpdate(payload: unknown): void {
+    lastSentOverlayPayload = payload;
+    sendOverlayUpdate(payload);
+}
+
+function handleOverlayWindowCreated(): void {
+    if (!inGame || isOverlayUserHidden() || !lastSentOverlayPayload) return;
+    lastOverlayFingerprint = '';
+    sendOverlayUpdate(lastSentOverlayPayload);
 }
 
 function ensureOverlayShown(): void {
@@ -944,6 +965,7 @@ function beginMatch(): void {
     inGame = true;
     lastMatchEndReason = null;
     playMomentSnapshot = null;
+    lastSentOverlayPayload = null;
     // New match: drop the State Service's event cursor with it. Live Client
     // EventIDs restart at 0 every game, so a stale cursor would swallow the
     // first events of this one.
@@ -997,7 +1019,7 @@ function endGameSession(): void {
         destroyOverlayTimer = null;
         if (!inGame) destroyOverlay();
     }, 12000);
-    sendOverlayUpdate({
+    sendFullOverlayUpdate({
         inGame: false,
         enemies: [],
         allies: [],
@@ -1024,6 +1046,9 @@ function liveCadence(): number | null {
 
 function scheduleLive(): void {
     if (!monitorStarted) return;
+    // Keep the State Service's slower hidden-HUD sample rate in lockstep with
+    // the overlay's visibility and the user's overlay setting.
+    setStateServiceHudHidden(isOverlayUserHidden() || !getAppSettings().overlayEnabled);
     const cadence = liveCadence();
     if (cadence === null) {
         if (liveTimer) clearTimeout(liveTimer);
@@ -1048,6 +1073,7 @@ let tickInFlight = false;
 async function liveTick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
+    const hudBuildStart = performance.now();
     try {
         const phase = lcuSocket.phase;
         // Board comes from the State Service's 400 ms sample loop — no network
@@ -1084,7 +1110,7 @@ async function liveTick(): Promise<void> {
             const fp = overlayFingerprint(payload);
             if (fp !== lastOverlayFingerprint) {
                 lastOverlayFingerprint = fp;
-                sendOverlayUpdate(withPlayMoments(payload));
+                sendFullOverlayUpdate(withPlayMoments(payload));
             }
             return;
         }
@@ -1116,6 +1142,7 @@ async function liveTick(): Promise<void> {
         if (!overlayHidden) ensureOverlayShown();
         holdLastBoard(overlayHidden);
     } finally {
+        recordLatency('hud.build', performance.now() - hudBuildStart);
         tickInFlight = false;
     }
 }
@@ -1139,7 +1166,7 @@ export function pushSummonerUpdate(): void {
         void liveTick();
         return;
     }
-    sendOverlayUpdate({
+    sendFullOverlayUpdate({
         inGame: false,
         enemyBotSummoners: serializeSummoners(),
         timestamp: Date.now(),
@@ -1165,6 +1192,7 @@ export function startGameMonitor(): void {
     lcuSocket.on('state', onStateChange);
     lcuSocket.on('champSelect', onChampSelect);
     lcuSocket.start();
+    overlayWindowCreatedUnsubscribe = onOverlayWindowCreated(handleOverlayWindowCreated);
     // Catch a match that is already running when the app opens.
     void liveTick().finally(scheduleLive);
 }
@@ -1175,6 +1203,10 @@ export function stopGameMonitor(): void {
     liveTimer = null;
     if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
     destroyOverlayTimer = null;
+    if (overlayWindowCreatedUnsubscribe) {
+        overlayWindowCreatedUnsubscribe();
+        overlayWindowCreatedUnsubscribe = null;
+    }
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();

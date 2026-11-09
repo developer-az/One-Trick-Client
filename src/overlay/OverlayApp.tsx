@@ -15,6 +15,8 @@ import {
   resolveAllyMidName,
   resolveAllyJungleName,
   resolveProfileId,
+  shouldRunMayhemDismissTick,
+  shouldRunOverlayClock,
   situationFromState,
   type OverlayCue,
   type OverlayState,
@@ -99,8 +101,25 @@ function NudgeGroup({
   );
 }
 
+/** Tracks document visibility so HUD timers stop while the overlay window is hidden. */
+function usePageVisible(): boolean {
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible'
+  );
+
+  useEffect(() => {
+    const update = (): void => setPageVisible(document.visibilityState === 'visible');
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
+
+  return pageVisible;
+}
+
 export const OverlayApp: React.FC = () => {
   const [state, setState] = useState<OverlayState>({ inGame: false });
+  const pageVisible = usePageVisible();
   const [clockSec, setClockSec] = useState(0);
   const [champions, setChampions] = useState<Champion[]>([]);
   const [clickThrough, setClickThrough] = useState(true);
@@ -139,7 +158,13 @@ export const OverlayApp: React.FC = () => {
     const base = state.gameTime ?? 0;
     const at = state.timestamp ?? Date.now();
     const locked = slot?.mode === 'locked';
-    const wantsClock = state.inGame && base > 0 && (!locked || slot.moduleIds.includes('sums'));
+    const wantsClock = shouldRunOverlayClock({
+      inGame: state.inGame,
+      gameTime: state.gameTime,
+      locked,
+      moduleIds: slot?.moduleIds ?? [],
+      pageVisible,
+    });
     if (!wantsClock) return;
     const tick = (): void => {
       setClockSec(base + Math.max(0, (Date.now() - at) / 1000));
@@ -147,7 +172,7 @@ export const OverlayApp: React.FC = () => {
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [state.inGame, state.gameTime, state.timestamp, slot]);
+  }, [state.inGame, state.gameTime, state.timestamp, slot, pageVisible]);
 
   useEffect(() => {
     const onResize = () => setViewport({ vw: window.innerWidth, vh: window.innerHeight });
@@ -505,11 +530,16 @@ export const OverlayApp: React.FC = () => {
   // for the rest of the match.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (!inMayhem || state.mayhemAugmentDismissedAt == null) return;
+    const shouldTick = shouldRunMayhemDismissTick({
+      inMayhem,
+      dismissedAt: state.mayhemAugmentDismissedAt,
+      pageVisible,
+    });
+    if (!shouldTick) return;
     setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [inMayhem, state.mayhemAugmentDismissedAt]);
+  }, [inMayhem, state.mayhemAugmentDismissedAt, pageVisible]);
 
   const mayhemDismissedRecently =
     typeof state.mayhemAugmentDismissedAt === 'number' &&
