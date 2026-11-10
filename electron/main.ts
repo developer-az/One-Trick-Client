@@ -9,6 +9,7 @@ import {
     Menu,
     Tray,
     nativeImage,
+    dialog,
     type NativeImage,
 } from 'electron';
 import fs from 'fs';
@@ -90,9 +91,22 @@ import { startFlashKeyHook, stopFlashKeyHook, getKeyHookStatus } from './global-
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
+import { overlayLog } from './overlay-log';
+import { readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
+
+// Read our own package.json once at startup so a test build can identify itself.
+let testBuildLabel: string | null = null;
+try {
+    const packageJson = JSON.parse(
+        fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as unknown;
+    testBuildLabel = readTestBuildLabel(packageJson);
+} catch {
+    testBuildLabel = null;
+}
 
 let win: BrowserWindow | null;
 let tray: Tray | null = null;
@@ -112,7 +126,18 @@ if (!gpuAccelerationAtLaunch()) {
 /** Single instance: a second launch focuses the first instead of doubling every hook and timer. */
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
+    if (testBuildLabel) {
+        const message = secondInstanceMessage(testBuildLabel);
+        dialog.showErrorBox(message.title, message.body);
+    }
     app.quit();
+} else {
+    overlayLog('app-start', {
+        version: app.getVersion(),
+        label: testBuildLabel,
+        packaged: app.isPackaged,
+        exe: process.execPath,
+    });
 }
 app.on('second-instance', () => {
     showDashboard();
@@ -204,6 +229,15 @@ function createWindow() {
             height: 40
         }
     });
+
+    if (testBuildLabel) {
+        const title = windowTitleFor(testBuildLabel);
+        win.setTitle(title);
+        win.on('page-title-updated', (event) => {
+            event.preventDefault();
+            win?.setTitle(title);
+        });
+    }
 
     win.on('close', (event) => {
         if (!quittingApp) {
