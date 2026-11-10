@@ -41,9 +41,6 @@ import {
     keepOverlayOnTop,
     healOverlayWindows,
     setOverlayMatchActive,
-    raiseOverlayIfDue,
-    rebuildOverlayIfStuck,
-    checkOverlayHealth,
 } from './overlay-window';
 import { overlayLog } from './overlay-log';
 import { readLeagueHudScales } from './league-settings';
@@ -958,12 +955,9 @@ function ensureOverlayShown(): void {
     }
     healOverlayWindows();
     maybeKeepOverlayOnTop();
-    // Re-raise a visible HUD above a foreground topmost window, and rebuild it
-    // if it has stayed entirely invisible while the match is still running.
-    raiseOverlayIfDue();
-    rebuildOverlayIfStuck(true);
-    // "Shown" is not "drawn": compare with what the OS and the pages report.
-    checkOverlayHealth();
+    // The single overlay window is never raised on a loop, rebuilt or repaired
+    // from here (Step 2 remake): keepOverlayOnTop only re-asserts a lost
+    // topmost flag, and the health line in overlay.log is the diagnostic.
 }
 
 function maybeKeepOverlayOnTop(): void {

@@ -1,6 +1,10 @@
 /**
- * Tight overlay window rects. A fullscreen transparent HWND forces DWM to
- * composite the entire game (~24 FPS). Dual-rail becomes two slim columns.
+ * Overlay geometry and pure visibility/health decisions.
+ * History: clusters were once separate tight HWNDs ("a fullscreen transparent
+ * HWND forces DWM to composite the entire game"). The multi-window lifecycle
+ * was retired 2026-11-10 (Step 2 single-window remake) after the overlay kept
+ * vanishing mid-match inside it; the geometry math remains as the reference
+ * for where widgets sit on the display, guarded by verify_overlay_bounds.
  */
 
 export interface OverlayRect {
@@ -196,53 +200,10 @@ export function clusterOverlayWindows(opts: {
     });
 }
 
-/** How often a visible overlay is re-raised above the game while it runs. */
-export const OVERLAY_RAISE_EVERY_MS = 3000;
-/** How long the HUD may stay entirely invisible before it is rebuilt. */
-export const OVERLAY_REBUILD_AFTER_MS = 15000;
-
-/**
- * A topmost window that takes the foreground can sit above the overlay while
- * the overlay keeps its always-on-top flag. The old keep-alive only re-applied
- * a lost flag, so nothing raised it again. Re-raising a visible window is cheap
- * and does not activate it.
- */
-export function shouldRaiseOverlay(opts: {
-    wanted: boolean;
-    visible: boolean;
-    msSinceRaise: number;
-}): boolean {
-    return opts.wanted && opts.visible && opts.msSinceRaise >= OVERLAY_RAISE_EVERY_MS;
-}
-
-/**
- * Rebuild only when the HUD is genuinely supposed to be on screen: never
- * against a user hide, a disabled overlay, hold-to-show, or slots that are
- * hidden on purpose because they have nothing to draw.
- */
-export function shouldRebuildOverlay(opts: {
-    inMatch: boolean;
-    userHidden: boolean;
-    overlayEnabled: boolean;
-    holdToShow: boolean;
-    windowCount: number;
-    anyVisible: boolean;
-    allSlotsEmpty: boolean;
-    msInvisible: number;
-}): boolean {
-    if (!opts.inMatch || opts.userHidden || !opts.overlayEnabled || opts.holdToShow) return false;
-    if (opts.anyVisible) return false;
-    if (opts.windowCount > 0 && opts.allSlotsEmpty) return false;
-    return opts.msInvisible >= OVERLAY_REBUILD_AFTER_MS;
-}
-
 /** How often an overlay page reports that it is still producing frames. */
 export const OVERLAY_BEAT_EVERY_MS = 5000;
 /** A shown window that has not produced a frame for this long is treated as not drawing. */
 export const OVERLAY_PAINT_STALL_MS = 25000;
-/** Automatic rebuilds for a stalled HUD are spaced out and capped per match. */
-export const OVERLAY_STALL_REBUILD_MIN_GAP_MS = 60000;
-export const OVERLAY_MAX_STALL_REBUILDS = 2;
 
 /**
  * What the OS and the page say about one overlay window. The app's own
@@ -289,24 +250,6 @@ export function overlayWindowFaults(health: OverlayWindowHealth): OverlayFault[]
     }
     if (health.pageVisible === false) faults.push('page-hidden');
     return faults;
-}
-
-/** Faults that mean the window is on screen but nothing is being drawn in it. */
-export function overlayPaintStalled(faults: readonly OverlayFault[]): boolean {
-    return faults.includes('no-heartbeat') || faults.includes('no-frames');
-}
-
-/** Rebuild a stalled HUD at most a few times per match, never back to back. */
-export function shouldRebuildStalledOverlay(opts: {
-    stalled: boolean;
-    rebuildsThisMatch: number;
-    msSinceLastRebuild: number;
-}): boolean {
-    return (
-        opts.stalled &&
-        opts.rebuildsThisMatch < OVERLAY_MAX_STALL_REBUILDS &&
-        opts.msSinceLastRebuild >= OVERLAY_STALL_REBUILD_MIN_GAP_MS
-    );
 }
 
 /**

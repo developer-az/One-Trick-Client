@@ -241,3 +241,6 @@ DONE WHEN: both reports exist for all three scenarios and the table is filled.
 - **D5 LCU:** allowed, confirmed.
 - **D6 Native vision sidecar:** a follow-up run, not this one. Trigger: P3's per-call OCR timings (p50/p95 ms per Mayhem OCR call, and its CPU) set its priority. If OCR p95 per call is over 250 ms or it costs measurable CPU during the augment pick window, the sidecar becomes the next run's first item.
 - **Plan approved 2026-11-09.** Phase 1 starts with P1, tests first.
+
+## Addendum 2026-11-10 — Overlay vanish Step 2 (single-window remake)
+- Step 1 (capture exclusion off) was tried by the user and failed; affinity is exonerated. At the user's direction the remake was implemented by Biscuit directly (not the workflow) and pushed to this branch: one overlay window per match, intervention machinery deleted, heartbeat kept as logging only. Spec: workspace archive `OVERLAY-SINGLE-WINDOW-REMAKE-SPEC.md` (Biscuit's side); outcome and gate evidence: HANDOFF 2026-11-10 entry. The packaged acceptance run (test-single-window-20261110 via `scripts/package-test-build.ps1`) decides whether Phase 3 resumes (I2.2) or Step 3 (Windows toggles) comes first.
