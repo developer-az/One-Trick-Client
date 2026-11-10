@@ -41,7 +41,11 @@ import {
     keepOverlayOnTop,
     healOverlayWindows,
     setOverlayMatchActive,
+    raiseOverlayIfDue,
+    rebuildOverlayIfStuck,
 } from './overlay-window';
+import { overlayLog } from './overlay-log';
+import { readLeagueHudScales } from './league-settings';
 import {
     ingestChampSelectTeam,
     ingestLiveEvents,
@@ -302,6 +306,8 @@ function profileHintFromLive(championName: string | undefined, position?: string
 
 function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: string | null) {
     const localPlayer = live ? findLocalPlayer(live) : null;
+    const liveGold = live?.activePlayer?.currentGold;
+    const currentGold = typeof liveGold === 'number' && Number.isFinite(liveGold) ? liveGold : null;
     const localName = (localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
     const isPyke = localPlayer ? localName === 'pyke' : true;
     const isYone = localPlayer ? localName === 'yone' : false;
@@ -396,7 +402,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
                   items: localPlayer.items || [],
                   scores: localPlayer.scores,
                   position: localPlayer.position,
-                  currentGold: live?.activePlayer?.currentGold ?? 0,
+                  currentGold,
                   summonerSpells: localPlayer.summonerSpells,
               }
             : null,
@@ -951,6 +957,10 @@ function ensureOverlayShown(): void {
     }
     healOverlayWindows();
     maybeKeepOverlayOnTop();
+    // Re-raise a visible HUD above a foreground topmost window, and rebuild it
+    // if it has stayed entirely invisible while the match is still running.
+    raiseOverlayIfDue();
+    rebuildOverlayIfStuck(true);
 }
 
 function maybeKeepOverlayOnTop(): void {
@@ -963,6 +973,13 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(): void {
     console.info('[match] started');
     inGame = true;
+    let windowMode: string | null = null;
+    try {
+        windowMode = readLeagueHudScales()?.windowMode ?? null;
+    } catch {
+        windowMode = null;
+    }
+    overlayLog('match-start', { windowMode });
     lastMatchEndReason = null;
     playMomentSnapshot = null;
     lastSentOverlayPayload = null;
@@ -1007,6 +1024,7 @@ function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
 function endGameSession(): void {
     if (!inGame) return;
     console.info('[match] ended', lastMatchEndReason || '(manual)');
+    overlayLog('match-end', { reason: lastMatchEndReason || 'manual' });
     inGame = false;
     setOverlayMatchActive(false);
     resetMatchCaches();

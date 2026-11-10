@@ -360,7 +360,7 @@ async function eventIdZeroTests(): Promise<void> {
         });
 
     // Engine level: a fresh engine must emit EventID 0 on its first poll.
-    let zeroBoard = boardFor(zeroEvents, 31);
+    const zeroBoard = boardFor(zeroEvents, 31);
     const zeroEngine = createStateEngine({
         fetchBoard: async () => zeroBoard,
         now: () => 3_000_000,

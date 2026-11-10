@@ -130,6 +130,7 @@ const INVENTORY: Row[] = [
 const fixturePath = path.join('test-fixtures', 'live-client', 'mock-board-900s.json');
 const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8')) as {
     source: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- raw Live Client JSON
     allgamedata: any;
     abilities: Record<string, { abilityLevel?: number }>;
 };

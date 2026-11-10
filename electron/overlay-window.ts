@@ -3,7 +3,8 @@ import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
-import { clusterOverlayWindows, overlayWindowWanted, type OverlayCluster } from './overlay-bounds';
+import { clusterOverlayWindows, overlayWindowWanted, shouldRaiseOverlay, shouldRebuildOverlay, type OverlayCluster } from './overlay-bounds';
+import { overlayLog } from './overlay-log';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
 export interface FrameCalibration {
@@ -160,11 +161,27 @@ export function refreshOverlayVisibility(): void {
 function syncWindowVisibility(win: BrowserWindow): void {
     if (win.isDestroyed()) return;
     const want = shouldShowWindow(win);
-    if (want && !win.isVisible()) win.showInactive();
-    else if (!want && win.isVisible()) {
+    const visible = win.isVisible();
+    if (want && !visible) {
+        win.showInactive();
+        overlayLog('show', {
+            window: win.webContents.id,
+            reason: 'slot-content',
+            userHidden,
+            emptySlot: emptySlots.has(win.webContents.id),
+            holdToShow: holdToShowActive(),
+        });
+    } else if (!want && visible) {
         win.hide();
         // Hide/show drops the OS click-through flag. Forget it so the next show re-applies once.
         mouseIgnored.delete(win);
+        overlayLog('hide', {
+            window: win.webContents.id,
+            reason: 'slot-content',
+            userHidden,
+            emptySlot: emptySlots.has(win.webContents.id),
+            holdToShow: holdToShowActive(),
+        });
     }
     applyWindowPaintBudget(win);
 }
@@ -212,27 +229,40 @@ function reloadOverlayRenderer(win: BrowserWindow): void {
     if (now - previous < RENDERER_RELOAD_MIN_MS) return;
     lastRendererReload.set(win, now);
     console.warn('[overlay] reloading renderer');
+    overlayLog('renderer-reload', { window: win.webContents.id });
     const url = getOverlayUrl();
     const load = url.startsWith('http') ? win.loadURL(url) : win.loadFile(url);
     void load.catch((error: unknown) => {
         console.warn('[overlay] renderer reload failed', error);
+        try {
+            overlayLog('renderer-reload-failed', { window: win.webContents.id, error: String(error) });
+        } catch {
+            // ignore
+        }
     });
 }
 
 function armOverlayRenderer(win: BrowserWindow): void {
     const contentsId = win.webContents.id;
     win.on('closed', () => forgetSlot(contentsId));
-    win.webContents.on('render-process-gone', () => {
+    win.webContents.on('render-process-gone', (_event, details) => {
         console.warn('[overlay] renderer exited');
+        overlayLog('renderer-exited', {
+            window: contentsId,
+            reason: details?.reason ?? 'unknown',
+            exitCode: details?.exitCode ?? null,
+        });
         reloadOverlayRenderer(win);
     });
     win.webContents.on('unresponsive', () => {
         console.warn('[overlay] renderer unresponsive');
+        overlayLog('renderer-unresponsive', { window: contentsId });
         reloadOverlayRenderer(win);
     });
     win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
         if (!isMainFrame || errorCode === -3) return;
         console.warn(`[overlay] load failed (${errorCode} ${errorDescription})`);
+        overlayLog('load-failed', { window: contentsId, errorCode, errorDescription });
         reloadOverlayRenderer(win);
     });
 }
@@ -264,6 +294,106 @@ export function healOverlayWindows(): void {
     // Empty slots are hidden on purpose. Forcing show here would just hide them again.
     const allEmpty = wins.every((win) => emptySlots.has(win.webContents.id));
     if (!allEmpty) showOverlay();
+}
+
+/** Last explicit raise per window, so a visible HUD is lifted every few seconds. */
+const lastRaiseAt = new WeakMap<BrowserWindow, number>();
+const raiseCount = new WeakMap<BrowserWindow, number>();
+const lastRaiseLogAt = new WeakMap<BrowserWindow, number>();
+/** After the first raise, one summary line per window per minute keeps the log small. */
+const RAISE_LOG_EVERY_MS = 60_000;
+
+/** Since when no overlay window has been visible during a live match. */
+let overlayInvisibleSince: number | null = null;
+
+function overlayWindowIsVisible(win: BrowserWindow): boolean {
+    try {
+        return !win.isDestroyed() && win.isVisible();
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Lift visible overlay windows above whatever topmost window took the
+ * foreground. moveTop() re-orders the z-order without activating the window;
+ * it must never focus(), toggle setAlwaysOnTop or touch mouse passthrough.
+ */
+export function raiseOverlayIfDue(): void {
+    const now = Date.now();
+    for (const win of overlayWindows()) {
+        try {
+            if (win.isDestroyed()) continue;
+            const previous = lastRaiseAt.get(win);
+            const msSinceRaise = previous === undefined ? Number.POSITIVE_INFINITY : now - previous;
+            const wanted = shouldShowWindow(win);
+            const visible = win.isVisible();
+            if (!shouldRaiseOverlay({ wanted, visible, msSinceRaise })) continue;
+            win.moveTop();
+            lastRaiseAt.set(win, now);
+            const count = (raiseCount.get(win) ?? 0) + 1;
+            raiseCount.set(win, count);
+            const lastLog = lastRaiseLogAt.get(win) ?? 0;
+            if (count === 1 || now - lastLog >= RAISE_LOG_EVERY_MS) {
+                lastRaiseLogAt.set(win, now);
+                overlayLog('raise', {
+                    window: win.webContents.id,
+                    raises: count,
+                    sinceLogMs: count === 1 ? 0 : now - lastLog,
+                });
+            }
+        } catch {
+            // A raise must never break the match tick.
+        }
+    }
+}
+
+/**
+ * Rebuild the HUD when it has been entirely invisible for too long even though
+ * it should be up. The invisible clock only runs inside a live match, and is
+ * reset by a visible window or by the user hiding / disabling the overlay.
+ */
+export function rebuildOverlayIfStuck(inMatch: boolean): void {
+    try {
+        const now = Date.now();
+        const wins = overlayWindows();
+        const anyVisible = wins.some(overlayWindowIsVisible);
+        const overlayEnabled = getAppSettings().overlayEnabled;
+        if (!inMatch || userHidden || !overlayEnabled || anyVisible) {
+            overlayInvisibleSince = null;
+            return;
+        }
+        if (overlayInvisibleSince === null) {
+            overlayInvisibleSince = now;
+            return;
+        }
+        const windowCount = wins.length;
+        const allSlotsEmpty = wins.every((win) => emptySlots.has(win.webContents.id));
+        const msInvisible = now - overlayInvisibleSince;
+        const holdToShow = holdToShowActive() && !holdDown;
+        if (
+            !shouldRebuildOverlay({
+                inMatch,
+                userHidden,
+                overlayEnabled,
+                holdToShow,
+                windowCount,
+                anyVisible,
+                allSlotsEmpty,
+                msInvisible,
+            })
+        ) {
+            return;
+        }
+        overlayLog('rebuild', { windows: windowCount, msInvisible, allSlotsEmpty });
+        destroyOverlay();
+        createOverlayWindow();
+        showOverlay();
+        // Start a fresh clock so a broken rebuild cannot retry faster than the threshold.
+        overlayInvisibleSince = null;
+    } catch {
+        // Never break the match tick because a rebuild failed.
+    }
 }
 
 export function getOverlayWindowStats(): { windows: number; visible: number } {
@@ -384,6 +514,13 @@ function createLayeredWindow(bounds: Electron.Rectangle): BrowserWindow {
     });
     // Hidden until its renderer reports something to draw.
     emptySlots.add(win.webContents.id);
+    overlayLog('created', {
+        kind: 'extra',
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+    });
     assertAlwaysOnTop(win);
     applyCaptureProtection(win);
     win.setMenu(null);
@@ -725,6 +862,7 @@ export function createOverlayWindow(): BrowserWindow {
     });
 
     emptySlots.add(overlayWin.webContents.id);
+    overlayLog('created', { kind: 'main' });
     assertAlwaysOnTop(overlayWin);
     applyCaptureProtection(overlayWin);
 
@@ -819,14 +957,17 @@ export function showOverlay(): void {
     assertAlwaysOnTop(win);
     // Re-apply click-through after show — Windows can drop ignore-mouse state on hide/show
     setClickThrough(clickThrough);
+    overlayLog('show', { windows: overlayWindows().length, clickThrough, alignMode });
 }
 
 export function hideOverlay(): void {
+    const shown = overlayWindows().filter((win) => win.isVisible()).length;
     for (const win of overlayWindows()) {
         if (win.isVisible()) win.hide();
     }
     // Hidden overlay should not keep a hot compositor path against the game.
     syncOverlayPaintBudget();
+    overlayLog('hide', { windows: shown });
 }
 
 function scheduleUserHiddenDestroy(): void {
@@ -845,6 +986,7 @@ function cancelUserHiddenDestroy(): void {
 }
 
 export function destroyOverlay(): void {
+    overlayLog('destroy', { windows: overlayWindows().length });
     cancelUserHiddenDestroy();
     if (persistTimer) {
         clearTimeout(persistTimer);
@@ -863,6 +1005,7 @@ export function destroyOverlay(): void {
 
 export function toggleOverlayVisibility(): boolean {
     userHidden = !userHidden;
+    overlayLog('user-hidden', { hidden: userHidden, source: 'toggle' });
     if (userHidden) {
         hideOverlay();
         scheduleUserHiddenDestroy();
@@ -876,6 +1019,7 @@ export function toggleOverlayVisibility(): boolean {
 
 export function setOverlayUserHidden(hidden: boolean): void {
     userHidden = hidden;
+    overlayLog('user-hidden', { hidden, source: 'set' });
     if (hidden) {
         hideOverlay();
         scheduleUserHiddenDestroy();

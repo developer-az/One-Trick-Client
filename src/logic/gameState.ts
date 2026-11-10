@@ -548,13 +548,13 @@ function deriveSelfStats(stats: ChampionStatsLike | undefined): SelfStats {
     };
 }
 
-const ABILITY_SLOTS = ['Q', 'W', 'E', 'R'] as const;
+type AbilitySlot = 'Q' | 'W' | 'E' | 'R';
 
 function deriveAbilityRanks(
     abilities: LiveActivePlayerLike['abilities']
 ): AbilityRanks | null {
     if (!abilities) return null;
-    const rank = (slot: (typeof ABILITY_SLOTS)[number]): number => {
+    const rank = (slot: AbilitySlot): number => {
         const level = abilities[slot]?.abilityLevel;
         return typeof level === 'number' && Number.isFinite(level) ? level : 0;
     };

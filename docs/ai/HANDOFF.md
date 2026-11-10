@@ -56,3 +56,54 @@
 - T-WR: the unsourced Yone "WR" claim was reworded; `verify_no_winrate_claims.ts` guards it.
 - T4: `src/logic/visionValidation.ts` for the sidecar; Mayhem OCR 9/9 on 3 synthetic fixtures (not representative).
 - Coder run log (Pi sandboxed, same model/flags): recorder 256s; T-WR tests 55s, code 19s; T5 tests 86s, code 50s; T1 tests+fixture 109s; T2 code 67s; T4 tests 53s, code 28s. All done, no hangs, all scope gates clean.
+
+## Test pre-release for the League PC (2026-11-09)
+- GitHub pre-release `test-perf-tracking-20261109` (tag at f3cc24d, branch orchestrate/perf-tracking-itemlogic): https://github.com/developer-az/One-Trick-Client/releases/tag/test-perf-tracking-20261109
+- Assets:
+  - `One.Trick.1.7.0-test-perf-tracking-20261109.zip`: electron-builder zip target from a scratch config identical to package.json build, minus the ffmpeg extraResource (user chose no ffmpeg download; auto-clip unavailable). Keyhook built locally with MSYS2 gcc. Unsigned.
+  - `OneTrickRecorder-test-perf-tracking-20261109.zip`: Node 24 SEA of scripts/perf/record-live-client.mjs (bundled unchanged; glue sets the out dir to the exe folder and wraps top-level await) plus `Record-Match.cmd` (runs it, then pauses). Unsigned.
+- Smoke tests on this laptop against the mock: the packaged app detected the match (2 overlay windows with content, latency in the debug log); the recorder exe and the .cmd recorded, anonymized, saved next to themselves and printed SAVED.
+- Tag deliberately not `v*`, so the release workflow did not run.
+
+### 2026-11-09 Phase 3 I1a (purchase planner)
+- Added `src/logic/purchasePlan.ts`: remaining cost after owned components (multiset), buy full / best affordable component / save / no free slot, gold from the Data Dragon snapshot only.
+- Acceptance test `verify_purchase_plan.ts` written first and frozen (30 checks). A diff review found the planner suggesting components of already-owned items; test 3b added, fixed by Pi.
+- Pi runs: I1a done in 37 s; fix done in 33 s (deepseek-v4.1-flash-1017-fast, thinking high).
+- Checks: verify_purchase_plan 30/30, tsc app 0, eslint 0. Not yet wired into the HUD (I1b).
+
+### 2026-11-09 Phase 3 I1b (buy rail wiring)
+- `buyRailLine` (overlayLogic.ts) turns the purchase plan into one rail line: "Buy now · 2,800g", "Part · 1,050g", "Need 1,850g", "No free slot"; null without catalog, gold or a next item.
+- OverlayApp.tsx: prices from the loaded catalog (useSyncExternalStore); the affordable component's icon leads the rail; text line under the icons. Off in ARAM/Mayhem.
+- Test `verify_buy_rail.ts` written first, frozen. Pi run: done in 33 s.
+- Checks: verify_buy_rail, verify_purchase_plan, verify_overlay_cues, verify_build_boot_slot pass; tsc app 0; eslint 0. Not yet viewed in the running overlay. Nothing committed.
+
+### 2026-11-09 I1 look-check, unknown-gold fix, I2 survey
+- Look-check in the running overlay (CDP, scratch copy of the mock with switchable gold/items): all four rail states fit (rail 202 px, 11 px text, scrollWidth == clientWidth). Screenshots in the session scratchpad `otc/rail/`.
+- Fix: `buildOverlayPayload` sent unknown gold as 0; now null (`electron/game-monitor.ts`, `OverlayLocalPlayer.currentGold: number | null`). Test `verify_overlay_gold.ts` (13 checks). Pi reported BLOCKED on one assertion that was the orchestrator's mistake (640 g affords a Long Sword); the test was corrected by the orchestrator, code unchanged. Pi run: blocked in 68 s, then verified.
+- Open: 50 g fingerprint step can lag the rail; component icon alt text.
+- I2: survey-only Pi run (48 s, no files changed); steps I2.1-I2.5 written to PLAN.md. I2.1 (catalog regeneration) waits for the user's yes.
+- Checks: verify_overlay_gold, verify_game_monitor, verify_buy_rail, verify_overlay_cues, verify_purchase_plan pass; tsc app + electron 0; eslint 0. Nothing committed.
+
+### 2026-11-09 Catalog snapshot regenerated (I2.1, data only)
+- **Catalog patch now 16.22.1** (was 16.20.1). `npm run catalog:generate`, user-approved. Old files kept in the session scratchpad `otc/cat-old/`.
+- Schema identical in every file. Items 870 -> 863, 2 price changes (3008, 3168: 1,000 -> 1,100), 1 map flag (4641). Champions: 108 role lists changed. Recommendations 323 -> 297, nearly all changed: the committed snapshot predated the generator fix in e316881 (it had one identical situational list for all 323 rows).
+- Full suite: 43/44 verify scripts pass; `verify_global_hotkeys.ts` fails as at baseline (now: exe present, hook sees no PageUp/PageDown in this session). No planner test touched by a price change. Typechecks app/electron/node 0.
+- `npm run lint` fails with 3 errors that predate this step, from Phase 2 commit f3cc24d (gameState.ts:551, verify_game_state.ts:363, verify_signal_inventory.ts:133). To fix in the next coder round.
+- Still to do in I2.1: add item stats and the anti-heal flag to the generator and regenerate. Nothing committed.
+
+### 2026-11-09 I2.1 catalog stats + anti-heal (second regeneration)
+- **Catalog patch: 16.22.1.** User decision: keep the regenerated roles and recommendations.
+- `src/catalog/types.ts`, `src/catalog/buildCatalog.ts`: `CatalogItem.stats` and `CatalogItem.antiHeal`, mappers `itemStatsFromDDragon`, `antiHealFromDescription`. Second `npm run catalog:generate`: only those fields added to items.json (184.7 KB -> 220.1 KB); other files identical apart from the manifest timestamp.
+- Lint: the 3 Phase 2 errors are fixed (gameState.ts by Pi; verify_game_state.ts and verify_signal_inventory.ts by the orchestrator, test files).
+- New standing rule from the user: full lint + full verify suite at every phase boundary.
+- Pi run: done in 70 s. Checks: full suite 44/45 (verify_global_hotkeys fails as at baseline), tsc app/electron/node 0, `npm run lint` 0.
+- Carry into I2.2: live API and cached catalogs lack the new fields until the website is redeployed; engine treats missing as unknown. Nothing committed.
+
+### 2026-11-09 Overlay vanishes mid-match: cause reproduced and fixed
+- User report from the pre-release match: overlay gone at ~10 min, app still in match, hotkey and off/on useless; has happened on earlier versions too. Recording saved at `recordings/20261109-190517-CLASSIC-Pyke.jsonl` (ignored by git).
+- Replay of the recording through the app (scratch replay server, CDP watch): no exception, overlay kept drawing. So not data.
+- Reproduced with a topmost stand-in window: overlay windows keep WS_EX_TOPMOST but sit below it; `assertAlwaysOnTop` only acted on a lost flag.
+- Fix (Pi, 117 s): `shouldRaiseOverlay`/`shouldRebuildOverlay` in overlay-bounds.ts, `raiseOverlayIfDue`/`rebuildOverlayIfStuck` in overlay-window.ts called from `ensureOverlayShown`, new `electron/overlay-log.ts` (`%APPDATA%/One Trick/logs/overlay.log`), buy rail floors fractional gold.
+- Evidence: stand-in run after the fix shows both overlay windows above the stand-in at +5 s and +32 s. Full suite 46/46 (verify_global_hotkeys passed this run), tsc x3 0, lint 0.
+- Not verified: behaviour over the real League window; cost of `moveTop()` every 3 s in a real game. Exclusive-fullscreen League cannot be overlaid by any window; `match-start windowMode=` is logged to tell.
+- Open: recorder anonymizer replaced one champion name with PlayerN (name collision); 50 g rail lag; T3 fixtures from the recording.

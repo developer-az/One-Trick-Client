@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   type Champion,
   type Build,
@@ -6,8 +6,10 @@ import {
 } from '../logic/pykeLogic';
 import { getProfile, isProfileId, loadStoredProfileId, type ProfileId } from '../logic/profiles';
 import { trackBuildProgress, type BuildItemRef } from '../logic/buildProgress';
+import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
 import {
   buildInGameCues,
+  buyRailLine,
   formatGameTime,
   getGankStatus,
   getWardStatus,
@@ -27,7 +29,7 @@ import { ChromeGameHud } from './ChromeGameHud';
 import { ChromeMark } from './ChromeMark';
 import { WardIndicator } from './WardIndicator';
 import { GankSquare } from './GankSquare';
-import { warmCatalog } from '../catalog/client';
+import { catalogItemsById, getCatalog, subscribeCatalog, warmCatalog } from '../catalog/client';
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
@@ -460,6 +462,18 @@ export const OverlayApp: React.FC = () => {
     [state.localPlayer?.items, build]
   );
 
+  const catalog = useSyncExternalStore(subscribeCatalog, getCatalog);
+  const prices = useMemo<PriceLookup | null>(() => {
+    const byId = catalogItemsById(catalog);
+    if (byId.size === 0) return null;
+    return catalogPriceLookup([...byId.values()]);
+  }, [catalog]);
+
+  const buyRail = useMemo(
+    () => (inMayhem || inAram ? null : buyRailLine(state, buildProgress, prices)),
+    [state, buildProgress, prices, inMayhem, inAram]
+  );
+
   /** Buy rail — in Mayhem keep icons up for the whole match (don't vanish when remaining blips empty). */
   const buyQueue = useMemo((): BuildItemRef[] => {
     if (!build) return [];
@@ -707,6 +721,16 @@ export const OverlayApp: React.FC = () => {
 
   const buyRow = showBuy ? (
     <div className="flex flex-wrap gap-0.5 items-center">
+      {buyRail?.action === 'buy-component' && buyRail.buyId ? (
+        <ItemIcon
+          key={`buy-now-${buyRail.buyId}`}
+          itemId={buyRail.buyId}
+          alt={buyRail.text}
+          title={buyRail.title}
+          size={22}
+          className="hud-buy-icon is-next"
+        />
+      ) : null}
       {buyQueue.map((item, index) => (
         <ItemIcon
           key={`buy-${item.id}`}
@@ -714,9 +738,14 @@ export const OverlayApp: React.FC = () => {
           alt={item.name}
           title={buyQueueComplete ? `${item.name} (owned)` : item.name}
           size={22}
-          className={`hud-buy-icon${index === 0 && !buyQueueComplete ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
+          className={`hud-buy-icon${index === 0 && !buyQueueComplete && !(buyRail?.action === 'buy-component' && buyRail.buyId) ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
         />
       ))}
+      {buyRail ? (
+        <div className="w-full text-[11px] leading-tight opacity-80 truncate" title={buyRail.title}>
+          {buyRail.text}
+        </div>
+      ) : null}
     </div>
   ) : null;
 

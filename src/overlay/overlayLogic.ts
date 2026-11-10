@@ -15,6 +15,7 @@ import { activeThreatsByName } from '../logic/counters';
 import { inferSituation, type ProfileSituation } from '../logic/situation';
 import { buildAramInGameCues, getAramGankStatus, getAramWardStatus, shouldUseAramOverlay } from '../logic/aramOverlay';
 import { isAramOrMayhem } from '../logic/mayhem/mode';
+import { planNextPurchase, type PriceLookup } from '../logic/purchasePlan';
 
 export interface OverlayEnemy {
   championName: string;
@@ -57,7 +58,7 @@ export interface OverlayLocalPlayer {
   items: Array<{ itemID: number; displayName: string; count: number; slot: number }>;
   scores?: OverlayEnemy['scores'];
   position?: string;
-  currentGold: number;
+  currentGold: number | null;
   summonerSpells?: {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
@@ -110,6 +111,63 @@ export interface OverlayCue {
 }
 
 export type BuildProgressSnapshot = ReturnType<typeof trackBuildProgress>;
+
+export interface BuyRailLine {
+  action: 'buy-full' | 'buy-component' | 'save' | 'no-slot';
+  buyId: string | null;
+  text: string;
+  title: string;
+}
+
+function formatRailGold(value: number): string {
+  return `${value.toLocaleString('en-US')}g`;
+}
+
+/** One-line "what to buy now" for the HUD buy rail, or null when there is nothing to say. */
+export function buyRailLine(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailLine | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  // Live gold is fractional (e.g. 566.546). Plan with whole gold so the rail
+  // never prints decimals.
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown') return null;
+
+  const buyId = plan.buy?.id ?? null;
+  const cost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  let text: string;
+  switch (plan.action) {
+    case 'buy-full':
+      text = `Buy now · ${formatRailGold(cost)}`;
+      break;
+    case 'buy-component':
+      text = `Part · ${formatRailGold(cost)}`;
+      break;
+    case 'save':
+      text = `Need ${formatRailGold(plan.needGold ?? 0)}`;
+      break;
+    case 'no-slot':
+      text = 'No free slot';
+      break;
+    default:
+      return null;
+  }
+
+  return { action: plan.action, buyId, text, title: plan.cue };
+}
 
 export interface OverlayCueContext {
   analysis?: MatchupAnalysis | null;

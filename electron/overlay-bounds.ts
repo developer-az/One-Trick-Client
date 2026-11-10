@@ -196,6 +196,46 @@ export function clusterOverlayWindows(opts: {
     });
 }
 
+/** How often a visible overlay is re-raised above the game while it runs. */
+export const OVERLAY_RAISE_EVERY_MS = 3000;
+/** How long the HUD may stay entirely invisible before it is rebuilt. */
+export const OVERLAY_REBUILD_AFTER_MS = 15000;
+
+/**
+ * A topmost window that takes the foreground can sit above the overlay while
+ * the overlay keeps its always-on-top flag. The old keep-alive only re-applied
+ * a lost flag, so nothing raised it again. Re-raising a visible window is cheap
+ * and does not activate it.
+ */
+export function shouldRaiseOverlay(opts: {
+    wanted: boolean;
+    visible: boolean;
+    msSinceRaise: number;
+}): boolean {
+    return opts.wanted && opts.visible && opts.msSinceRaise >= OVERLAY_RAISE_EVERY_MS;
+}
+
+/**
+ * Rebuild only when the HUD is genuinely supposed to be on screen: never
+ * against a user hide, a disabled overlay, hold-to-show, or slots that are
+ * hidden on purpose because they have nothing to draw.
+ */
+export function shouldRebuildOverlay(opts: {
+    inMatch: boolean;
+    userHidden: boolean;
+    overlayEnabled: boolean;
+    holdToShow: boolean;
+    windowCount: number;
+    anyVisible: boolean;
+    allSlotsEmpty: boolean;
+    msInvisible: number;
+}): boolean {
+    if (!opts.inMatch || opts.userHidden || !opts.overlayEnabled || opts.holdToShow) return false;
+    if (opts.anyVisible) return false;
+    if (opts.windowCount > 0 && opts.allSlotsEmpty) return false;
+    return opts.msInvisible >= OVERLAY_REBUILD_AFTER_MS;
+}
+
 /**
  * Whether a locked overlay window should exist on screen.
  * A live match does not override this: an empty transparent HWND over League
