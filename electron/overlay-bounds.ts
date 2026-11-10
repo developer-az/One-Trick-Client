@@ -236,6 +236,79 @@ export function shouldRebuildOverlay(opts: {
     return opts.msInvisible >= OVERLAY_REBUILD_AFTER_MS;
 }
 
+/** How often an overlay page reports that it is still producing frames. */
+export const OVERLAY_BEAT_EVERY_MS = 5000;
+/** A shown window that has not produced a frame for this long is treated as not drawing. */
+export const OVERLAY_PAINT_STALL_MS = 25000;
+/** Automatic rebuilds for a stalled HUD are spaced out and capped per match. */
+export const OVERLAY_STALL_REBUILD_MIN_GAP_MS = 60000;
+export const OVERLAY_MAX_STALL_REBUILDS = 2;
+
+/**
+ * What the OS and the page say about one overlay window. The app's own
+ * "visible" flag is not enough: a window can be shown, on top and still not
+ * be drawn, and only the page can tell whether frames are being produced.
+ */
+export interface OverlayWindowHealth {
+    visible: boolean;
+    minimized: boolean;
+    onTop: boolean;
+    /** Window bounds match the slot it was placed in. */
+    boundsOk: boolean;
+    /** How long the window has been shown; null when hidden. */
+    msShown: number | null;
+    /** Since the page last reported at all; null when it never has. */
+    msSinceBeat: number | null;
+    /** Since the page last reported a produced frame; null when it never has. */
+    msSinceFrame: number | null;
+    /** Page Visibility state from the last report; null when unknown. */
+    pageVisible: boolean | null;
+}
+
+export type OverlayFault =
+    | 'minimized'
+    | 'not-on-top'
+    | 'bounds'
+    | 'no-heartbeat'
+    | 'no-frames'
+    | 'page-hidden';
+
+/** Faults for one window. A hidden window has none: it is hidden on purpose. */
+export function overlayWindowFaults(health: OverlayWindowHealth): OverlayFault[] {
+    if (!health.visible) return [];
+    const faults: OverlayFault[] = [];
+    if (health.minimized) faults.push('minimized');
+    if (!health.onTop) faults.push('not-on-top');
+    if (!health.boundsOk) faults.push('bounds');
+    const shownLongEnough = health.msShown !== null && health.msShown >= OVERLAY_PAINT_STALL_MS;
+    if (shownLongEnough) {
+        const beatStale = health.msSinceBeat === null || health.msSinceBeat >= OVERLAY_PAINT_STALL_MS;
+        const frameStale = health.msSinceFrame === null || health.msSinceFrame >= OVERLAY_PAINT_STALL_MS;
+        if (beatStale) faults.push('no-heartbeat');
+        else if (frameStale) faults.push('no-frames');
+    }
+    if (health.pageVisible === false) faults.push('page-hidden');
+    return faults;
+}
+
+/** Faults that mean the window is on screen but nothing is being drawn in it. */
+export function overlayPaintStalled(faults: readonly OverlayFault[]): boolean {
+    return faults.includes('no-heartbeat') || faults.includes('no-frames');
+}
+
+/** Rebuild a stalled HUD at most a few times per match, never back to back. */
+export function shouldRebuildStalledOverlay(opts: {
+    stalled: boolean;
+    rebuildsThisMatch: number;
+    msSinceLastRebuild: number;
+}): boolean {
+    return (
+        opts.stalled &&
+        opts.rebuildsThisMatch < OVERLAY_MAX_STALL_REBUILDS &&
+        opts.msSinceLastRebuild >= OVERLAY_STALL_REBUILD_MIN_GAP_MS
+    );
+}
+
 /**
  * Whether a locked overlay window should exist on screen.
  * A live match does not override this: an empty transparent HWND over League

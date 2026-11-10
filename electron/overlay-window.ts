@@ -3,7 +3,16 @@ import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
 import { readLeagueHudScales } from './league-settings';
-import { clusterOverlayWindows, overlayWindowWanted, shouldRaiseOverlay, shouldRebuildOverlay, type OverlayCluster } from './overlay-bounds';
+import {
+    clusterOverlayWindows,
+    overlayPaintStalled,
+    overlayWindowFaults,
+    overlayWindowWanted,
+    shouldRaiseOverlay,
+    shouldRebuildOverlay,
+    shouldRebuildStalledOverlay,
+    type OverlayCluster,
+} from './overlay-bounds';
 import { overlayLog } from './overlay-log';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
@@ -88,13 +97,41 @@ const lastRendererReload = new WeakMap<BrowserWindow, number>();
 /** Tab is held down (reported by the native key helper). */
 let holdDown = false;
 
+/** A match is running (set by the game monitor). */
+let matchActive = false;
+
+/** Last report from each overlay page, keyed by webContents id. */
+interface OverlayBeat {
+    at: number;
+    frameAt: number | null;
+    pageVisible: boolean;
+}
+const overlayBeats = new Map<number, OverlayBeat>();
+/** Since when each window has been on screen, as seen by the health check. */
+const visibleSince = new WeakMap<BrowserWindow, number>();
+let stallRebuilds = 0;
+let lastStallRebuildAt = 0;
+let lastBoundsRepairAt = 0;
+let lastHealthSignature = '';
+let lastHealthLogAt = 0;
+const HEALTH_LOG_EVERY_MS = 60_000;
+const BOUNDS_REPAIR_MIN_GAP_MS = 60_000;
+/** getBounds() can be a pixel or two off what setBounds() asked for on scaled displays. */
+const BOUNDS_TOLERANCE_PX = 4;
+
 /**
  * Match start used to clear the empty set and force every overlay HWND on
  * screen for the whole game. That is the DWM cost this module exists to avoid.
  * Callers still notify match start and end; visibility follows content.
  */
-export function setOverlayMatchActive(_active: boolean): void {
-    void _active;
+export function setOverlayMatchActive(active: boolean): void {
+    matchActive = active;
+    // Each match gets its own repair budget and a fresh health line.
+    stallRebuilds = 0;
+    lastStallRebuildAt = 0;
+    lastBoundsRepairAt = 0;
+    lastHealthSignature = '';
+    lastHealthLogAt = 0;
 }
 
 function lockedLayout(): boolean {
@@ -216,6 +253,7 @@ function syncSlotVisibility(webContentsId: number): void {
 }
 
 function forgetSlot(webContentsId: number): void {
+    overlayBeats.delete(webContentsId);
     const pending = emptyGrace.get(webContentsId);
     if (pending) clearTimeout(pending);
     emptyGrace.delete(webContentsId);
@@ -393,6 +431,130 @@ export function rebuildOverlayIfStuck(inMatch: boolean): void {
         overlayInvisibleSince = null;
     } catch {
         // Never break the match tick because a rebuild failed.
+    }
+}
+
+/**
+ * An overlay page reports that it is alive and whether a frame was produced.
+ * This is the only signal that separates "shown" from "actually drawn".
+ */
+export function noteOverlayHeartbeat(
+    webContentsId: number,
+    beat: { frames: boolean; pageVisible: boolean }
+): void {
+    if (!overlayWindows().some((win) => win.webContents.id === webContentsId)) return;
+    const now = Date.now();
+    const previous = overlayBeats.get(webContentsId);
+    overlayBeats.set(webContentsId, {
+        at: now,
+        frameAt: beat.frames ? now : previous?.frameAt ?? null,
+        pageVisible: beat.pageVisible,
+    });
+}
+
+function boundsMatch(
+    a: Electron.Rectangle,
+    b: { x: number; y: number; width: number; height: number }
+): boolean {
+    return (
+        Math.abs(a.x - b.x) <= BOUNDS_TOLERANCE_PX &&
+        Math.abs(a.y - b.y) <= BOUNDS_TOLERANCE_PX &&
+        Math.abs(a.width - b.width) <= BOUNDS_TOLERANCE_PX &&
+        Math.abs(a.height - b.height) <= BOUNDS_TOLERANCE_PX
+    );
+}
+
+/**
+ * Compare what the app believes with what the OS and the pages report, write
+ * it to overlay.log, and repair what can be repaired without touching focus:
+ * a minimized window is restored, a moved one is put back, and a HUD that is
+ * shown but not drawing is rebuilt (a few times per match at most).
+ */
+export function checkOverlayHealth(): void {
+    try {
+        if (userHidden || !getAppSettings().overlayEnabled) return;
+        const now = Date.now();
+        const wins = overlayWindows();
+        const locked = lockedLayout();
+        const clusters = locked ? lockedClusters(overlayDisplay()) : [];
+        const lines: Array<Record<string, unknown>> = [];
+        const signature: string[] = [];
+        let stalled = false;
+        let boundsFault = false;
+
+        wins.forEach((win, index) => {
+            const id = win.webContents.id;
+            const visible = win.isVisible();
+            if (!visible) visibleSince.delete(win);
+            else if (!visibleSince.has(win)) visibleSince.set(win, now);
+            const shownAt = visibleSince.get(win);
+            const bounds = win.getBounds();
+            const cluster = clusters[index];
+            const beat = overlayBeats.get(id);
+            const minimized = win.isMinimized();
+            const onTop = win.isAlwaysOnTop();
+            const faults = overlayWindowFaults({
+                visible,
+                minimized,
+                onTop,
+                boundsOk: !cluster || boundsMatch(bounds, cluster),
+                msShown: shownAt === undefined ? null : now - shownAt,
+                msSinceBeat: beat ? now - beat.at : null,
+                msSinceFrame: beat?.frameAt != null ? now - beat.frameAt : null,
+                pageVisible: beat ? beat.pageVisible : null,
+            });
+            if (faults.includes('minimized')) {
+                // SW_SHOWNOACTIVATE restores without taking focus from the game.
+                win.showInactive();
+            }
+            if (faults.includes('bounds')) boundsFault = true;
+            if (overlayPaintStalled(faults)) stalled = true;
+            signature.push(`${id}:${visible ? 1 : 0}:${faults.join('+')}`);
+            lines.push({
+                window: id,
+                visible,
+                minimized,
+                onTop,
+                bounds: `${bounds.x},${bounds.y},${bounds.width}x${bounds.height}`,
+                shownMs: shownAt === undefined ? null : now - shownAt,
+                beatMs: beat ? now - beat.at : null,
+                frameMs: beat?.frameAt != null ? now - beat.frameAt : null,
+                page: beat ? (beat.pageVisible ? 'visible' : 'hidden') : 'unknown',
+                faults: faults.length ? faults.join('+') : 'none',
+            });
+        });
+
+        const sig = signature.join('|');
+        if (sig !== lastHealthSignature || now - lastHealthLogAt >= HEALTH_LOG_EVERY_MS) {
+            lastHealthSignature = sig;
+            lastHealthLogAt = now;
+            for (const line of lines) overlayLog('health', line);
+        }
+
+        if (boundsFault && locked && now - lastBoundsRepairAt >= BOUNDS_REPAIR_MIN_GAP_MS) {
+            lastBoundsRepairAt = now;
+            overlayLog('repair', { reason: 'bounds' });
+            applyLockedClusters();
+        }
+
+        if (
+            matchActive &&
+            shouldRebuildStalledOverlay({
+                stalled,
+                rebuildsThisMatch: stallRebuilds,
+                msSinceLastRebuild:
+                    lastStallRebuildAt === 0 ? Number.POSITIVE_INFINITY : now - lastStallRebuildAt,
+            })
+        ) {
+            stallRebuilds += 1;
+            lastStallRebuildAt = now;
+            overlayLog('rebuild', { reason: 'paint-stalled', attempt: stallRebuilds, windows: wins.length });
+            destroyOverlay();
+            createOverlayWindow();
+            showOverlay();
+        }
+    } catch {
+        // A health check must never break the match tick.
     }
 }
 
@@ -1003,29 +1165,44 @@ export function destroyOverlay(): void {
     overlayWin = null;
 }
 
+/**
+ * Bring the HUD back after the user hid it. During a match this always starts
+ * from fresh windows: turning the overlay off and on is the user's way to
+ * recover a HUD that is shown but not drawing, and re-showing the same
+ * windows would bring back the same broken ones.
+ */
+function showAfterUserHide(wasHidden: boolean): void {
+    cancelUserHiddenDestroy();
+    if (wasHidden && matchActive && overlayWindows().length > 0) {
+        overlayLog('rebuild', { reason: 'user-unhide', windows: overlayWindows().length });
+        destroyOverlay();
+    }
+    showOverlay();
+}
+
 export function toggleOverlayVisibility(): boolean {
+    const wasHidden = userHidden;
     userHidden = !userHidden;
     overlayLog('user-hidden', { hidden: userHidden, source: 'toggle' });
     if (userHidden) {
         hideOverlay();
         scheduleUserHiddenDestroy();
     } else {
-        cancelUserHiddenDestroy();
-        showOverlay();
+        showAfterUserHide(wasHidden);
     }
     broadcastOverlayMeta();
     return !userHidden;
 }
 
 export function setOverlayUserHidden(hidden: boolean): void {
+    const wasHidden = userHidden;
     userHidden = hidden;
     overlayLog('user-hidden', { hidden, source: 'set' });
     if (hidden) {
         hideOverlay();
         scheduleUserHiddenDestroy();
     } else {
-        cancelUserHiddenDestroy();
-        showOverlay();
+        showAfterUserHide(wasHidden);
     }
     broadcastOverlayMeta();
 }

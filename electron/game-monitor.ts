@@ -43,6 +43,7 @@ import {
     setOverlayMatchActive,
     raiseOverlayIfDue,
     rebuildOverlayIfStuck,
+    checkOverlayHealth,
 } from './overlay-window';
 import { overlayLog } from './overlay-log';
 import { readLeagueHudScales } from './league-settings';
@@ -961,6 +962,8 @@ function ensureOverlayShown(): void {
     // if it has stayed entirely invisible while the match is still running.
     raiseOverlayIfDue();
     rebuildOverlayIfStuck(true);
+    // "Shown" is not "drawn": compare with what the OS and the pages report.
+    checkOverlayHealth();
 }
 
 function maybeKeepOverlayOnTop(): void {

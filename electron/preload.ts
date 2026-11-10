@@ -96,4 +96,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getClipperStatus: () => ipcRenderer.invoke('clipper-status'),
     revealClip: (target?: string) => ipcRenderer.invoke('clip-reveal', target),
     reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),
+    reportOverlayHeartbeat: (beat: { frames: boolean; pageVisible: boolean }) =>
+        ipcRenderer.send('overlay-heartbeat', { frames: !!beat?.frames, pageVisible: !!beat?.pageVisible }),
 });

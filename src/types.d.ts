@@ -206,6 +206,7 @@ declare global {
             takeMayhemAugment?: (augmentId: string) => Promise<{ success: boolean; owned?: string[] }>;
             setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
             reportOverlayContent?: (hasContent: boolean) => void;
+            reportOverlayHeartbeat?: (beat: { frames: boolean; pageVisible: boolean }) => void;
         };
     }
 }

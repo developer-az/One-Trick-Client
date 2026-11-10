@@ -72,6 +72,7 @@ import {
     broadcastOverlayMeta,
     overlaySlotFor,
     setOverlayHold,
+    noteOverlayHeartbeat,
     refreshOverlayVisibility,
     refreshOverlayCaptureProtection,
     holdToShowActive,
@@ -543,6 +544,24 @@ app.whenReady().then(() => {
     ipcMain.on('overlay-slot-content', (event, hasContent: boolean) => {
         if (process.env.ONETRICK_DEBUG) console.info(`[overlay] slot ${event.sender.id} content=${hasContent}`);
         setOverlaySlotContent(event.sender.id, !!hasContent);
+    });
+
+    ipcMain.on('overlay-heartbeat', (event, beat: { frames?: unknown; pageVisible?: unknown } | null) => {
+        noteOverlayHeartbeat(event.sender.id, {
+            frames: beat?.frames === true,
+            pageVisible: beat?.pageVisible === true,
+        });
+    });
+
+    // A lost GPU or utility process can leave a shown window undrawn. Record it
+    // next to the overlay lifecycle so a vanished HUD can be matched to it.
+    app.on('child-process-gone', (_event, details) => {
+        overlayLog('child-process-gone', {
+            type: details.type,
+            reason: details.reason,
+            exitCode: details.exitCode,
+            name: details.name ?? null,
+        });
     });
 
     if (process.env.ONETRICK_DEBUG) {

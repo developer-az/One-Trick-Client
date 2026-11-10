@@ -103,6 +103,11 @@ function NudgeGroup({
   );
 }
 
+/** How often the overlay page tells the main process it is still drawing. Keep in step with OVERLAY_BEAT_EVERY_MS. */
+const OVERLAY_HEARTBEAT_EVERY_MS = 5000;
+/** How long one heartbeat waits for an animation frame before reporting that none came. */
+const OVERLAY_HEARTBEAT_FRAME_WAIT_MS = 2000;
+
 /** Tracks document visibility so HUD timers stop while the overlay window is hidden. */
 function usePageVisible(): boolean {
   const [pageVisible, setPageVisible] = useState(
@@ -687,6 +692,38 @@ export const OverlayApp: React.FC = () => {
   useEffect(() => {
     window.electronAPI?.reportOverlayContent?.(slotHasContent);
   }, [slotHasContent]);
+
+  // Paint heartbeat. The main process can see that this window is shown, but
+  // only the page knows whether frames are still being produced. One
+  // animation frame every few seconds is enough to tell, and costs nothing
+  // measurable next to the 1 Hz clock.
+  useEffect(() => {
+    const report = window.electronAPI?.reportOverlayHeartbeat;
+    if (!report) return;
+    let frame = 0;
+    let giveUp = 0;
+    const beat = (): void => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(giveUp);
+      let settled = false;
+      const settle = (frames: boolean): void => {
+        if (settled) return;
+        settled = true;
+        window.cancelAnimationFrame(frame);
+        window.clearTimeout(giveUp);
+        report({ frames, pageVisible: document.visibilityState === 'visible' });
+      };
+      frame = window.requestAnimationFrame(() => settle(true));
+      giveUp = window.setTimeout(() => settle(false), OVERLAY_HEARTBEAT_FRAME_WAIT_MS);
+    };
+    beat();
+    const id = window.setInterval(beat, OVERLAY_HEARTBEAT_EVERY_MS);
+    return () => {
+      window.clearInterval(id);
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(giveUp);
+    };
+  }, []);
 
   if (!state.inGame || !slot) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
