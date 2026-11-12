@@ -13,6 +13,13 @@
  * These checks pin the new structure so the intervention machinery cannot
  * creep back. The structural assertions were first proven against the
  * pre-remake code, where they failed in 24 places.
+ *
+ * 2026-11-11 (native-overlay remake): the destroy check now scopes to the
+ * destroyOverlay function instead of counting one `.destroy()` in the whole
+ * file — the native backend destroys three surfaces (presenter, offscreen,
+ * Electron), all inside destroyOverlay. The lock/unlock surface switch
+ * hides the Electron panel instead of destroying it, so the invariant
+ * (one destroy site) still holds.
  */
 import fs from 'node:fs';
 import {
@@ -71,9 +78,24 @@ ok(
     (ow.match(/destroyOverlay\(/g) || []).length === 1,
     'destroyOverlay is defined once and never called inside overlay-window.ts (callers are match end / app quit / settings only)'
 );
+// The native backend has three destroy calls (presenter sidecar, offscreen
+// window, Electron window), but all three sit inside destroyOverlay —
+// nothing else in this file may destroy a surface, including the
+// lock/unlock surface switch (which hides the Electron panel instead).
+const destroyFnStart = ow.indexOf('export function destroyOverlay');
+const destroyFnEnd = ow.indexOf('export function toggleOverlayVisibility');
 ok(
-    (ow.match(/\.destroy\(\)/g) || []).length === 1,
-    'the overlay window is destroyed in exactly one place (destroyOverlay)'
+    destroyFnStart !== -1 && destroyFnEnd > destroyFnStart,
+    'destroyOverlay is followed by toggleOverlayVisibility (destroy check anchor)'
+);
+const beforeDestroy = ow.slice(0, destroyFnStart);
+const destroyBody = ow.slice(destroyFnStart, destroyFnEnd);
+const afterDestroy = ow.slice(destroyFnEnd);
+ok(!beforeDestroy.includes('.destroy()'), 'no .destroy() before destroyOverlay');
+ok(!afterDestroy.includes('.destroy()'), 'no .destroy() after destroyOverlay');
+ok(
+    (destroyBody.match(/\.destroy\(\)/g) || []).length === 3,
+    'destroyOverlay destroys exactly the three surfaces (presenter, offscreen, Electron)'
 );
 
 // ---- content still gates visibility, now as one aggregate report ----

@@ -7,6 +7,7 @@ import { overlayWindowFaults, overlayWindowWanted } from './overlay-bounds';
 import { overlayLog } from './overlay-log';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
+import { attachNativeSurface, createOsrWindow, type NativeSurfaceHandle } from './overlay-presenter';
 export interface FrameCalibration {
     dx: number;
     dy: number;
@@ -25,6 +26,56 @@ const DEFAULT_CALIBRATION: OverlayCalibration = {
 };
 
 let overlayWin: BrowserWindow | null = null;
+
+/**
+ * Overlay backend (native-overlay remake, 2026-11-11). 'electron' is the
+ * original on-screen Chromium window; 'native' renders the same page
+ * offscreen and presents its frames through onetrick-presenter.exe, a
+ * plain Win32 layered window. Unlocked/align modes always use the
+ * Electron window — the presenter is paint-only.
+ */
+export type OverlayBackend = 'electron' | 'native';
+let backend: OverlayBackend = 'electron';
+/** Offscreen renderer window, native backend only. */
+let osrWin: BrowserWindow | null = null;
+/** Presenter sidecar handle, native backend only. */
+let nativeSurface: NativeSurfaceHandle | null = null;
+/** Native backend + unlocked/align: the Electron window is the surface. */
+let electronSurfaceActive = false;
+
+/** The native surface presents locked mode. Anything else is the Electron window. */
+function isNativeLocked(): boolean {
+    return backend === 'native' && process.platform === 'win32' && !electronSurfaceActive;
+}
+
+/** Packaged build default for the backend (extraMetadata.overlayBackend). */
+function readPackagedOverlayBackend(): OverlayBackend | null {
+    if (!app.isPackaged) return null;
+    try {
+        const pkg = JSON.parse(
+            fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
+        ) as { overlayBackend?: unknown };
+        if (pkg.overlayBackend === 'native' || pkg.overlayBackend === 'electron') {
+            return pkg.overlayBackend;
+        }
+    } catch {
+        // No packaged default — fall through to electron.
+    }
+    return null;
+}
+
+export function getOverlayBackend(): OverlayBackend {
+    ensureSettingsLoaded();
+    return backend;
+}
+
+/** Takes effect on the next surface creation (createOverlayWindow). */
+export function setOverlayBackend(next: OverlayBackend): OverlayBackend {
+    ensureSettingsLoaded();
+    backend = next;
+    saveSettings();
+    return backend;
+}
 
 /**
  * The overlay is a single window (Step 2 remake, 2026-11-10). The list shape
@@ -138,6 +189,10 @@ function shouldShowWindow(): boolean {
 export function setOverlayHold(down: boolean): void {
     if (holdDown === down) return;
     holdDown = down;
+    if (isNativeLocked()) {
+        syncNativeVisibility();
+        return;
+    }
     for (const win of overlayWindows()) {
         try {
             syncWindowVisibility(win);
@@ -158,17 +213,51 @@ function applyCaptureProtection(win: BrowserWindow): void {
 }
 
 export function refreshOverlayCaptureProtection(): void {
+    if (isNativeLocked()) {
+        if (nativeSurface) nativeSurface.setCaptureProtection(getAppSettings().overlayHideFromCapture);
+        return;
+    }
     for (const win of overlayWindows()) applyCaptureProtection(win);
 }
 
 /** Re-apply visibility after a setting that affects it changes. */
 export function refreshOverlayVisibility(): void {
+    if (isNativeLocked()) {
+        syncNativeVisibility();
+        return;
+    }
     for (const win of overlayWindows()) {
         try {
             syncWindowVisibility(win);
         } catch {
             // ignore
         }
+    }
+}
+
+/** Native-backend mirror of syncWindowVisibility: show/hide the presenter. */
+function syncNativeVisibility(): void {
+    if (!nativeSurface || !isNativeLocked()) return;
+    if (shouldShowWindow()) {
+        if (!nativeSurface.isShown()) {
+            nativeSurface.show();
+            overlayLog('show', {
+                backend: 'native',
+                reason: 'slot-content',
+                userHidden,
+                content: pageHasContent,
+                holdToShow: holdToShowActive(),
+            });
+        }
+    } else if (nativeSurface.isShown()) {
+        nativeSurface.hide();
+        overlayLog('hide', {
+            backend: 'native',
+            reason: 'slot-content',
+            userHidden,
+            content: pageHasContent,
+            holdToShow: holdToShowActive(),
+        });
     }
 }
 
@@ -202,7 +291,11 @@ function syncWindowVisibility(win: BrowserWindow): void {
 
 /** Renderer reports whether it has anything to draw (see OverlayApp). */
 export function setOverlaySlotContent(webContentsId: number, hasContent: boolean): void {
-    if (!overlayWin || overlayWin.isDestroyed() || overlayWin.webContents.id !== webContentsId) return;
+    const isNative =
+        isNativeLocked() && !!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId;
+    const isElectron =
+        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId;
+    if (!isNative && !isElectron) return;
     if (hasContent) {
         if (contentGraceTimer) {
             clearTimeout(contentGraceTimer);
@@ -210,7 +303,8 @@ export function setOverlaySlotContent(webContentsId: number, hasContent: boolean
         }
         if (!pageHasContent) {
             pageHasContent = true;
-            syncWindowVisibility(overlayWin);
+            if (isNative) syncNativeVisibility();
+            else if (overlayWin) syncWindowVisibility(overlayWin);
         }
         return;
     }
@@ -219,7 +313,8 @@ export function setOverlaySlotContent(webContentsId: number, hasContent: boolean
     contentGraceTimer = setTimeout(() => {
         contentGraceTimer = null;
         pageHasContent = false;
-        if (overlayWin && !overlayWin.isDestroyed()) syncWindowVisibility(overlayWin);
+        if (isNativeLocked() && osrWin && !osrWin.isDestroyed()) syncNativeVisibility();
+        else if (overlayWin && !overlayWin.isDestroyed()) syncWindowVisibility(overlayWin);
     }, EMPTY_HIDE_GRACE_MS);
 }
 
@@ -287,6 +382,11 @@ function armOverlayRenderer(win: BrowserWindow): void {
 export function healOverlayWindows(): void {
     if (userHidden || !getAppSettings().overlayEnabled) return;
     if (holdToShowActive() && !holdDown) return;
+    if (isNativeLocked()) {
+        // A dead presenter respawns here; the HUD repaints on reconnect.
+        if (nativeSurface && !nativeSurface.isLive()) nativeSurface.respawn();
+        return;
+    }
     if (!overlayWin || overlayWin.isDestroyed()) return;
     try {
         if (overlayWin.webContents.isCrashed()) reloadOverlayRenderer(overlayWin);
@@ -305,7 +405,11 @@ export function noteOverlayHeartbeat(
     webContentsId: number,
     beat: { frames: boolean; pageVisible: boolean }
 ): void {
-    if (!overlayWin || overlayWin.isDestroyed() || overlayWin.webContents.id !== webContentsId) return;
+    const isNative =
+        isNativeLocked() && !!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId;
+    const isElectron =
+        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId;
+    if (!isNative && !isElectron) return;
     const now = Date.now();
     const previous = overlayBeats.get(webContentsId);
     overlayBeats.set(webContentsId, {
@@ -322,6 +426,31 @@ export function noteOverlayHeartbeat(
  */
 function logOverlayHealth(): void {
     if (!matchActive) return;
+    if (isNativeLocked() && nativeSurface) {
+        const now = Date.now();
+        const stats = nativeSurface.stats();
+        const beat = osrWin ? overlayBeats.get(osrWin.webContents.id) : undefined;
+        const frameMs = stats.lastFrameAt === null ? null : now - stats.lastFrameAt;
+        const faults: string[] = [];
+        if (!stats.alive) faults.push('presenter-down');
+        if (stats.shown && frameMs !== null && frameMs > 30_000) faults.push('stale-frames');
+        const signature = `${stats.shown ? 1 : 0}:${stats.alive ? 1 : 0}:${faults.join('+')}`;
+        if (signature === lastHealthSignature && now - lastHealthLogAt < HEALTH_LOG_EVERY_MS) return;
+        lastHealthSignature = signature;
+        lastHealthLogAt = now;
+        overlayLog('health', {
+            backend: 'native',
+            visible: stats.shown,
+            presenterAlive: stats.alive,
+            frames: stats.frames,
+            framesDropped: stats.framesDropped,
+            frameMs,
+            beatMs: beat ? now - beat.at : null,
+            respawns: stats.respawns,
+            faults: faults.length ? faults.join('+') : 'none',
+        });
+        return;
+    }
     const win = overlayWin;
     if (!win || win.isDestroyed()) return;
     const now = Date.now();
@@ -366,6 +495,9 @@ function logOverlayHealth(): void {
 
 
 export function getOverlayWindowStats(): { windows: number; visible: number } {
+    if (isNativeLocked()) {
+        return { windows: 1, visible: nativeSurface && nativeSurface.isShown() ? 1 : 0 };
+    }
     const wins = overlayWindows();
     return { windows: wins.length, visible: wins.filter((w) => w.isVisible()).length };
 }
@@ -443,6 +575,13 @@ function getOverlayUrl(): string {
 }
 
 export function getOverlayWindow(): BrowserWindow | null {
+    // Native locked mode: the hidden Electron panel (if any) is not the
+    // surface — callers must see the OSR window or nothing.
+    if (isNativeLocked()) {
+        return osrWin && !osrWin.isDestroyed() ? osrWin : null;
+    }
+    if (overlayWin && !overlayWin.isDestroyed()) return overlayWin;
+    if (osrWin && !osrWin.isDestroyed()) return osrWin;
     return overlayWindows()[0] || null;
 }
 
@@ -522,8 +661,12 @@ function overlayDisplay(): Electron.Display {
  * layout changes — the new layout travels in the next meta broadcast.
  */
 function applyLockedBounds(): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
     const display = overlayDisplay();
+    if (isNativeLocked()) {
+        if (nativeSurface) nativeSurface.setBounds(display.bounds);
+        return;
+    }
+    if (!overlayWin || overlayWin.isDestroyed()) return;
     overlayWin.setBounds(display.bounds);
     overlayWin.setMovable(false);
 }
@@ -562,6 +705,7 @@ function loadSettings(): void {
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
             hudModules?: unknown;
+            overlayBackend?: unknown;
         };
         // Only override with saved values if user explicitly tuned after import
         // (preferLeagueCfg false). Default: keep League cfg values.
@@ -594,8 +738,16 @@ function loadSettings(): void {
         hudModules = normalizeHudModules(settings.hudModules);
         const savedLayout = (settings as { hudLayout?: unknown }).hudLayout;
         if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
+        // Backend: saved setting wins; else the packaged build's default
+        // (extraMetadata.overlayBackend — test builds stamp 'native'); else electron.
+        if (settings.overlayBackend === 'native' || settings.overlayBackend === 'electron') {
+            backend = settings.overlayBackend;
+        } else {
+            backend = readPackagedOverlayBackend() ?? 'electron';
+        }
     } catch {
         // No saved settings yet.
+        backend = readPackagedOverlayBackend() ?? 'electron';
     }
 }
 
@@ -623,6 +775,7 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
                 calibration,
                 hudModules,
                 hudLayout,
+                overlayBackend: backend,
                 preferLeagueCfg,
             }),
             'utf8'
@@ -657,7 +810,7 @@ export function syncScalesFromLeague(): {
         } catch {
             // ignore
         }
-        if (clickThrough && !alignMode && overlayWin && !overlayWin.isDestroyed()) {
+        if (clickThrough && !alignMode) {
             applyLockedBounds();
         }
         broadcastOverlayMeta();
@@ -698,15 +851,85 @@ export function onOverlayWindowCreated(listener: () => void): () => void {
     };
 }
 
+/**
+ * Native backend: create the offscreen renderer synchronously (callers need
+ * a BrowserWindow back immediately) and attach the presenter sidecar in the
+ * background. Frames start flowing once the pipe handshake completes.
+ */
+function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
+    electronSurfaceActive = false;
+    const bounds = display.bounds;
+    const win = createOsrWindow({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        scaleFactor: display.scaleFactor || 1,
+    });
+    osrWin = win;
+    pageHasContent = false;
+    overlayLog('created', { kind: 'main', backend: 'native' });
+    win.on('closed', () => {
+        forgetSlot(win.webContents.id);
+        if (osrWin === win) osrWin = null;
+        if (nativeSurface && nativeSurface.webContentsId === win.webContents.id) nativeSurface = null;
+    });
+    void attachNativeSurface(
+        win,
+        {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            scaleFactor: display.scaleFactor || 1,
+        },
+        {
+            captureProtection: getAppSettings().overlayHideFromCapture,
+            onLoaded: () => {
+                broadcastOverlayMeta();
+                for (const listener of overlayWindowCreatedListeners) {
+                    try {
+                        listener();
+                    } catch {
+                        // A listener must not break overlay startup.
+                    }
+                }
+            },
+            onDown: () => {
+                // Heal/respawn happens on the next keepOverlayOnTop poll.
+            },
+        }
+    )
+        .then((handle) => {
+            nativeSurface = handle;
+            syncNativeVisibility();
+        })
+        .catch((error: unknown) => {
+            console.warn('[overlay] presenter attach failed', error);
+            overlayLog('presenter-spawn-failed', { error: String(error) });
+        });
+    return win;
+}
+
 export function createOverlayWindow(): BrowserWindow {
-    if (overlayWin && !overlayWin.isDestroyed()) {
+    loadSettings();
+    // Backend-aware early return: in native locked mode the hidden Electron
+    // panel (kept for the next unlock) must not satisfy this check.
+    if (backend === 'native' && process.platform === 'win32' && clickThrough && !alignMode) {
+        if (osrWin && !osrWin.isDestroyed()) {
+            return osrWin;
+        }
+    } else if (overlayWin && !overlayWin.isDestroyed()) {
         return overlayWin;
     }
 
-    loadSettings();
     // Always re-read game.cfg on overlay create so frames match Interface scales
     syncScalesFromLeague();
     const display = screen.getPrimaryDisplay();
+
+    if (backend === 'native' && process.platform === 'win32' && clickThrough && !alignMode) {
+        return createNativeOverlayWindow(display);
+    }
 
     overlayWin = new BrowserWindow({
         width: 260,
@@ -807,6 +1030,12 @@ export function createOverlayWindow(): BrowserWindow {
  */
 export function keepOverlayOnTop(): void {
     if (userHidden) return;
+    if (isNativeLocked()) {
+        if (nativeSurface && !nativeSurface.isLive()) nativeSurface.respawn();
+        syncNativeVisibility();
+        logOverlayHealth();
+        return;
+    }
     for (const win of overlayWindows()) {
         try {
             syncWindowVisibility(win);
@@ -822,6 +1051,10 @@ export function showOverlay(): void {
     if (userHidden || !getAppSettings().overlayEnabled) return;
 
     const win = createOverlayWindow();
+    if (isNativeLocked()) {
+        syncNativeVisibility();
+        return;
+    }
     if (clickThrough && !alignMode) {
         applyLockedBounds();
         syncWindowVisibility(win);
@@ -836,6 +1069,12 @@ export function showOverlay(): void {
 }
 
 export function hideOverlay(): void {
+    if (isNativeLocked()) {
+        if (nativeSurface) nativeSurface.hide();
+        syncOverlayPaintBudget();
+        overlayLog('hide', { backend: 'native' });
+        return;
+    }
     const shown = overlayWindows().filter((win) => win.isVisible()).length;
     for (const win of overlayWindows()) {
         if (win.isVisible()) win.hide();
@@ -846,7 +1085,7 @@ export function hideOverlay(): void {
 }
 
 export function destroyOverlay(): void {
-    overlayLog('destroy', { windows: overlayWindows().length });
+    overlayLog('destroy', { windows: overlayWindows().length, backend: isNativeLocked() ? 'native' : 'electron' });
     if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
@@ -858,6 +1097,17 @@ export function destroyOverlay(): void {
     }
     pageHasContent = false;
     shownSince = null;
+    if (isNativeLocked() || nativeSurface || osrWin) {
+        if (nativeSurface) {
+            nativeSurface.destroy();
+            nativeSurface = null;
+        }
+        if (osrWin && !osrWin.isDestroyed()) {
+            osrWin.destroy();
+        }
+        osrWin = null;
+        electronSurfaceActive = false;
+    }
     if (overlayWin && !overlayWin.isDestroyed()) {
         overlayWin.destroy();
     }
@@ -921,6 +1171,32 @@ export function setClickThrough(enabled: boolean): void {
     const wasClickThrough = clickThrough;
     const wasAlign = alignMode;
     clickThrough = enabled;
+    if (backend === 'native' && process.platform === 'win32') {
+        if (enabled) {
+            // Re-locking: back to the native presenter. The Electron window
+            // is hidden, not destroyed — destroyOverlay stays the one place
+            // a surface is destroyed, and the panel is cheap to re-show.
+            alignMode = false;
+            electronSurfaceActive = false;
+            if (overlayWin && !overlayWin.isDestroyed()) {
+                if (!wasClickThrough && !wasAlign) {
+                    interactiveBounds = overlayWin.getBounds();
+                    saveSettings();
+                }
+                overlayWin.hide();
+            }
+            if (!osrWin || osrWin.isDestroyed()) createOverlayWindow();
+            syncNativeVisibility();
+            broadcastOverlayMeta();
+            return;
+        }
+        // Unlocking: the Electron compact panel is the surface.
+        electronSurfaceActive = true;
+        alignMode = false;
+        if (nativeSurface) nativeSurface.hide();
+        if (!overlayWin || overlayWin.isDestroyed()) createOverlayWindow();
+        // Fall through to the existing unlocked handling below.
+    }
     if (!overlayWin || overlayWin.isDestroyed()) return;
 
     if (enabled) {
@@ -968,6 +1244,17 @@ export function isAlignMode(): boolean {
 
 /** Fullscreen HUD/minimap guides for calibration — not the same as Unlock/Move. */
 export function setAlignMode(enabled: boolean): boolean {
+    if (backend === 'native' && process.platform === 'win32') {
+        // Align is always the Electron surface (guides need clicks).
+        electronSurfaceActive = true;
+        if (enabled) {
+            alignMode = true;
+            clickThrough = false;
+            if (nativeSurface) nativeSurface.hide();
+            if (!overlayWin || overlayWin.isDestroyed()) createOverlayWindow();
+        }
+        // Leaving align falls through to the existing compact-panel handling.
+    }
     if (!overlayWin || overlayWin.isDestroyed()) {
         alignMode = enabled;
         return alignMode;
@@ -1179,7 +1466,8 @@ export function overlaySlotFor(webContentsId: number): {
 } {
     const display = overlayDisplay();
     const isOverlay =
-        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId;
+        (!!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId) ||
+        (!!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId);
     return {
         slot: isOverlay ? currentSlot() : null,
         displayWidth: display.bounds.width,
@@ -1188,10 +1476,14 @@ export function overlaySlotFor(webContentsId: number): {
 }
 
 export function broadcastOverlayMeta(): void {
-    if (!overlayWin || overlayWin.isDestroyed()) return;
+    const native = isNativeLocked();
+    const win = native ? osrWin : overlayWin;
+    if (!win || win.isDestroyed()) return;
     const display = overlayDisplay();
-    overlayWin.webContents.send('overlay-meta', {
-        visible: !userHidden && overlayWin.isVisible(),
+    win.webContents.send('overlay-meta', {
+        visible: native
+            ? !userHidden && (nativeSurface?.isShown() ?? false)
+            : !userHidden && win.isVisible(),
         clickThrough,
         userHidden,
         hudScale,
@@ -1242,7 +1534,9 @@ export function sendOverlayUpdate(payload: unknown): void {
 
     for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
-        const isOverlay = overlayWindows().some((overlay) => overlay.id === win.id);
+        const isOverlay =
+            overlayWindows().some((overlay) => overlay.id === win.id) ||
+            (!!osrWin && !osrWin.isDestroyed() && osrWin.id === win.id);
         win.webContents.send('overlay-update', isOverlay ? full : slim);
     }
 }

@@ -1,0 +1,594 @@
+// Native overlay driver (native-overlay remake).
+//
+// Owns the offscreen Chromium renderer and the onetrick-presenter.exe
+// sidecar. The renderer paints the HUD into bitmaps; this module forwards
+// them over a named pipe; the presenter (a plain Win32 layered window)
+// puts them on screen. Chromium never owns an on-screen window in this
+// backend, so the DWM/MPO presentation path is out of the picture.
+//
+// One direction only: overlay-window.ts imports this module, never the
+// reverse (the overlay URL logic is duplicated here on purpose to avoid a
+// require cycle with overlay-window.ts).
+
+import { app, BrowserWindow } from 'electron';
+import { spawn, type ChildProcess } from 'child_process';
+import net from 'net';
+import path from 'path';
+import { overlayLog } from './overlay-log';
+import { nativePresenterPath } from './paths';
+
+export const PRESENTER_PIPE_NAME = '\\\\.\\pipe\\onetrick-presenter';
+export const PRESENTER_PROTOCOL_VERSION = 1;
+export const PRESENTER_MSG = {
+    HELLO: 1,
+    FRAME: 2,
+    SHOW: 3,
+    HIDE: 4,
+    CLICKTHROUGH: 5,
+    BOUNDS: 6,
+    CAPTURE: 7,
+    PING: 8,
+    READY: 101,
+    PONG: 102,
+    ERROR: 103,
+} as const;
+
+/** Pipe protocol message types (must match native/presenter/presenter.c). */
+const MSG_HELLO = PRESENTER_MSG.HELLO;
+const MSG_FRAME = PRESENTER_MSG.FRAME;
+const MSG_SHOW = PRESENTER_MSG.SHOW;
+const MSG_HIDE = PRESENTER_MSG.HIDE;
+const MSG_CLICKTHROUGH = PRESENTER_MSG.CLICKTHROUGH;
+const MSG_BOUNDS = PRESENTER_MSG.BOUNDS;
+const MSG_CAPTURE = PRESENTER_MSG.CAPTURE;
+const MSG_PING = PRESENTER_MSG.PING;
+const MSG_READY = PRESENTER_MSG.READY;
+const MSG_PONG = PRESENTER_MSG.PONG;
+const MSG_ERROR = PRESENTER_MSG.ERROR;
+
+const PROTOCOL_VERSION = PRESENTER_PROTOCOL_VERSION;
+/** Same HUD paint budget as the Electron overlay (12 fps shown). */
+const NATIVE_FRAME_RATE = 12;
+/** Stop forwarding paints while this many bytes are still queued. */
+const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
+const CONNECT_TIMEOUT_MS = 5_000;
+const READY_TIMEOUT_MS = 5_000;
+const PING_EVERY_MS = 5_000;
+const MAX_RESPAWNS_PER_MATCH = 2;
+/** Presenter-side sanity cap, mirrored here so a corrupt length never allocates blindly. */
+const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
+
+export interface NativeDisplay {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleFactor: number;
+}
+
+export interface NativeSurfaceOptions {
+    captureProtection: boolean;
+    onLoaded: () => void;
+    onDown: () => void;
+}
+
+export interface NativeSurfaceStats {
+    alive: boolean;
+    shown: boolean;
+    frames: number;
+    framesDropped: number;
+    lastFrameAt: number | null;
+    respawns: number;
+}
+
+export interface NativeSurfaceHandle {
+    webContentsId: number;
+    isLive(): boolean;
+    isShown(): boolean;
+    show(): void;
+    hide(): void;
+    setClickThrough(on: boolean): void;
+    setBounds(rect: { x: number; y: number; width: number; height: number }): void;
+    setCaptureProtection(on: boolean): void;
+    requestFullFrame(): void;
+    respawn(): void;
+    destroy(): void;
+    stats(): NativeSurfaceStats;
+}
+
+export function encodePresenterMessage(type: number, payload: Buffer): Buffer {
+    const header = Buffer.alloc(8);
+    header.writeUInt32LE(type, 0);
+    header.writeUInt32LE(payload.length, 4);
+    return Buffer.concat([header, payload]);
+}
+
+/** Streaming parser for presenter replies. Tolerates split deliveries. */
+export function createPresenterMessageParser(
+    onMessage: (type: number, payload: Buffer) => void
+): { push(chunk: Buffer): void } {
+    let buffer = Buffer.alloc(0);
+    return {
+        push(chunk: Buffer): void {
+            buffer = Buffer.concat([buffer, chunk]);
+            while (buffer.length >= 8) {
+                const type = buffer.readUInt32LE(0);
+                const len = buffer.readUInt32LE(4);
+                if (len > MAX_MESSAGE_BYTES) {
+                    throw new Error(`presenter message too large: ${len} bytes`);
+                }
+                if (buffer.length < 8 + len) return;
+                const payload = buffer.subarray(8, 8 + len);
+                buffer = buffer.subarray(8 + len);
+                onMessage(type, payload);
+            }
+        },
+    };
+}
+
+function encodeMessage(type: number, payload: Buffer): Buffer {
+    return encodePresenterMessage(type, payload);
+}
+
+function encodeU32s(values: number[]): Buffer {
+    const buf = Buffer.alloc(values.length * 4);
+    values.forEach((v, i) => buf.writeUInt32LE(v >>> 0, i * 4));
+    return buf;
+}
+
+/**
+ * Overlay page URL. Duplicated from overlay-window.ts (same rules) so this
+ * module stays importable without a require cycle.
+ */
+function getOverlayUrl(): string {
+    const devUrl = process.env['VITE_DEV_SERVER_URL'];
+    if (devUrl) return `${devUrl.replace(/\/$/, '')}/overlay.html`;
+    if (!app.isPackaged) return 'http://localhost:5173/overlay.html';
+    return path.join(process.env.DIST || '', 'overlay.html');
+}
+
+function connectPipe(): Promise<net.Socket> {
+    return new Promise((resolve, reject) => {
+        const started = Date.now();
+        const attempt = (): void => {
+            const socket = net.createConnection(PRESENTER_PIPE_NAME);
+            socket.once('connect', () => resolve(socket));
+            socket.once('error', (error: unknown) => {
+                socket.destroy();
+                if (Date.now() - started > CONNECT_TIMEOUT_MS) {
+                    reject(error instanceof Error ? error : new Error(String(error)));
+                    return;
+                }
+                setTimeout(attempt, 250);
+            });
+        };
+        attempt();
+    });
+}
+
+class NativeSurface implements NativeSurfaceHandle {
+    readonly webContentsId: number;
+    private osrWin: BrowserWindow;
+    private display: NativeDisplay;
+    private scaleFactor: number;
+    private child: ChildProcess | null = null;
+    private socket: net.Socket | null = null;
+    private parser = createPresenterMessageParser((type, payload) => this.onReply(type, payload));
+    private readyWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
+    private alive = false;
+    private shown = false;
+    private destroyed = false;
+    private frames = 0;
+    private framesDropped = 0;
+    private lastFrameAt: number | null = null;
+    private respawns = 0;
+    private queuedBytes = 0;
+    private needsFullFrame = false;
+    private pingTimer: ReturnType<typeof setInterval> | null = null;
+    private lastReloadAt = 0;
+    private onLoaded: () => void;
+    private onDown: () => void;
+    private captureProtection: boolean;
+
+    constructor(osrWin: BrowserWindow, display: NativeDisplay, opts: NativeSurfaceOptions) {
+        this.osrWin = osrWin;
+        this.webContentsId = osrWin.webContents.id;
+        this.display = display;
+        this.scaleFactor = display.scaleFactor || 1;
+        this.onLoaded = opts.onLoaded;
+        this.onDown = opts.onDown;
+        this.captureProtection = opts.captureProtection;
+    }
+
+    isLive(): boolean {
+        return this.alive && !!this.socket && !this.socket.destroyed && !!this.child && !this.child.killed;
+    }
+
+    isShown(): boolean {
+        return this.shown;
+    }
+
+    stats(): NativeSurfaceStats {
+        return {
+            alive: this.isLive(),
+            shown: this.shown,
+            frames: this.frames,
+            framesDropped: this.framesDropped,
+            lastFrameAt: this.lastFrameAt,
+            respawns: this.respawns,
+        };
+    }
+
+    private send(type: number, payload: Buffer): boolean {
+        if (!this.socket || this.socket.destroyed) return false;
+        const message = encodeMessage(type, payload);
+        this.queuedBytes += message.length;
+        const flushed = this.socket.write(message, () => {
+            this.queuedBytes = Math.max(0, this.queuedBytes - message.length);
+        });
+        void flushed;
+        return true;
+    }
+
+    private physicalWidth(): number {
+        return Math.max(1, Math.round(this.display.width * this.scaleFactor));
+    }
+
+    private physicalHeight(): number {
+        return Math.max(1, Math.round(this.display.height * this.scaleFactor));
+    }
+
+    private physicalRect(rect: { x: number; y: number; width: number; height: number }): {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } {
+        return {
+            x: Math.round(rect.x * this.scaleFactor),
+            y: Math.round(rect.y * this.scaleFactor),
+            width: Math.round(rect.width * this.scaleFactor),
+            height: Math.round(rect.height * this.scaleFactor),
+        };
+    }
+
+    async start(): Promise<void> {
+        await this.spawnAndConnect();
+        this.armRenderer();
+        this.osrWin.webContents.on('did-finish-load', () => {
+            try {
+                this.osrWin.webContents.startPainting();
+            } catch {
+                // Older Electron — painting starts on load.
+            }
+            this.requestFullFrame();
+            this.onLoaded();
+        });
+        this.osrWin.webContents.on('paint', (_event, dirtyRect, image) => {
+            this.forwardPaint(dirtyRect, image);
+        });
+        const url = getOverlayUrl();
+        const load = url.startsWith('http') ? this.osrWin.loadURL(url) : this.osrWin.loadFile(url);
+        void load.catch((error: unknown) => {
+            console.warn('[presenter] overlay load failed', error);
+            overlayLog('presenter-load-failed', { error: String(error) });
+        });
+        this.pingTimer = setInterval(() => {
+            if (this.destroyed) return;
+            if (!this.isLive()) {
+                this.markDown('ping-no-live-presenter');
+                return;
+            }
+            this.send(MSG_PING, Buffer.alloc(0));
+        }, PING_EVERY_MS);
+    }
+
+    private async spawnAndConnect(): Promise<void> {
+        const exe = nativePresenterPath();
+        this.child = spawn(exe, [], { windowsHide: true });
+        this.child.on('error', (error: unknown) => {
+            console.warn('[presenter] spawn failed', error);
+            overlayLog('presenter-spawn-failed', { error: String(error) });
+            this.markDown('spawn-failed');
+        });
+        this.child.on('exit', (code) => {
+            overlayLog('presenter-exited', { code });
+            this.markDown('child-exited');
+        });
+        this.socket = await connectPipe();
+        this.socket.on('data', (chunk: Buffer) => {
+            try {
+                this.parser.push(chunk);
+            } catch (error) {
+                console.warn('[presenter] parser error', error);
+                this.markDown('parser-error');
+            }
+        });
+        this.socket.on('close', () => this.markDown('pipe-closed'));
+        this.socket.on('error', (error: unknown) => {
+            console.warn('[presenter] pipe error', error);
+            this.markDown('pipe-error');
+        });
+        const ready = new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.readyWaiter = null;
+                reject(new Error('presenter READY timeout'));
+            }, READY_TIMEOUT_MS);
+            this.readyWaiter = {
+                resolve: () => {
+                    clearTimeout(timer);
+                    resolve();
+                },
+                reject: (error: Error) => {
+                    clearTimeout(timer);
+                    reject(error);
+                },
+            };
+        });
+        const hello = encodeU32s([PROTOCOL_VERSION, this.physicalWidth(), this.physicalHeight()]);
+        this.send(MSG_HELLO, hello);
+        await ready;
+        this.alive = true;
+        this.send(MSG_CAPTURE, Buffer.from([this.captureProtection ? 1 : 0]));
+        this.send(MSG_CLICKTHROUGH, Buffer.from([1]));
+        if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
+        overlayLog('presenter-spawned', {
+            width: this.physicalWidth(),
+            height: this.physicalHeight(),
+        });
+        // First paint after connect is the full frame.
+        this.requestFullFrame();
+    }
+
+    private onReply(type: number, payload: Buffer): void {
+        if (type === MSG_PONG) return; // Liveness reply; nothing to do.
+        if (type === MSG_READY) {
+            if (this.readyWaiter) {
+                const waiter = this.readyWaiter;
+                this.readyWaiter = null;
+                waiter.resolve();
+            }
+            return;
+        }
+        if (type === MSG_ERROR) {
+            const message = payload.toString('utf8');
+            console.warn('[presenter] presenter error:', message);
+            overlayLog('presenter-error', { message });
+            if (this.readyWaiter) {
+                const waiter = this.readyWaiter;
+                this.readyWaiter = null;
+                waiter.reject(new Error(`presenter error: ${message}`));
+            }
+        }
+        // PONG needs no action here.
+    }
+
+    private markDown(reason: string): void {
+        if (!this.alive && !this.socket) return;
+        const wasAlive = this.alive;
+        this.alive = false;
+        if (this.socket) {
+            try {
+                this.socket.destroy();
+            } catch {
+                // ignore
+            }
+            this.socket = null;
+        }
+        if (wasAlive) {
+            overlayLog('presenter-down', { reason });
+            this.onDown();
+        }
+    }
+
+    private forwardPaint(
+        dirtyRect: { x: number; y: number; width: number; height: number },
+        image: Electron.NativeImage
+    ): void {
+        if (this.destroyed || !this.isLive()) {
+            this.framesDropped++;
+            return;
+        }
+        if (this.queuedBytes > MAX_QUEUED_BYTES) {
+            this.needsFullFrame = true;
+            this.framesDropped++;
+            return;
+        }
+        const size = image.getSize();
+        const bytes = image.toBitmap();
+        if (bytes.length !== size.width * size.height * 4) {
+            // Bitmap does not match its own dimensions — never send a corrupt frame.
+            this.framesDropped++;
+            return;
+        }
+        const rect = this.physicalRect(dirtyRect);
+        // The bitmap defines the frame: its pixel size wins over the scaled rect.
+        const header = encodeU32s([rect.x, rect.y, size.width, size.height]);
+        if (!this.send(MSG_FRAME, Buffer.concat([header, bytes]))) {
+            this.framesDropped++;
+            return;
+        }
+        this.frames++;
+        this.lastFrameAt = Date.now();
+        if (this.needsFullFrame) {
+            this.needsFullFrame = false;
+            this.requestFullFrame();
+        }
+    }
+
+    requestFullFrame(): void {
+        if (this.destroyed || this.osrWin.isDestroyed()) return;
+        try {
+            this.osrWin.webContents.invalidate();
+        } catch {
+            // Renderer not ready yet — the next paint covers it.
+        }
+    }
+
+    show(): void {
+        this.shown = true;
+        if (this.isLive()) {
+            this.send(MSG_SHOW, Buffer.alloc(0));
+            this.requestFullFrame();
+        }
+    }
+
+    hide(): void {
+        this.shown = false;
+        if (this.isLive()) this.send(MSG_HIDE, Buffer.alloc(0));
+    }
+
+    setClickThrough(on: boolean): void {
+        if (this.isLive()) this.send(MSG_CLICKTHROUGH, Buffer.from([on ? 1 : 0]));
+    }
+
+    setBounds(rect: { x: number; y: number; width: number; height: number }): void {
+        const physical = this.physicalRect(rect);
+        this.display = { ...rect, scaleFactor: this.scaleFactor };
+        if (this.isLive()) {
+            this.send(MSG_BOUNDS, encodeU32s([physical.x, physical.y, physical.width, physical.height]));
+            this.requestFullFrame();
+        }
+    }
+
+    setCaptureProtection(on: boolean): void {
+        this.captureProtection = on;
+        if (this.isLive()) this.send(MSG_CAPTURE, Buffer.from([on ? 1 : 0]));
+    }
+
+    respawn(): void {
+        if (this.destroyed || this.osrWin.isDestroyed()) return;
+        if (this.respawns >= MAX_RESPAWNS_PER_MATCH) {
+            overlayLog('presenter-down', { reason: 'respawn-budget-spent', respawns: this.respawns });
+            return;
+        }
+        this.respawns++;
+        overlayLog('presenter-respawned', { attempt: this.respawns });
+        void this.spawnAndConnect()
+            .then(() => {
+                if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
+                this.requestFullFrame();
+            })
+            .catch((error: unknown) => {
+                console.warn('[presenter] respawn failed', error);
+                overlayLog('presenter-spawn-failed', { error: String(error), respawn: true });
+            });
+    }
+
+    private armRenderer(): void {
+        const contents = this.osrWin.webContents;
+        const reload = (): void => {
+            const now = Date.now();
+            if (now - this.lastReloadAt < 5_000) return;
+            this.lastReloadAt = now;
+            const url = getOverlayUrl();
+            const load = url.startsWith('http') ? this.osrWin.loadURL(url) : this.osrWin.loadFile(url);
+            void load.catch((error: unknown) => {
+                console.warn('[presenter] overlay reload failed', error);
+            });
+            overlayLog('presenter-renderer-reload', {});
+        };
+        contents.on('render-process-gone', (_event, details) => {
+            overlayLog('presenter-renderer-exited', {
+                reason: details?.reason ?? 'unknown',
+                exitCode: details?.exitCode ?? null,
+            });
+            reload();
+        });
+        contents.on('unresponsive', () => {
+            overlayLog('presenter-renderer-unresponsive', {});
+            reload();
+        });
+        contents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+            if (!isMainFrame || errorCode === -3) return;
+            overlayLog('presenter-load-failed', { errorCode, errorDescription });
+            reload();
+        });
+    }
+
+    destroy(): void {
+        this.destroyed = true;
+        this.alive = false;
+        if (this.pingTimer) {
+            clearInterval(this.pingTimer);
+            this.pingTimer = null;
+        }
+        if (this.socket) {
+            try {
+                this.socket.destroy();
+            } catch {
+                // ignore
+            }
+            this.socket = null;
+        }
+        if (this.child) {
+            try {
+                this.child.kill();
+            } catch {
+                // ignore
+            }
+            this.child = null;
+        }
+        if (!this.osrWin.isDestroyed()) {
+            try {
+                this.osrWin.destroy();
+            } catch {
+                // ignore
+            }
+        }
+    }
+}
+
+/** Create the offscreen renderer window (synchronous; the presenter attaches after). */
+export function createOsrWindow(display: NativeDisplay): BrowserWindow {
+    const osrWin = new BrowserWindow({
+        width: Math.max(1, Math.round(display.width)),
+        height: Math.max(1, Math.round(display.height)),
+        x: Math.round(display.x),
+        y: Math.round(display.y),
+        show: false,
+        frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        skipTaskbar: true,
+        resizable: false,
+        movable: false,
+        focusable: false,
+        hasShadow: false,
+        fullscreenable: false,
+        roundedCorners: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            offscreen: true,
+            backgroundThrottling: false,
+        },
+    });
+    try {
+        osrWin.webContents.setBackgroundThrottling(false);
+    } catch {
+        // Older Electron — the webPreference already covers it.
+    }
+    osrWin.webContents.setFrameRate(NATIVE_FRAME_RATE);
+    return osrWin;
+}
+
+/** Attach the presenter sidecar to an offscreen window created by createOsrWindow. */
+export async function attachNativeSurface(
+    osrWin: BrowserWindow,
+    display: NativeDisplay,
+    opts: NativeSurfaceOptions
+): Promise<NativeSurfaceHandle> {
+    const surface = new NativeSurface(osrWin, display, opts);
+    await surface.start();
+    return surface;
+}
+
+export async function createNativeSurface(
+    display: NativeDisplay,
+    opts: NativeSurfaceOptions
+): Promise<NativeSurfaceHandle> {
+    const osrWin = createOsrWindow(display);
+    return attachNativeSurface(osrWin, display, opts);
+}
