@@ -109,6 +109,40 @@ html.overlay-root .hud-chip.is-down {
   color: var(--ov-text);
 }
 
+/* Cooldown hierarchy: Flash dominates, others recede; "soon" is amber; the
+   2px bar is the share of the cooldown still left (static width, no motion). */
+html.overlay-root .hud-chip {
+  position: relative;
+  overflow: hidden;
+}
+html.overlay-root .hud-chip.hud-chip--primary {
+  font-size: 13px !important;
+  font-weight: 700;
+  padding: 4px 10px !important;
+}
+html.overlay-root .hud-chip.hud-chip--secondary {
+  font-size: 11.5px !important;
+  font-weight: 500;
+}
+html.overlay-root .hud-chip.hud-chip--secondary.hud-chip--ready {
+  opacity: 0.72;
+}
+html.overlay-root .hud-chip.hud-chip--soon {
+  border-color: rgba(242, 179, 80, 0.75);
+  background: rgba(242, 179, 80, 0.18);
+  color: var(--ov-amber);
+}
+html.overlay-root .hud-chip .hud-chip-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(240, 101, 106, 0.85);
+}
+html.overlay-root .hud-chip.hud-chip--soon .hud-chip-fill {
+  background: var(--ov-amber);
+}
+
 html.overlay-root .font-mono {
   font-family: var(--font-body);
   letter-spacing: 0.02em;
