@@ -307,11 +307,15 @@ html.overlay-root .hud-buy-step-num {
   border: 1px solid rgba(212, 216, 222, 0.45);
   border-radius: 3px;
 }
+html.overlay-root .hud-buy-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
 html.overlay-root .hud-buy-next-tag {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 50%;
-  transform: translateX(-50%);
+  position: static;
+  flex: none;
   padding: 2px 4px;
   font-family: var(--font-mono);
   font-size: calc(7px * var(--ov-fs));

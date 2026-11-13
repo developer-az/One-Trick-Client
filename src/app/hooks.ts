@@ -488,7 +488,7 @@ export function appearanceCssMap(app: AppearanceSettings): {
 
 /** Apply appearance to the app root so token.css/theme.css react immediately. */
 export function applyAppearance(settings: AppSettings | null): void {
-  if (!settings || typeof document === 'undefined') return;
+  if (!settings || !settings.appearance || typeof document === 'undefined') return;
   const root = document.documentElement;
   const css = appearanceCssMap(settings.appearance);
   for (const [key, value] of Object.entries(css.attributes)) root.setAttribute(key, value);
