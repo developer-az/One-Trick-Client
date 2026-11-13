@@ -102,8 +102,8 @@ async function run(): Promise<void> {
         'late clock write is guarded by the generation check'
     );
     ok(
-        ssSource.includes('if (board && stateBoardGenerationValid(generationAtPollStart)) {'),
-        'late board write is guarded by the generation check'
+        ssSource.includes('if (!stateBoardGenerationValid(generationAtPollStart)) return null;'),
+        'stale poll returns null before reaching the engine'
     );
     ok(
         ssSource.includes('export function clearStateBoard(): void {') &&

@@ -269,9 +269,10 @@ async function fetchBoardParts(): Promise<LiveBoardLike | null> {
     // the board the rest of the app already consumes. The assertion is purely a
     // type-level one: `mergeLiveBoard` is typed against the structural
     // `LiveBoardLike` so it stays Electron-free and unit-testable.
-    if (board && stateBoardGenerationValid(generationAtPollStart)) {
-        lastBoard = board as LiveClientAllGameData;
-    }
+    // A poll invalidated by clearStateBoard()/resetStateService() while awaiting HTTP
+    // belongs to an ended match: neither cache it nor hand it to the engine.
+    if (!stateBoardGenerationValid(generationAtPollStart)) return null;
+    if (board) lastBoard = board as LiveClientAllGameData;
     return board;
 }
 
@@ -465,6 +466,7 @@ export function onGameState(
  * game's EventIDs (which restart at 0) can never be mistaken for old ones.
  */
 export function resetStateService(reason = 'match start'): void {
+    boardGeneration += 1;
     lastBoard = null;
     lastClock = null;
     lastPlayers = null;
