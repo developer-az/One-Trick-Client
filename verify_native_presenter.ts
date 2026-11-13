@@ -65,7 +65,7 @@ ok(driver.includes("webContents.on('paint'"), 'driver forwards paint events');
 ok(driver.includes('toBitmap()'), 'driver ships paint bitmaps to the presenter');
 ok(driver.includes('setFrameRate(12)') || driver.includes('NATIVE_FRAME_RATE'), 'driver caps paint rate at the 12 fps HUD budget');
 ok(driver.includes('PRESENTER_PIPE_NAME') || driver.includes('onetrick-presenter'), 'driver connects on the presenter pipe');
-ok(driver.includes('MAX_RESPAWNS_PER_MATCH'), 'driver caps presenter respawns per match');
+ok(driver.includes('PresenterSupervisor'), 'driver supervises presenter respawns (in-flight guard, backoff, fallback)');
 ok(driver.includes('respawn'), 'driver can respawn a dead presenter');
 ok(!driver.includes('setAlwaysOnTop'), 'driver never asserts always-on-top — the presenter owns its z-order');
 

@@ -88,9 +88,18 @@ ok(
     destroyFnStart !== -1 && destroyFnEnd > destroyFnStart,
     'destroyOverlay is followed by toggleOverlayVisibility (destroy check anchor)'
 );
-const beforeDestroy = ow.slice(0, destroyFnStart);
-const destroyBody = ow.slice(destroyFnStart, destroyFnEnd);
-const afterDestroy = ow.slice(destroyFnEnd);
+// Deliberate exception (presenter fallback, 2026-11-12): when the native
+// presenter cannot be kept alive, handleNativeFallback tears down the native
+// surface once and switches to the Electron window. Nothing else may.
+const fbStart = ow.indexOf('function handleNativeFallback');
+ok(fbStart !== -1, 'handleNativeFallback exists (the one sanctioned destroy outside destroyOverlay)');
+const fbEnd = fbStart === -1 ? -1 : ow.indexOf('\n}\n', fbStart) + 3;
+const owSansFallback = fbStart === -1 ? ow : ow.slice(0, fbStart) + ow.slice(fbEnd);
+const fallbackBody = fbStart === -1 ? '' : ow.slice(fbStart, fbEnd);
+ok(!fallbackBody.includes('saveSettings(') && !fallbackBody.includes('setOverlayBackend('), 'fallback never persists the backend choice');
+const beforeDestroy = owSansFallback.slice(0, owSansFallback.indexOf('export function destroyOverlay'));
+const destroyBody = owSansFallback.slice(owSansFallback.indexOf('export function destroyOverlay'), owSansFallback.indexOf('export function toggleOverlayVisibility'));
+const afterDestroy = owSansFallback.slice(owSansFallback.indexOf('export function toggleOverlayVisibility'));
 ok(!beforeDestroy.includes('.destroy()'), 'no .destroy() before destroyOverlay');
 ok(!afterDestroy.includes('.destroy()'), 'no .destroy() after destroyOverlay');
 ok(

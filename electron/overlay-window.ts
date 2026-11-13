@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, powerMonitor, screen } from 'electron';
 import { userDataDir } from './paths';
 import fs from 'fs';
 import path from 'path';
@@ -42,6 +42,10 @@ let osrWin: BrowserWindow | null = null;
 let nativeSurface: NativeSurfaceHandle | null = null;
 /** Native backend + unlocked/align: the Electron window is the surface. */
 let electronSurfaceActive = false;
+/** One fallback per process is enough; the log keeps the reason. */
+let fallbackCount = 0;
+let nativeWatchersInstalled = false;
+let nativeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** The native surface presents locked mode. Anything else is the Electron window. */
 function isNativeLocked(): boolean {
@@ -447,6 +451,7 @@ function logOverlayHealth(): void {
             frameMs,
             beatMs: beat ? now - beat.at : null,
             respawns: stats.respawns,
+            fallbacks: stats.fallbacks,
             faults: faults.length ? faults.join('+') : 'none',
         });
         return;
@@ -489,6 +494,7 @@ function logOverlayHealth(): void {
         beatMs: beat ? now - beat.at : null,
         frameMs: beat?.frameAt != null ? now - beat.frameAt : null,
         page: beat ? (beat.pageVisible ? 'visible' : 'hidden') : 'unknown',
+        fallbacks: fallbackCount,
         faults: faults.length ? faults.join('+') : 'none',
     });
 }
@@ -856,7 +862,57 @@ export function onOverlayWindowCreated(listener: () => void): () => void {
  * a BrowserWindow back immediately) and attach the presenter sidecar in the
  * background. Frames start flowing once the pipe handshake completes.
  */
+function installNativeWatchers(): void {
+    if (nativeWatchersInstalled) return;
+    nativeWatchersInstalled = true;
+    const onDisplayChange = (): void => {
+        if (!isNativeLocked() || !nativeSurface) return;
+        const display = screen.getPrimaryDisplay();
+        nativeSurface.setDisplay({
+            x: display.bounds.x,
+            y: display.bounds.y,
+            width: display.bounds.width,
+            height: display.bounds.height,
+            scaleFactor: display.scaleFactor || 1,
+        });
+    };
+    screen.on('display-metrics-changed', onDisplayChange);
+    screen.on('display-added', onDisplayChange);
+    screen.on('display-removed', onDisplayChange);
+    const refreshAfterWake = (): void => {
+        if (nativeRefreshTimer) clearTimeout(nativeRefreshTimer);
+        nativeRefreshTimer = setTimeout(() => {
+            nativeRefreshTimer = null;
+            if (!isNativeLocked() || !nativeSurface) return;
+            nativeSurface.refresh();
+        }, 1_500);
+    };
+    powerMonitor.on('resume', refreshAfterWake);
+    powerMonitor.on('unlock-screen', refreshAfterWake);
+}
+
+function handleNativeFallback(reason: string): void {
+    if (backend !== 'native') return;
+    overlayLog('backend-fallback', { reason });
+    backend = 'electron';
+    fallbackCount += 1;
+    if (nativeSurface) {
+        nativeSurface.destroy();
+        nativeSurface = null;
+    } else if (osrWin && !osrWin.isDestroyed()) {
+        osrWin.destroy();
+    }
+    osrWin = null;
+    electronSurfaceActive = false;
+    if (!userHidden && getAppSettings().overlayEnabled) {
+        createOverlayWindow();
+        showOverlay();
+    }
+    broadcastOverlayMeta();
+}
+
 function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
+    installNativeWatchers();
     electronSurfaceActive = false;
     const bounds = display.bounds;
     const win = createOsrWindow({
@@ -898,6 +954,7 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
             onDown: () => {
                 // Heal/respawn happens on the next keepOverlayOnTop poll.
             },
+            onFallback: (reason) => handleNativeFallback(reason),
         }
     )
         .then((handle) => {
@@ -907,6 +964,7 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
         .catch((error: unknown) => {
             console.warn('[overlay] presenter attach failed', error);
             overlayLog('presenter-spawn-failed', { error: String(error) });
+            handleNativeFallback(`attach-failed: ${String(error)}`);
         });
     return win;
 }

@@ -17,6 +17,7 @@ import path from 'path';
 import { overlayLog } from './overlay-log';
 import { nativePresenterPath } from './paths';
 import { cropDirtyRect } from './presenter-frame';
+import { PresenterSupervisor } from './presenter-supervisor';
 
 export const PRESENTER_PIPE_NAME = '\\\\.\\pipe\\onetrick-presenter';
 export const PRESENTER_PROTOCOL_VERSION = 1;
@@ -55,7 +56,7 @@ const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 5_000;
 const READY_TIMEOUT_MS = 5_000;
 const PING_EVERY_MS = 5_000;
-const MAX_RESPAWNS_PER_MATCH = 2;
+const CHILD_EXIT_TIMEOUT_MS = 1_500;
 /** Presenter-side sanity cap, mirrored here so a corrupt length never allocates blindly. */
 const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
 
@@ -71,6 +72,7 @@ export interface NativeSurfaceOptions {
     captureProtection: boolean;
     onLoaded: () => void;
     onDown: () => void;
+    onFallback: (reason: string) => void;
 }
 
 export interface NativeSurfaceStats {
@@ -80,6 +82,7 @@ export interface NativeSurfaceStats {
     framesDropped: number;
     lastFrameAt: number | null;
     respawns: number;
+    fallbacks: number;
 }
 
 export interface NativeSurfaceHandle {
@@ -90,9 +93,12 @@ export interface NativeSurfaceHandle {
     hide(): void;
     setClickThrough(on: boolean): void;
     setBounds(rect: { x: number; y: number; width: number; height: number }): void;
+    setDisplay(display: NativeDisplay): void;
     setCaptureProtection(on: boolean): void;
     requestFullFrame(): void;
+    refresh(): void;
     respawn(): void;
+    fellBack(): boolean;
     destroy(): void;
     stats(): NativeSurfaceStats;
 }
@@ -182,13 +188,18 @@ class NativeSurface implements NativeSurfaceHandle {
     private frames = 0;
     private framesDropped = 0;
     private lastFrameAt: number | null = null;
-    private respawns = 0;
     private queuedBytes = 0;
     private needsFullFrame = false;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private lastReloadAt = 0;
+    private supervisor = new PresenterSupervisor();
+    private spawning: Promise<void> | null = null;
+    private fallbackNotified = false;
+    private downNoted = false;
+    private instance = 0;
     private onLoaded: () => void;
     private onDown: () => void;
+    private onFallback: (reason: string) => void;
     private captureProtection: boolean;
 
     constructor(osrWin: BrowserWindow, display: NativeDisplay, opts: NativeSurfaceOptions) {
@@ -198,6 +209,7 @@ class NativeSurface implements NativeSurfaceHandle {
         this.scaleFactor = display.scaleFactor || 1;
         this.onLoaded = opts.onLoaded;
         this.onDown = opts.onDown;
+        this.onFallback = opts.onFallback;
         this.captureProtection = opts.captureProtection;
     }
 
@@ -216,7 +228,8 @@ class NativeSurface implements NativeSurfaceHandle {
             frames: this.frames,
             framesDropped: this.framesDropped,
             lastFrameAt: this.lastFrameAt,
-            respawns: this.respawns,
+            respawns: this.supervisor.snapshot().respawns,
+            fallbacks: this.fallbackNotified ? 1 : 0,
         };
     }
 
@@ -254,7 +267,17 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     async start(): Promise<void> {
-        await this.spawnAndConnect();
+        const initial = this.spawnAndConnect();
+        this.spawning = initial;
+        try {
+            await initial;
+        } catch (error) {
+            // The renderer still arms; respawn() ticks retry with backoff.
+            console.warn('[presenter] initial presenter attach failed', error);
+            overlayLog('presenter-spawn-failed', { error: String(error), initial: true });
+        } finally {
+            if (this.spawning === initial) this.spawning = null;
+        }
         this.armRenderer();
         this.osrWin.webContents.on('did-finish-load', () => {
             try {
@@ -276,6 +299,7 @@ class NativeSurface implements NativeSurfaceHandle {
         });
         this.pingTimer = setInterval(() => {
             if (this.destroyed) return;
+            if (this.spawning !== null) return;
             if (!this.isLive()) {
                 this.markDown('ping-no-live-presenter');
                 return;
@@ -285,54 +309,94 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     private async spawnAndConnect(): Promise<void> {
+        this.downNoted = false;
+        this.instance += 1;
+        const token = this.instance;
+        this.supervisor.noteStarting(Date.now());
+        this.parser = createPresenterMessageParser((type, payload) => this.onReply(type, payload));
         const exe = nativePresenterPath();
-        this.child = spawn(exe, [], { windowsHide: true });
-        this.child.on('error', (error: unknown) => {
+        let child: ChildProcess;
+        try {
+            child = spawn(exe, [], { windowsHide: true });
+        } catch (error) {
+            this.markDown('spawn-failed');
+            throw error;
+        }
+        this.child = child;
+        child.on('error', (error: unknown) => {
+            if (token !== this.instance) return;
             console.warn('[presenter] spawn failed', error);
             overlayLog('presenter-spawn-failed', { error: String(error) });
             this.markDown('spawn-failed');
         });
-        this.child.on('exit', (code) => {
+        child.on('exit', (code) => {
+            if (token !== this.instance) return;
             overlayLog('presenter-exited', { code });
             this.markDown('child-exited');
         });
-        this.socket = await connectPipe();
-        this.socket.on('data', (chunk: Buffer) => {
-            try {
-                this.parser.push(chunk);
-            } catch (error) {
-                console.warn('[presenter] parser error', error);
-                this.markDown('parser-error');
+        try {
+            const socket = await connectPipe();
+            if (token !== this.instance || this.destroyed) {
+                socket.destroy();
+                throw new Error('presenter spawn cancelled');
             }
-        });
-        this.socket.on('close', () => this.markDown('pipe-closed'));
-        this.socket.on('error', (error: unknown) => {
-            console.warn('[presenter] pipe error', error);
-            this.markDown('pipe-error');
-        });
-        const ready = new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(() => {
-                this.readyWaiter = null;
-                reject(new Error('presenter READY timeout'));
-            }, READY_TIMEOUT_MS);
-            this.readyWaiter = {
-                resolve: () => {
-                    clearTimeout(timer);
-                    resolve();
-                },
-                reject: (error: Error) => {
-                    clearTimeout(timer);
-                    reject(error);
-                },
-            };
-        });
-        const hello = encodeU32s([PROTOCOL_VERSION, this.physicalWidth(), this.physicalHeight()]);
-        this.send(MSG_HELLO, hello);
-        await ready;
+            this.socket = socket;
+            socket.on('data', (chunk: Buffer) => {
+                if (token !== this.instance) return;
+                try {
+                    this.parser.push(chunk);
+                } catch (error) {
+                    console.warn('[presenter] parser error', error);
+                    this.markDown('parser-error');
+                }
+            });
+            socket.on('close', () => {
+                if (token !== this.instance) return;
+                this.markDown('pipe-closed');
+            });
+            socket.on('error', (error: unknown) => {
+                if (token !== this.instance) return;
+                console.warn('[presenter] pipe error', error);
+                this.markDown('pipe-error');
+            });
+            const ready = new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    this.readyWaiter = null;
+                    reject(new Error('presenter READY timeout'));
+                }, READY_TIMEOUT_MS);
+                this.readyWaiter = {
+                    resolve: () => {
+                        clearTimeout(timer);
+                        resolve();
+                    },
+                    reject: (error: Error) => {
+                        clearTimeout(timer);
+                        reject(error);
+                    },
+                };
+            });
+            const hello = encodeU32s([PROTOCOL_VERSION, this.physicalWidth(), this.physicalHeight()]);
+            this.send(MSG_HELLO, hello);
+            await ready;
+        } catch (error) {
+            if (token === this.instance) this.markDown('spawn-connect-failed');
+            throw error;
+        }
+        if (token !== this.instance || this.destroyed) {
+            throw new Error('presenter spawn cancelled');
+        }
         this.alive = true;
+        this.supervisor.noteReady(Date.now());
         this.send(MSG_CAPTURE, Buffer.from([this.captureProtection ? 1 : 0]));
         this.send(MSG_CLICKTHROUGH, Buffer.from([1]));
         if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
+        const physical = this.physicalRect({
+            x: this.display.x,
+            y: this.display.y,
+            width: this.display.width,
+            height: this.display.height,
+        });
+        this.send(MSG_BOUNDS, encodeU32s([physical.x, physical.y, physical.width, physical.height]));
         overlayLog('presenter-spawned', {
             width: this.physicalWidth(),
             height: this.physicalHeight(),
@@ -365,9 +429,11 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     private markDown(reason: string): void {
-        if (!this.alive && !this.socket) return;
+        if (this.downNoted) return;
+        this.downNoted = true;
         const wasAlive = this.alive;
         this.alive = false;
+        this.supervisor.noteDown(Date.now(), reason);
         if (this.socket) {
             try {
                 this.socket.destroy();
@@ -453,6 +519,38 @@ class NativeSurface implements NativeSurfaceHandle {
         }
     }
 
+    setDisplay(display: NativeDisplay): void {
+        if (this.destroyed) return;
+        this.display = { ...display };
+        this.scaleFactor = display.scaleFactor || 1;
+        const bounds = { x: display.x, y: display.y, width: display.width, height: display.height };
+        if (!this.osrWin.isDestroyed()) {
+            try {
+                this.osrWin.setBounds(bounds);
+            } catch {
+                // The offscreen window can vanish during a display change.
+            }
+        }
+        if (!this.isLive()) return;
+        const physical = this.physicalRect(bounds);
+        this.send(MSG_BOUNDS, encodeU32s([physical.x, physical.y, physical.width, physical.height]));
+        this.requestFullFrame();
+    }
+
+    refresh(): void {
+        if (!this.isLive()) return;
+        this.send(MSG_CLICKTHROUGH, Buffer.from([1]));
+        const physical = this.physicalRect({
+            x: this.display.x,
+            y: this.display.y,
+            width: this.display.width,
+            height: this.display.height,
+        });
+        this.send(MSG_BOUNDS, encodeU32s([physical.x, physical.y, physical.width, physical.height]));
+        if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
+        this.requestFullFrame();
+    }
+
     setCaptureProtection(on: boolean): void {
         this.captureProtection = on;
         if (this.isLive()) this.send(MSG_CAPTURE, Buffer.from([on ? 1 : 0]));
@@ -460,21 +558,93 @@ class NativeSurface implements NativeSurfaceHandle {
 
     respawn(): void {
         if (this.destroyed || this.osrWin.isDestroyed()) return;
-        if (this.respawns >= MAX_RESPAWNS_PER_MATCH) {
-            overlayLog('presenter-down', { reason: 'respawn-budget-spent', respawns: this.respawns });
+        if (this.spawning) return;
+        const action = this.supervisor.decide(Date.now(), { wanted: !this.destroyed });
+        if (action.kind === 'none' || action.kind === 'wait') return;
+        if (action.kind === 'fallback') {
+            overlayLog('presenter-fallback', { reason: action.reason });
+            if (!this.fallbackNotified) {
+                this.fallbackNotified = true;
+                this.onFallback(action.reason);
+            }
             return;
         }
-        this.respawns++;
-        overlayLog('presenter-respawned', { attempt: this.respawns });
-        void this.spawnAndConnect()
-            .then(() => {
-                if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
-                this.requestFullFrame();
-            })
+        overlayLog('presenter-respawned', { attempt: action.attempt });
+        const task = this.runRespawn();
+        this.spawning = task;
+        void task
             .catch((error: unknown) => {
                 console.warn('[presenter] respawn failed', error);
                 overlayLog('presenter-spawn-failed', { error: String(error), respawn: true });
+            })
+            .finally(() => {
+                if (this.spawning === task) this.spawning = null;
             });
+    }
+
+    fellBack(): boolean {
+        return this.fallbackNotified || this.supervisor.snapshot().fellBack;
+    }
+
+    private async runRespawn(): Promise<void> {
+        await this.disposePresenter();
+        if (this.destroyed) return;
+        await this.spawnAndConnect();
+        if (this.shown) this.send(MSG_SHOW, Buffer.alloc(0));
+        const physical = this.physicalRect({
+            x: this.display.x,
+            y: this.display.y,
+            width: this.display.width,
+            height: this.display.height,
+        });
+        this.send(MSG_BOUNDS, encodeU32s([physical.x, physical.y, physical.width, physical.height]));
+        this.requestFullFrame();
+    }
+
+    private async disposePresenter(): Promise<void> {
+        const child = this.child;
+        const socket = this.socket;
+        this.child = null;
+        this.socket = null;
+        this.alive = false;
+        this.instance += 1;
+        this.readyWaiter = null;
+        if (socket) {
+            socket.removeAllListeners();
+            try {
+                socket.destroy();
+            } catch {
+                // ignore
+            }
+        }
+        if (!child) return;
+        child.removeAllListeners();
+        if (child.exitCode !== null || child.signalCode !== null) {
+            try {
+                child.kill();
+            } catch {
+                // ignore
+            }
+            return;
+        }
+        await new Promise<void>((resolve) => {
+            let settled = false;
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            const finish = (): void => {
+                if (settled) return;
+                settled = true;
+                if (timer) clearTimeout(timer);
+                child.removeListener('exit', finish);
+                resolve();
+            };
+            timer = setTimeout(finish, CHILD_EXIT_TIMEOUT_MS);
+            child.once('exit', finish);
+            try {
+                child.kill();
+            } catch {
+                finish();
+            }
+        });
     }
 
     private armRenderer(): void {
@@ -511,11 +681,14 @@ class NativeSurface implements NativeSurfaceHandle {
     destroy(): void {
         this.destroyed = true;
         this.alive = false;
+        this.instance += 1;
+        this.readyWaiter = null;
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;
         }
         if (this.socket) {
+            this.socket.removeAllListeners();
             try {
                 this.socket.destroy();
             } catch {
@@ -524,6 +697,7 @@ class NativeSurface implements NativeSurfaceHandle {
             this.socket = null;
         }
         if (this.child) {
+            this.child.removeAllListeners();
             try {
                 this.child.kill();
             } catch {
