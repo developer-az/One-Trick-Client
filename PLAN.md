@@ -48,4 +48,10 @@ FIRST-PASS: GLM-5.3-Flash via Pi (full diff). FINAL: Codex on the whole diff, HI
 No League match is available, so true borderless/fullscreen behavior, MPO interaction, and real-match z-order are proven only by harness + mock; the real acceptance test is the user's match using the log lines in the release notes.
 
 ## Run log
-(filled in as steps finish)
+- S1 Pi/DeepSeek 42 s done. S4 Pi 73 s done. S5 Pi BLOCKED once (correctly: two superseded frozen assertions), orchestrator updated them, rerun 146 s done. S6 Pi 51 s done. S7 Pi 65 s done.
+- S2/S3 Codex (host) BLOCKED on live checks (its sandbox denies named pipes); orchestrator ran the harness on the host, fixed three harness bugs (PowerShell $null->"" in FindWindow, WinForms competitor not topmost, EPIPE handler) and two real presenter bugs (z-lift needed HWND_TOP and a full chain walk).
+- FIRST-PASS (GLM-5.3-Flash, whole branch): FAIL, 7 findings; verified+fixed #1 fallback undone by loadSettings (critical), #2 hung presenter, #4 payload cap, #5 counters, #6 overlap-aware z lift; dismissed #3 (deliberate test update) and #7 (presenter.log carries z-reasserted).
+- FINAL (Codex, HIGH, whole branch): FAIL, 2 findings, both verified real and fixed: MSG_FRAME rejected frames larger than the surface before applyFrame could clip them (+ regression probe, fails on old exe/passes on new); stale native attach could tear down a replacement window.
+- DELTA (Codex, LOW): 1 medium (sidecar left alive if start() rejects) fixed; that last 6-line fix was NOT re-reviewed.
+- Host evidence: probe-presenter.mjs all ok; smoke-native-overlay.mjs 8/8 ok at 125% DPI; verify suites for all touched areas PASS; 3 typechecks ok; lint 0 errors. Pre-existing/environmental: verify_clipper_lifecycle fails because ffmpeg is installed here (clipper.ts unchanged).
+- Not done: Milestone 3 (HUD content/design) and a packaged-app run against a mock match (the mock Live Client does not produce a self-player here, so match-start never fired).
