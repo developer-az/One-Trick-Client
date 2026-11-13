@@ -230,15 +230,18 @@ static void present(void) {
 }
 
 static void applyFrame(DWORD x, DWORD y, DWORD w, DWORD h, const BYTE *bgra) {
-    if (!g_bits || !w || !h ||
-        (uint64_t)x + w > (uint64_t)g_w ||
-        (uint64_t)y + h > (uint64_t)g_h) return;
+    if (!g_bits || !w || !h || x >= (DWORD)g_w || y >= (DWORD)g_h) return;
+    // Electron's offscreen image can be a pixel wider/taller than our surface
+    // (rounding at fractional DPI). Clip the copy to the surface but keep the
+    // SOURCE row stride at the frame's own width, or every row shears.
+    DWORD copyW = (uint64_t)x + w > (uint64_t)g_w ? (DWORD)g_w - x : w;
+    DWORD copyH = (uint64_t)y + h > (uint64_t)g_h ? (DWORD)g_h - y : h;
     EnterCriticalSection(&g_dibLock);
     BYTE *dst = (BYTE *)g_bits;
-    for (DWORD row = 0; row < h; row++) {
+    for (DWORD row = 0; row < copyH; row++) {
         memcpy(dst + ((size_t)(y + row) * g_w + x) * 4,
                bgra + (size_t)row * w * 4,
-               (size_t)w * 4);
+               (size_t)copyW * 4);
     }
     LeaveCriticalSection(&g_dibLock);
     g_frameCount++;

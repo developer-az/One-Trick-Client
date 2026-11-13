@@ -192,6 +192,8 @@ class NativeSurface implements NativeSurfaceHandle {
     private lastFrameAt: number | null = null;
     private queuedBytes = 0;
     private needsFullFrame = false;
+    /** Latest complete paint (Electron 39 OSR always ships a full bitmap). */
+    private lastFrame: { bytes: Buffer; width: number; height: number } | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
     private lastPongAt = 0;
@@ -469,6 +471,14 @@ class NativeSurface implements NativeSurfaceHandle {
         dirtyRect: { x: number; y: number; width: number; height: number },
         image: Electron.NativeImage
     ): void {
+        const size = image.getSize();
+        const bytes = image.toBitmap();
+        // The paint bitmap is the complete frame, so keep it even when this
+        // paint is dropped (presenter down or queue full): respawn/resize can
+        // then re-send it without waiting for the next dirty rect.
+        if (bytes.length === size.width * size.height * 4) {
+            this.lastFrame = { bytes, width: size.width, height: size.height };
+        }
         if (this.destroyed || !this.isLive()) {
             this.framesDropped++;
             return;
@@ -478,8 +488,6 @@ class NativeSurface implements NativeSurfaceHandle {
             this.framesDropped++;
             return;
         }
-        const size = image.getSize();
-        const bytes = image.toBitmap();
         // The dirty rect is already in physical pixels of this bitmap; ship
         // exactly that sub-rectangle so the presenter pastes it at (x, y).
         const cropped = cropDirtyRect(bytes, size.width, size.height, dirtyRect);
@@ -501,6 +509,17 @@ class NativeSurface implements NativeSurfaceHandle {
         }
     }
 
+    private resendLastFrame(): void {
+        if (this.destroyed || !this.isLive() || !this.lastFrame) return;
+        // The OSR image can be a pixel larger than the presenter surface (DPI
+        // rounding); the presenter clips, so no size-equality guard here.
+        if (this.queuedBytes > MAX_QUEUED_BYTES) return;
+        const header = encodeU32s([0, 0, this.lastFrame.width, this.lastFrame.height]);
+        if (!this.send(MSG_FRAME, Buffer.concat([header, this.lastFrame.bytes]))) return;
+        this.frames++;
+        this.lastFrameAt = Date.now();
+    }
+
     requestFullFrame(): void {
         if (this.destroyed || this.osrWin.isDestroyed()) return;
         try {
@@ -508,6 +527,7 @@ class NativeSurface implements NativeSurfaceHandle {
         } catch {
             // Renderer not ready yet — the next paint covers it.
         }
+        this.resendLastFrame();
     }
 
     show(): void {
@@ -701,6 +721,7 @@ class NativeSurface implements NativeSurfaceHandle {
         this.alive = false;
         this.instance += 1;
         this.readyWaiter = null;
+        this.lastFrame = null;
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;

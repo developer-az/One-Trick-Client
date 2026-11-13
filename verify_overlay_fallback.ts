@@ -52,6 +52,31 @@ ok(driver.includes('if (this.spawning) return;'), 'respawn() refuses a second sp
 ok(driver.includes('setDisplay'), 'the driver exposes setDisplay for display changes');
 ok(driver.includes('refresh(): void'), 'the driver exposes refresh for resume/unlock');
 
+// ---- a fresh presenter gets the latest complete frame re-sent ----
+ok(driver.includes('lastFrame'), 'overlay-presenter.ts retains the latest complete frame');
+const resendBody = functionBody(driver, 'private resendLastFrame(): void {');
+ok(resendBody !== '', 'the driver has a resendLastFrame helper');
+ok(driver.includes('resendLastFrame'), 'overlay-presenter.ts can re-send the retained frame');
+const fullFrameStart = driver.indexOf('requestFullFrame(): void {');
+const fullFrameEnd = fullFrameStart === -1 ? -1 : driver.indexOf('\n    }\n', fullFrameStart);
+const fullFrameBody =
+    fullFrameStart === -1 || fullFrameEnd === -1
+        ? ''
+        : driver.slice(fullFrameStart, fullFrameEnd + '\n    }\n'.length);
+ok(
+    fullFrameBody.includes('invalidate()') && fullFrameBody.includes('resendLastFrame()'),
+    'requestFullFrame both invalidates and re-sends the retained frame'
+);
+const paintStart = driver.indexOf('private forwardPaint(');
+const paintEnd = paintStart === -1 ? -1 : driver.indexOf('\n    }\n', paintStart);
+const paintBody = paintStart === -1 || paintEnd === -1 ? '' : driver.slice(paintStart, paintEnd);
+const storedAt = paintBody.indexOf('this.lastFrame =');
+const firstDropAt = paintBody.indexOf('framesDropped++');
+ok(
+    storedAt !== -1 && firstDropAt !== -1 && storedAt < firstDropAt,
+    'forwardPaint retains the full frame before any drop decision'
+);
+
 // ---- the Electron overlay is the fallback, not a persisted choice ----
 ok(windowSource.includes('backend-fallback'), 'overlay-window.ts logs backend-fallback');
 ok(windowSource.includes('onFallback: (reason) => handleNativeFallback(reason)'), 'attach passes onFallback');
