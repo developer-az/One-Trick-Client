@@ -15,7 +15,12 @@ import { activeThreatsByName } from '../logic/counters';
 import { inferSituation, type ProfileSituation } from '../logic/situation';
 import { buildAramInGameCues, getAramGankStatus, getAramWardStatus, shouldUseAramOverlay } from '../logic/aramOverlay';
 import { isAramOrMayhem } from '../logic/mayhem/mode';
-import { planNextPurchase, type PriceLookup } from '../logic/purchasePlan';
+import {
+  planBuyOrder,
+  planNextPurchase,
+  type BuyOrderPlan,
+  type PriceLookup,
+} from '../logic/purchasePlan';
 
 export interface OverlayEnemy {
   championName: string;
@@ -267,6 +272,36 @@ export function buyRailDetail(
     kind: plan.action,
     partOf: plan.action === 'buy-component' ? plan.targetName : null,
   };
+}
+
+/**
+ * The ordered buy plan for one live state: one BUY NEXT + the numbered queue.
+ * The sell-boots cue and the rail decision share one verdict: when
+ * supportBootSlotAdvice says "sell", the plan is re-run with the boots' slot
+ * freed, so the rail shows the actionable purchase — never a contradictory
+ * "no free slot" next to a "sell boots" cue. Null only when the build or a
+ * player read is missing (gold unknown keeps the plan itself honest).
+ */
+export function buyOrderPlanForState(
+  state: OverlayState,
+  build: OverlayCueContext['build'],
+  prices: PriceLookup | null
+): BuyOrderPlan | null {
+  if (!build) return null;
+  const player = state.localPlayer;
+  if (!player || !Array.isArray(player.items)) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const progress = trackBuildProgress(player.items, build);
+  const behind = situationFromState(state).state === 'behind';
+  const advice = supportBootSlotAdvice(player.items, progress, state.gameTime ?? 0, { behind });
+  return planBuyOrder({
+    build,
+    inventory: player.items,
+    currentGold: Math.floor(currentGold),
+    prices,
+    freeSlot: advice?.action === 'sell',
+  });
 }
 
 export interface OverlayCueContext {

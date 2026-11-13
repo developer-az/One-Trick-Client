@@ -21,6 +21,9 @@ const CHAINS: Record<string, string[]> = {
   '1001': ['1001'],
 };
 
+/** Base Boots — the shared first step of every boot chain. */
+export const BASE_BOOT_ID = '1001';
+
 /** Mid-tier boots that count as "boots done" for supports. */
 export const MID_TIER_BOOT_IDS = new Set(['3009', '3158', '3111', '3047', '3006', '3020']);
 
@@ -68,7 +71,17 @@ export function bootChainIds(recommendedId: string): string[] {
   if (CHAINS[recommendedId]) return CHAINS[recommendedId];
   const mid = midTierBootId(recommendedId);
   if (CHAINS[mid]) return CHAINS[mid];
-  return ['1001', recommendedId];
+  return [BASE_BOOT_ID, recommendedId];
+}
+
+/** Display name for any step on a boot chain. */
+export function bootStepName(id: string): string {
+  return NAMES[id] || `Item ${id}`;
+}
+
+/** True when the ID is a boot at any tier (base, mid, or upgrade). */
+export function isBootId(id: string): boolean {
+  return ALL_BOOT_IDS.has(id) || MID_TIER_BOOT_IDS.has(id) || UPGRADE_BOOT_IDS.has(id) || id === BASE_BOOT_ID;
 }
 
 export function bootChainItems(recommendedId: string): Array<{ id: string; name: string }> {
@@ -79,7 +92,7 @@ export function bootChainItems(recommendedId: string): Array<{ id: string; name:
 }
 
 /** Owns the recommended boot target (mid-tier or explicit upgrade). */
-export function ownsFinishedBoots(ownedIds: Set<string>, recommendedId: string): boolean {
+export function ownsFinishedBoots(ownedIds: ReadonlySet<string>, recommendedId: string): boolean {
   const chain = bootChainIds(recommendedId);
   const target = chain[chain.length - 1];
   if (ownedIds.has(target)) return true;
@@ -90,7 +103,7 @@ export function ownsFinishedBoots(ownedIds: Set<string>, recommendedId: string):
 }
 
 /** Any mid-tier or upgrade boots in inventory — checklist should stop. */
-export function ownsAnyCompleteBoots(ownedIds: Set<string>): boolean {
+export function ownsAnyCompleteBoots(ownedIds: ReadonlySet<string>): boolean {
   for (const id of ownedIds) {
     if (MID_TIER_BOOT_IDS.has(id) || UPGRADE_BOOT_IDS.has(id)) return true;
   }
@@ -99,7 +112,7 @@ export function ownsAnyCompleteBoots(ownedIds: Set<string>): boolean {
 
 /** Next unowned step; null once mid/upgrade boots exist (any line). */
 export function nextBootStep(
-  ownedIds: Set<string>,
+  ownedIds: ReadonlySet<string>,
   recommendedId: string
 ): { id: string; name: string } | null {
   if (ownsAnyCompleteBoots(ownedIds)) return null;

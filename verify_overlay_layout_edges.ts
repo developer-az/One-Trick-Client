@@ -14,7 +14,6 @@
 import {
   HUD_LAYOUT_PRESETS,
   layoutStyle,
-  type HudElement,
 } from './src/overlay/hudLayout';
 
 function assert(condition: unknown, message: string): void {

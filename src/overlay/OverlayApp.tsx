@@ -13,12 +13,12 @@ import {
 } from '../logic/profiles';
 import type { JungleThreat } from '../logic/jungleLogic';
 import type { WardStatus } from '../logic/visionLogic';
-import { trackBuildProgress, type BuildItemRef } from '../logic/buildProgress';
+import { trackBuildProgress } from '../logic/buildProgress';
 import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
+import type { OrderedBuyStep } from '../logic/purchasePlan';
 import {
   buildInGameCues,
-  buyRailDetail,
-  buyRailLine,
+  buyOrderPlanForState,
   enemyRespawns,
   formatGameTime,
   getGankStatus,
@@ -769,34 +769,33 @@ export const OverlayApp: React.FC = () => {
     return catalogPriceLookup([...byId.values()]);
   }, [catalog]);
 
-  const buyRail = useMemo(
-    () => (inMayhem || inAram ? null : buyRailLine(state, buildProgress, prices)),
-    [state, buildProgress, prices, inMayhem, inAram]
-  );
-  const buyDetail = useMemo(
-    () => (inMayhem || inAram ? null : buyRailDetail(state, buildProgress, prices)),
-    [state, buildProgress, prices, inMayhem, inAram]
+  /**
+   * One ordered buy plan — the same numbered queue as the Build & runes view.
+   * The sell-boots cue and this plan share a verdict inside buyOrderPlanForState,
+   * so a "sell boots" cue never sits next to a contradictory "no free slot".
+   */
+  const buyOrder = useMemo(
+    () => (inMayhem || inAram ? null : buyOrderPlanForState(state, build, prices)),
+    [state, build, prices, inMayhem, inAram]
   );
 
-  /** Buy rail — in Mayhem keep icons up for the whole match (don't vanish when remaining blips empty). */
-  const buyQueue = useMemo((): BuildItemRef[] => {
-    if (!build) return [];
-    const rem = buildProgress.remaining;
-    if (rem.length > 0) return rem.slice(0, 2);
-    if (inMayhem) {
-      if (buildProgress.next) return [buildProgress.next, ...rem].slice(0, 2);
-      const unowned = buildProgress.path.filter((i) => !buildProgress.ownedIds.has(i.id));
-      if (unowned.length > 0) return unowned.slice(0, 2);
-      if (buildProgress.path.length > 0) return buildProgress.path.slice(-2);
-    }
-    return rem.slice(0, 2);
-  }, [build, buildProgress, inMayhem]);
-
-  const buyQueueComplete =
-    inMayhem &&
-    !!build &&
-    buildProgress.remaining.length === 0 &&
-    buildProgress.path.every((i) => buildProgress.ownedIds.has(i.id));
+  /** The numbered queue — live from the plan; Mayhem keeps icons up all match. */
+  const buyQueue = useMemo((): OrderedBuyStep[] => {
+    if (buyOrder?.steps.length) return buyOrder.steps;
+    if (!build || !inMayhem) return [];
+    const owned = new Set(buildProgress.ownedIds);
+    const unowned = buildProgress.path.filter((i) => !owned.has(i.id));
+    const tail = unowned.length > 0 ? unowned.slice(0, 3) : buildProgress.path.slice(-2);
+    return tail.map((item, i) => ({
+      rank: i + 1,
+      id: item.id,
+      name: item.name,
+      segment: 'core' as const,
+      owned: owned.has(item.id),
+      cost: null,
+      reason: item.reason,
+    }));
+  }, [buyOrder, build, buildProgress, inMayhem]);
 
   /** Pending respawn countdowns; keep in step with EnemyRespawns' own filter. */
   const showRespawns =
@@ -1047,56 +1046,97 @@ export const OverlayApp: React.FC = () => {
 
   const buyRow = useMemo(() => {
     if (!showBuy) return null;
+    // ONE highlighted BUY NEXT: the exact item to buy now. Queue icons that
+    // follow carry numbered step chips — save/no-slot stay explicit text.
+    const decision = buyOrder?.decision;
+    const actionable =
+      !!decision && (decision.action === 'buy-full' || decision.action === 'buy-component');
+    const buyNow = actionable && decision.buy ? { ...decision.buy } : null;
+    const queueIcons = buyNow ? buyQueue.filter((s) => s.id !== buyNow.id) : buyQueue;
+    const fmtG = (v: number | null | undefined) => (v ?? 0).toLocaleString('en-US');
+    const detail = (() => {
+      if (!decision) return null;
+      if (decision.action === 'buy-full' && decision.buy) {
+        return {
+          name: decision.targetName ?? decision.buy.name,
+          cost: decision.buy.cost,
+          kind: 'buy-full',
+          status: 'Buy now',
+          title: buyOrder?.bootsVsItem.reason || `${decision.targetName}: buy now.`,
+        };
+      }
+      if (decision.action === 'buy-component' && decision.buy) {
+        return {
+          name: decision.buy.name,
+          cost: decision.buy.cost,
+          kind: 'buy-component',
+          status: `Part of ${decision.targetName ?? ''}`.trim(),
+          title: buyOrder?.bootsVsItem.reason || `Part of ${decision.targetName}.`,
+        };
+      }
+      if (decision.action === 'save' || decision.action === 'no-slot') {
+        const stepCost = buyQueue[0]?.cost ?? null;
+        return {
+          name: decision.targetName ?? buyQueue[0]?.name ?? '',
+          cost: stepCost,
+          kind: decision.action,
+          status:
+            decision.action === 'no-slot'
+              ? 'No free slot'
+              : `Need ${fmtG(decision.needGold)}g`,
+          title: buyOrder?.bootsVsItem.reason || decision.targetName || '',
+        };
+      }
+      return null;
+    })();
+
     return (
       <div className="flex flex-wrap gap-0.5 items-center min-w-0">
-        {buyRail?.action === 'buy-component' && buyRail.buyId ? (
-          <ItemIcon
-            key={`buy-now-${buyRail.buyId}`}
-            itemId={buyRail.buyId}
-            alt={buyRail.text}
-            title={buyRail.title}
-            size={22}
-            className="hud-buy-icon is-next"
-          />
+        {buyNow ? (
+          <span
+            className="hud-buy-next"
+            data-buy-step={0}
+            title={buyOrder?.bootsVsItem.reason || `BUY NEXT: ${buyNow.name} (${fmtG(buyNow.cost)}g)`}
+          >
+            <ItemIcon
+              itemId={buyNow.id}
+              alt={`BUY NEXT: ${buyNow.name}`}
+              size={22}
+              className="hud-buy-icon is-next"
+            />
+            <span className="hud-buy-next-tag">BUY NEXT</span>
+          </span>
         ) : null}
-        {buyQueue.map((item, index) => (
-          <ItemIcon
-            key={`buy-${item.id}`}
-            itemId={item.id}
-            alt={item.name}
-            title={buyQueueComplete ? `${item.name} (owned)` : item.name}
-            size={22}
-            className={`hud-buy-icon${index === 0 && !buyQueueComplete && !(buyRail?.action === 'buy-component' && buyRail.buyId) ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
-          />
+        {queueIcons.map((step) => (
+          <span
+            key={`buy-${step.id}`}
+            className={`hud-buy-step${step.owned ? ' is-owned' : ''}`}
+            data-buy-step={step.rank}
+            title={step.reason || step.name}
+          >
+            <ItemIcon
+              itemId={step.id}
+              alt={step.name}
+              size={22}
+              className="hud-buy-icon"
+            />
+            <span className="hud-buy-step-num">{step.rank}</span>
+          </span>
         ))}
-        {buyRail && buyDetail ? (
-          <div className="hud-buy-detail w-full" title={buyRail.title}>
+        {detail ? (
+          <div className="hud-buy-detail w-full min-w-0" title={detail.title}>
             <div className="hud-buy-detail-row">
-              <span className="hud-buy-detail-name truncate min-w-0">{buyDetail.name}</span>
-              <span className="hud-buy-detail-price shrink-0">
-                {buyDetail.cost.toLocaleString('en-US')}g
-              </span>
+              <span className="hud-buy-detail-name truncate min-w-0">{detail.name}</span>
+              <span className="hud-buy-detail-price shrink-0">{fmtG(detail.cost)}g</span>
             </div>
-            <div
-              className={`hud-buy-detail-status hud-buy-detail-status--${buyDetail.kind}`}
-            >
-              {buyDetail.kind === 'buy-full'
-                ? 'Buy now'
-                : buyDetail.kind === 'buy-component'
-                  ? `Part of ${buyDetail.partOf}`
-                  : buyDetail.goldShort !== null && buyDetail.goldShort > 0
-                    ? `Need ${buyDetail.goldShort.toLocaleString('en-US')}g`
-                    : buyRail.text}
+            <div className={`hud-buy-detail-status hud-buy-detail-status--${detail.kind}`}>
+              {detail.status}
             </div>
-          </div>
-        ) : buyRail ? (
-          <div className="w-full text-[11px] leading-tight opacity-80 truncate" title={buyRail.title}>
-            {buyRail.text}
           </div>
         ) : null}
       </div>
     );
-  }, [showBuy, buyRail, buyDetail, buyQueue, buyQueueComplete]);
+  }, [showBuy, buyOrder, buyQueue]);
 
   const actionLine = useMemo(() => {
     if (!showAction) return null;

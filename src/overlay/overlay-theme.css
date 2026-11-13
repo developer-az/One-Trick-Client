@@ -273,6 +273,61 @@ html.overlay-root .hud-buy-detail-status--buy-component {
 html.overlay-root .hud-buy-detail-status--save {
   color: var(--ov-amber);
 }
+html.overlay-root .hud-buy-detail-status--no-slot {
+  color: var(--ov-red);
+}
+
+/* One ordered build path: a single highlighted BUY NEXT with numbered steps. */
+html.overlay-root .hud-buy-next,
+html.overlay-root .hud-buy-step {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  margin-top: 6px;
+}
+html.overlay-root .hud-buy-step.is-owned {
+  opacity: 0.55;
+}
+html.overlay-root .hud-buy-step-num {
+  position: absolute;
+  top: -7px;
+  right: -6px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: calc(9px * var(--ov-fs));
+  line-height: 1;
+  font-weight: 700;
+  color: var(--ov-text);
+  background: rgba(8, 8, 11, 0.96);
+  border: 1px solid rgba(212, 216, 222, 0.45);
+  border-radius: 3px;
+}
+html.overlay-root .hud-buy-next-tag {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 4px;
+  font-family: var(--font-mono);
+  font-size: calc(7px * var(--ov-fs));
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ov-text);
+  white-space: nowrap;
+  background: rgba(8, 8, 11, 0.96);
+  border: 1px solid rgba(242, 179, 80, 0.55);
+  border-radius: 2px;
+}
+html.overlay-root .hud-buy-next .hud-buy-icon.is-next {
+  border-color: rgba(242, 211, 130, 0.95);
+  box-shadow: 0 0 10px rgba(242, 179, 80, 0.4);
+}
 
 /* ---------- Readability pass ----------
  * Everything below is static: no blur, no filters, no animation. Sizing only.

@@ -3,7 +3,8 @@
  * All prices come from the supplied lookup (the shipped item catalog); nothing is hard-coded.
  */
 
-import { countFilledItemSlots, TRINKET_ITEM_IDS } from './buildProgress';
+import { BASE_BOOT_ID, bootChainIds, isBootId } from './bootChains';
+import { countFilledItemSlots, resolveOrderedBuyPath, TRINKET_ITEM_IDS } from './buildProgress';
 import type { BuildItemRef } from './buildProgress';
 
 export interface PriceEntry {
@@ -141,6 +142,223 @@ function findBestComponent(
   }
 
   return best;
+}
+
+export interface OrderedBuildShape {
+  core: BuildItemRef[];
+  boots: BuildItemRef;
+  situational: BuildItemRef[];
+}
+
+export type BuySegment = 'core' | 'boots' | 'situational';
+
+/** One entry on the single ordered buy path, numbered for the HUD/app queue. */
+export interface OrderedBuyStep {
+  rank: number;
+  id: string;
+  name: string;
+  segment: BuySegment;
+  owned: boolean;
+  /** Remaining gold to finish this step given everything owned (null without prices). */
+  cost: number | null;
+  reason?: string;
+}
+
+export type BootVsItemRule = 'boots-first' | 'item-first' | 'none';
+
+export interface BuyOrderDecision {
+  action: 'buy-full' | 'buy-component' | 'save' | 'no-slot' | 'complete' | 'unknown';
+  targetId: string | null;
+  targetName: string | null;
+  /** The exact item to buy NOW — the full step or an affordable component. */
+  buy: { id: string; name: string; cost: number } | null;
+  needGold: number | null;
+}
+
+export interface BuyOrderPlan {
+  /** The numbered queue of still-to-buy steps, in resolved order (1..N). */
+  steps: OrderedBuyStep[];
+  /** The one BUY NEXT decision for the queue head. */
+  decision: BuyOrderDecision;
+  /** One rule + human-readable reason for the boots-versus-item choice. */
+  bootsVsItem: { rule: BootVsItemRule; reason: string };
+  /** True when the decision assumed selling the owned boots to free a slot. */
+  afterSell: boolean;
+}
+
+function ownedMapFromSet(ids: ReadonlySet<string>): Owned {
+  const owned: Owned = new Map();
+  for (const id of ids) owned.set(id, 1);
+  return owned;
+}
+
+/** Drop one owned boots entry so the planner sees a free slot (sell-boots model). */
+function dropOwnedBoots(
+  inventory: Array<{ itemID: number; count?: number }> | undefined
+): Array<{ itemID: number; count?: number }> | null {
+  if (!inventory) return null;
+  for (let i = 0; i < inventory.length; i++) {
+    const id = String(inventory[i].itemID);
+    if (!isBootId(id) || TRINKET_ITEM_IDS.has(id)) continue;
+    return inventory.filter((_, j) => j !== i);
+  }
+  return null;
+}
+
+function segmentFor(itemId: string, build: OrderedBuildShape | null | undefined): BuySegment {
+  if (build && itemId === build.boots.id) return 'boots';
+  if (build && isBootId(itemId)) return 'boots';
+  if (build && build.core.some((c) => c.id === itemId)) return 'core';
+  return 'situational';
+}
+
+/**
+ * The full ordered buy path for a build with ranks, ownership and remaining
+ * cost per step. No live champions change here — the same function backs the
+ * HUD queue and the Build & runes view so both always show the same order.
+ */
+export function resolveBuildOrder(
+  build: OrderedBuildShape | null | undefined,
+  ownedIds: ReadonlySet<string> | null | undefined,
+  prices?: PriceLookup | null
+): OrderedBuyStep[] {
+  const ids = ownedIds ?? new Set<string>();
+  const owned = ownedMapFromSet(ids);
+  const refs = resolveOrderedBuyPath(build, ids);
+  const lookup = prices ?? undefined;
+  return refs.map((item, index) => {
+    const entry = lookup ? lookup(item.id) : undefined;
+    return {
+      rank: index + 1,
+      id: item.id,
+      name: item.name,
+      segment: segmentFor(item.id, build),
+      owned: ids.has(item.id),
+      cost: entry && lookup ? remainingCost(entry, cloneOwned(owned), lookup) : null,
+      reason: item.reason,
+    };
+  });
+}
+
+function bootsVsItemFor(
+  queue: OrderedBuyStep[],
+  target: OrderedBuyStep | null,
+  build: OrderedBuildShape
+): { rule: BootVsItemRule; reason: string } {
+  if (!target) {
+    return { rule: 'none', reason: 'Build complete — nothing left to buy.' };
+  }
+  const bootsName = build.boots.name;
+  const bootsPending = queue.some((s) => s.segment === 'boots');
+  if (target.segment === 'boots') {
+    const step = target;
+    if (step.id === BASE_BOOT_ID) {
+      return {
+        rule: 'boots-first',
+        reason: `Boots first — base Boots (${formatGold(step.cost ?? 0)}) before ${bootsName}.`,
+      };
+    }
+    const chain = bootChainIds(build.boots.id);
+    const upgrade = chain.length > 2 && step.id === chain[2];
+    return {
+      rule: 'boots-first',
+      reason: upgrade
+        ? `Boots first — ${step.name} (${formatGold(step.cost ?? 0)}) — upgrade only when recommended.`
+        : `Boots first — finish ${step.name} (${formatGold(step.cost ?? 0)}) — base Boots owned.`,
+    };
+  }
+  if (bootsPending) {
+    return {
+      rule: 'item-first',
+      reason: `${target.name} first — first core before boots.`,
+    };
+  }
+  return {
+    rule: 'item-first',
+    reason: `Boots done — build ${target.name} (${formatGold(target.cost ?? 0)}) next.`,
+  };
+}
+
+/**
+ * One BUY NEXT + a numbered queue for the whole build, resolved live:
+ * first core → base Boots if absent → recommended mid-tier boots → remaining
+ * core → situational. A higher boot tier is pursued only when its ID is the
+ * build's own recommendation; an upgrade that consumes owned boots uses their
+ * slot; the base-boots step is never offered twice; freeSlot models a
+ * sell-boots cue so the decision agrees with it.
+ */
+export function planBuyOrder(args: {
+  build: OrderedBuildShape | null | undefined;
+  inventory: Array<{ itemID: number; count?: number }> | undefined;
+  currentGold: number | null;
+  prices: PriceLookup | null;
+  freeSlot?: boolean;
+}): BuyOrderPlan | null {
+  const { build, inventory, currentGold, prices } = args;
+  if (!build) return null;
+
+  const owned = buildOwned(inventory);
+  const ownedIds = new Set(owned.keys());
+  const full = resolveBuildOrder(build, ownedIds, prices);
+  const queue = full.filter((s) => !s.owned).map((s, i) => ({ ...s, rank: i + 1 }));
+
+  const bootsVsItem = bootsVsItemFor(queue, queue[0] ?? null, build);
+  if (!queue.length) {
+    return {
+      steps: queue,
+      decision: { action: 'complete', targetId: null, targetName: null, buy: null, needGold: null },
+      bootsVsItem,
+      afterSell: false,
+    };
+  }
+
+  const target = queue[0];
+  const targetRef: BuildItemRef = { id: target.id, name: target.name, reason: target.reason };
+
+  if (prices === null) {
+    return {
+      steps: queue,
+      decision: { action: 'unknown', targetId: target.id, targetName: target.name, buy: null, needGold: null },
+      bootsVsItem,
+      afterSell: false,
+    };
+  }
+
+  let plan = planNextPurchase({ target: targetRef, inventory, currentGold, prices });
+  let afterSell = false;
+  // A sell-boots cue frees one slot: re-plan so the rail shows the actionable
+  // purchase instead of a contradictory "no free slot".
+  if (args.freeSlot && plan?.action === 'no-slot') {
+    const slim = dropOwnedBoots(inventory);
+    if (slim) {
+      afterSell = true;
+      plan = planNextPurchase({ target: targetRef, inventory: slim, currentGold, prices });
+    }
+  }
+
+  if (!plan) {
+    return {
+      steps: queue,
+      decision: { action: 'unknown', targetId: target.id, targetName: target.name, buy: null, needGold: null },
+      bootsVsItem,
+      afterSell,
+    };
+  }
+
+  let decision: BuyOrderDecision = {
+    action: plan.action,
+    targetId: target.id,
+    targetName: target.name,
+    buy: plan.buy ? { ...plan.buy } : null,
+    needGold: plan.needGold,
+  };
+  // Never re-offer the base-boots step as a component of a different target:
+  // the queue already owns it before a mid/upgrade step becomes action-able.
+  if (decision.buy && decision.buy.id === BASE_BOOT_ID && target.id !== BASE_BOOT_ID) {
+    decision = { ...decision, action: 'save', buy: null };
+  }
+
+  return { steps: queue, decision, bootsVsItem, afterSell };
 }
 
 export function planNextPurchase(args: {
