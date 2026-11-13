@@ -17,6 +17,8 @@ html:not(.overlay-root) {
   letter-spacing: -0.005em;
   color: var(--ot-text);
   background: var(--ot-bg);
+  /* Appearance: rem-based type scales with the font-scale control. */
+  font-size: calc(100% * var(--ot-font-scale));
 }
 
 html:not(.overlay-root) body {
@@ -900,4 +902,260 @@ html:not(.overlay-root) ::selection {
   ::view-transition-new(root) {
     animation: none !important;
   }
+}
+/* ===========================================================================
+ * Dashboard Appearance — themes, accent palettes, glass, and the Appearance
+ * drawer. The app root carries data-ot-theme / data-ot-accent / data-ot-density
+ * plus --ot-radius-set / --ot-glass / --ot-font-scale (set by the renderer);
+ * everything below consumes those tokens. These selectors live in theme.css
+ * (loaded after tokens.css) so equal-specificity overrides win.
+ * ========================================================================= */
+
+/* ---- Glass level (0 = opaque, off) ---- */
+html:not(.overlay-root) .ot-card,
+html:not(.overlay-root) .ot-appearance-drawer,
+html:not(.overlay-root) .ot-titlebar,
+html:not(.overlay-root) .ot-toast {
+  -webkit-backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
+  backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
+}
+
+/* ---- Appearance drawer ---- */
+.ot-appearance-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(5, 5, 8, 0.42);
+}
+.ot-appearance-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  width: 380px;
+  max-width: 92vw;
+  border-left: 1px solid var(--ot-border-strong);
+  background: var(--ot-bg-raised);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
+  transform: translateX(102%);
+  transition: transform 0.18s ease;
+}
+.ot-appearance-drawer.is-open {
+  transform: translateX(0);
+}
+.ot-appearance-field {
+  display: block;
+}
+.ot-appearance-drawer .ot-segment {
+  flex-wrap: wrap;
+}
+.ot-appearance-drawer .ot-segment button {
+  flex: none;
+}
+.ot-appearance-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+  margin-bottom: 8px;
+}
+.ot-appearance-hint {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--ot-text-3);
+  line-height: 1.4;
+}
+.ot-appearance-value {
+  float: right;
+  font-family: var(--ot-font-mono);
+  font-size: 12px;
+  color: var(--ot-text-2);
+}
+.ot-appearance-slider {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ot-border);
+}
+.ot-appearance-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.ot-appearance-swatch.is-active {
+  border-color: var(--ot-text);
+  box-shadow: 0 0 0 2px var(--ot-bg), 0 0 0 4px var(--ot-text-3);
+}
+.ot-appearance-sample-wrap {
+  border-radius: var(--ot-radius-lg);
+  padding: 2px;
+  background: linear-gradient(135deg, #31448f, #7a1f39 45%, #0e3a2c);
+}
+.ot-appearance-sample {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface);
+  color: var(--ot-text);
+}
+.ot-appearance-sample-swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+.ot-appearance-sample-title {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+}
+.ot-appearance-sample-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ot-text-2);
+}
+
+/* ---- Themes (data-ot-theme on the app root) ---- */
+[data-ot-theme='gothic'] {
+  --ot-bg: #0a0a0c;
+  --ot-bg-raised: #0d0d10;
+  --ot-surface: #121216;
+  --ot-surface-2: #18181d;
+  --ot-surface-3: #212127;
+  --ot-text: #e9ebef;
+  --ot-text-2: #a4a9b3;
+  --ot-text-3: #6b707a;
+  --ot-border: rgba(214, 219, 228, 0.075);
+  --ot-border-strong: rgba(214, 219, 228, 0.15);
+  --ot-border-bright: rgba(214, 219, 228, 0.28);
+  --ot-blood: #b4243a;
+  --ot-blood-soft: rgba(180, 36, 58, 0.15);
+}
+[data-ot-theme='ember'] {
+  --ot-bg: #0d0a08;
+  --ot-bg-raised: #14100c;
+  --ot-surface: #1a140f;
+  --ot-surface-2: #231c15;
+  --ot-surface-3: #2c231a;
+  --ot-text: #ece4db;
+  --ot-text-2: #b6a899;
+  --ot-text-3: #7d7166;
+  --ot-border: rgba(228, 212, 190, 0.08);
+  --ot-border-strong: rgba(228, 212, 190, 0.16);
+  --ot-border-bright: rgba(228, 212, 190, 0.29);
+  --ot-blood: #c0392b;
+  --ot-blood-soft: rgba(192, 57, 43, 0.16);
+}
+[data-ot-theme='azure'] {
+  --ot-bg: #070a12;
+  --ot-bg-raised: #0b101c;
+  --ot-surface: #111828;
+  --ot-surface-2: #161e30;
+  --ot-surface-3: #1d2740;
+  --ot-text: #e6ecf7;
+  --ot-text-2: #9fb0c9;
+  --ot-text-3: #66748f;
+  --ot-border: rgba(160, 183, 220, 0.09);
+  --ot-border-strong: rgba(160, 183, 220, 0.17);
+  --ot-border-bright: rgba(160, 183, 220, 0.3);
+  --ot-blood: #3a6fb8;
+  --ot-blood-soft: rgba(58, 111, 184, 0.16);
+}
+[data-ot-theme='phantom'] {
+  --ot-bg: #0b0910;
+  --ot-bg-raised: #120f18;
+  --ot-surface: #191425;
+  --ot-surface-2: #221b31;
+  --ot-surface-3: #2a2240;
+  --ot-text: #ece7f5;
+  --ot-text-2: #b0a6c8;
+  --ot-text-3: #7a718f;
+  --ot-border: rgba(200, 190, 235, 0.09);
+  --ot-border-strong: rgba(200, 190, 235, 0.17);
+  --ot-border-bright: rgba(200, 190, 235, 0.3);
+  --ot-blood: #9a6fe0;
+  --ot-blood-soft: rgba(154, 111, 224, 0.16);
+}
+[data-ot-theme='ivory'] {
+  --ot-bg: #f4f2ee;
+  --ot-bg-raised: #efece6;
+  --ot-surface: #fdfbf7;
+  --ot-surface-2: #f3efe8;
+  --ot-surface-3: #e7e1d6;
+  --ot-text: #2b2824;
+  --ot-text-2: #5f5a52;
+  --ot-text-3: #8a8378;
+  --ot-border: rgba(40, 36, 30, 0.1);
+  --ot-border-strong: rgba(40, 36, 30, 0.16);
+  --ot-border-bright: rgba(40, 36, 30, 0.28);
+  --ot-blood: #b4243a;
+  --ot-blood-soft: rgba(180, 36, 58, 0.14);
+}
+
+/* ---- Accent palettes (data-ot-accent) drive the "yours"/primary signal ---- */
+[data-ot-accent='chrome'] {
+  --ot-gold: #d6dae0;
+  --ot-gold-soft: rgba(214, 218, 224, 0.09);
+  --ot-chrome: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
+}
+[data-ot-accent='gold'] {
+  --ot-gold: #c8a24e;
+  --ot-gold-soft: rgba(200, 162, 78, 0.14);
+  --ot-chrome: linear-gradient(180deg, #ecd8a0 0%, #c8a24e 46%, #8a6a2a 54%, #e0c886 100%);
+}
+[data-ot-accent='blood'] {
+  --ot-gold: #d6454d;
+  --ot-gold-soft: rgba(214, 69, 77, 0.14);
+  --ot-chrome: linear-gradient(180deg, #f0a9ad 0%, #d6454d 46%, #8f2027 54%, #e67b82 100%);
+}
+[data-ot-accent='teal'] {
+  --ot-gold: #35c7b0;
+  --ot-gold-soft: rgba(53, 199, 176, 0.14);
+  --ot-chrome: linear-gradient(180deg, #a4e8dc 0%, #35c7b0 46%, #1c7c6e 54%, #6ad8c6 100%);
+}
+[data-ot-accent='royal'] {
+  --ot-gold: #5f7fd6;
+  --ot-gold-soft: rgba(95, 127, 214, 0.16);
+  --ot-chrome: linear-gradient(180deg, #c3cff2 0%, #5f7fd6 46%, #31488f 54%, #9db0ea 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ot-appearance-drawer {
+    transition: none;
+  }
+}
+
+/* ---------- Dashboard pixel pet (E4) ----------
+ * Fixed bounded corner allotment, strictly passive. The pet canvas is drawn
+ * with canvas primitives inside PixelPet.tsx; CSS only sizes and pins it. */
+.ot-pet-area {
+  position: fixed;
+  right: 24px;
+  bottom: 18px;
+  z-index: 30;
+  width: 128px;
+  height: 72px;
+  pointer-events: none;
+  user-select: none;
+}
+.ot-pet-area canvas,
+.ot-pet-preview canvas {
+  display: block;
+  width: 128px;
+  height: 72px;
+  image-rendering: pixelated;
+}
+.ot-pet-preview {
+  width: 128px;
+  height: 72px;
+  margin-top: 10px;
+  border-radius: var(--ot-radius-sm);
+  border: 1px dashed var(--ot-border-strong);
+  background: var(--ot-bg);
+  pointer-events: none;
 }

@@ -272,7 +272,9 @@ const STYLED = [
   ...VIEWS.map((v) => ({ label: `${v.name}.tsx`, src: v.src })),
 ];
 for (const { label, src } of STYLED) {
-  ok(!/backdrop-filter|blur\(|drop-shadow|text-shadow/.test(src), `${label}: no blur / backdrop-filter / drop-shadow`);
+  // Opt-in dashboard glass (E3) is the one sanctioned blur: scoped to html:not(.overlay-root), 0 by default, never in the in-game overlay.
+  const checked = src.replace(/\/\* ---- Glass level[\s\S]*?(?=\/\* ---- Appearance drawer)/, '');
+  ok(!/backdrop-filter|blur\(|drop-shadow|text-shadow/.test(checked), `${label}: no blur / backdrop-filter / drop-shadow`);
   const anims = [...src.matchAll(/animation\s*:\s*([^;]+)/g)].map((m) => m[1].trim());
   ok(anims.every((a) => a === 'none' || a.startsWith('none ') || a.includes('ot-toast-in')), `${label}: animations are the one-shot toast or none (${anims.join(' | ') || 'none'})`);
   const keys = [...src.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]);

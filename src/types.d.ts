@@ -40,6 +40,39 @@ declare global {
         autoSpells: boolean;
         /** Record the match and save a clip on a kill, death, or Great play. Off by default. */
         autoClip: boolean;
+    /** Dashboard appearance (theme/accent/density/radius/glass/type scale). */
+    appearance: AppearanceSettings;
+        /** Dashboard pixel pet (species + color). Persisted like appearance. */
+        pet: PetSettings;
+    }
+
+    type AppearanceTheme = 'gothic' | 'ember' | 'azure' | 'phantom' | 'ivory';
+    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal';
+    type AppearanceDensity = 'compact' | 'comfortable' | 'spacious';
+
+    interface AppearanceSettings {
+        /** Surface / type / line palette. */
+        theme: AppearanceTheme;
+        /** Primary ("yours") accent color. */
+        accent: AppearanceAccent;
+        /** Spacing rhythm. */
+        density: AppearanceDensity;
+        /** Corner radius for cards, inputs and menus, in px (0-24). */
+        radius: number;
+        /** Frosted-glass translucency + blur level for surfaces, 0-100. 0 = opaque (off). */
+        glass: number;
+        /** Dashboard font scale multiplier, 0.85-1.2. */
+        fontScale: number;
+    }
+
+    type PetSpecies = 'imp' | 'pup' | 'wyrm' | 'blob';
+    type PetColor = 'teal' | 'gold' | 'blood' | 'royal' | 'chrome';
+
+    interface PetSettings {
+        /** Which creature the dashboard pet is. */
+        species: PetSpecies;
+        /** Body color choice. */
+        color: PetColor;
     }
 
     interface SavedClipInfo {
