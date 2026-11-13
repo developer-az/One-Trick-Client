@@ -93,3 +93,12 @@ Survey first (Pi): current coverage vs. matrix: champion tier list, per-champ bu
 
 ## Order / milestones
 M-A: R2-A. M-B: R2-B + R2-C. M-C: R2-D. M-D: R2-E. M-E: R2-F survey + first slice. Verify at each; first-pass GLM review at end; Codex final review (HIGH for crash fix).
+
+## Round 2 run log (2026-11-13)
+Coder: OpenRouter via pi-sandbox:1.5.0 — deepseek/deepseek-v4-flash-0731 (surveys, A, B, C, D, E3, E4, fixes); xiaomi/mimo-v2.6-pro (E1, E2; E3/E4 first attempt hit OpenRouter in-flight credit limit -> rerun on DeepSeek). Planner/reviewer: Codex at medium (plan, full review) and low (delta); Isoquant was out of credit.
+- A crash fix (safe-window guards, crash net, stale-board clear), B layout (right-edge anchoring, single scale, sectioned translucent left rail), C perf (poll 600 ms, playerlist/4, coarser fingerprint, paint throttle, clock isolation, deferred catalog warm), D ordered build path (boots-aware), E1 docs/UI-MASTER-PROMPT.md, E2 dense views, E3 appearance settings, E4 pixel pet.
+- Superseded frozen assertions updated deliberately: verify_state_service (POLL_MS 600), verify_game_monitor (gold bucket 150).
+- FULL REVIEW (Codex medium): FAIL, 6 findings; 5 fixed + 1 (paint flush) fixed with its own test updated. DELTA (Codex low): FAIL, 2 findings (stale poll returned to engine; reset didn't bump generation) fixed; that last 2-line fix NOT re-reviewed.
+- Host: lint 0 errors, 3 typechecks ok, vite build ok, every verify:release suite passes except verify_clipper_lifecycle (ffmpeg installed on host, pre-existing).
+- Not verified: look-checks (no browser in sandbox; app/overlay not rendered), real League match, packaged run.
+- F (Blitz/U.GG/OP.GG parity) survey only; top slices: champ-select scouting of 10 (LCU ranked/mastery), objective/buff respawn timers, personal tier list, all-mode history, ARAM/Arena rune sets.
