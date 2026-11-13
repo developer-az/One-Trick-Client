@@ -75,8 +75,10 @@ export function createPaintThrottle(
         flush(): PaintRect | null {
             if (windowEndAt === 0 || nowFn() < windowEndAt) return null;
             const rect = held;
-            windowEndAt = 0;
             held = null;
+            // A flushed paint counts as a shipment: open a fresh window from now so a
+            // paint arriving right after cannot ship a second frame within the interval.
+            windowEndAt = rect ? nowFn() + intervalMs : 0;
             return rect;
         },
         flushAt(): number | null {

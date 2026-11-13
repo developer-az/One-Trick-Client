@@ -74,6 +74,12 @@ let pollsSinceAbilitiesFetch = 0;
 let lastSelfLevelChangeAt: number | null = null;
 /** Last merged board — what game-monitor reads instead of doing its own fetch. */
 let lastBoard: LiveClientAllGameData | null = null;
+/**
+ * Generation of the cached board. `clearStateBoard()` bumps it so a poll that
+ * was already in flight when the match ended discards its result instead of
+ * resurrecting lastBoard/lastClock (the cache void must stick).
+ */
+let boardGeneration = 0;
 /** Per-match latency samples for the endpoint reads and the engine poll/merge. */
 const latencyRecorder: LatencyRecorder = createLatencyRecorder();
 let loggedLines = 0;
@@ -200,6 +206,7 @@ function abilityRanksSum(abilities: LiveBoardParts['abilities']): number | null 
  * triggered it untouched so it retries on the next poll.
  */
 async function fetchBoardParts(): Promise<LiveBoardLike | null> {
+    const generationAtPollStart = boardGeneration;
     pollIndex += 1;
     pollsSinceAbilitiesFetch += 1;
     const now = Date.now();
@@ -229,7 +236,10 @@ async function fetchBoardParts(): Promise<LiveBoardLike | null> {
     ]);
 
     if (players) lastPlayers = players;
-    if (gameData) lastClock = gameData;
+    // A clearStateBoard() that ran while this poll was in flight means the
+    // match ended mid-read: publishing a late clock/board would bring
+    // readLiveBoard()/readLiveClock() back to life after they were voided.
+    if (gameData && stateBoardGenerationValid(generationAtPollStart)) lastClock = gameData;
     const activePlayerLevel =
         typeof activePlayer?.level === 'number' && Number.isFinite(activePlayer.level)
             ? activePlayer.level
@@ -259,7 +269,9 @@ async function fetchBoardParts(): Promise<LiveBoardLike | null> {
     // the board the rest of the app already consumes. The assertion is purely a
     // type-level one: `mergeLiveBoard` is typed against the structural
     // `LiveBoardLike` so it stays Electron-free and unit-testable.
-    if (board) lastBoard = board as LiveClientAllGameData;
+    if (board && stateBoardGenerationValid(generationAtPollStart)) {
+        lastBoard = board as LiveClientAllGameData;
+    }
     return board;
 }
 
@@ -475,8 +487,26 @@ export function resetStateService(reason = 'match start'): void {
  * after the overlay was torn down.
  */
 export function clearStateBoard(): void {
+    boardGeneration += 1;
     lastBoard = null;
     lastClock = null;
+}
+
+/**
+ * Current board-generation counter, bumped by every `clearStateBoard()` call.
+ * Exposed for the verify harness to exercise the in-flight poll guard.
+ */
+export function getStateBoardGeneration(): number {
+    return boardGeneration;
+}
+
+/**
+ * True when a poll that captured `generationAtPollStart` may still publish its
+ * board/clock into the cache. A clearStateBoard() in between (e.g. match end
+ * while the poll was awaiting HTTP) makes the poll's result stale.
+ */
+export function stateBoardGenerationValid(generationAtPollStart: number): boolean {
+    return generationAtPollStart === boardGeneration;
 }
 
 export { rotateIfNeeded, LOG_MAX_BYTES, logFilePath, flushLog, fetchBoardParts };

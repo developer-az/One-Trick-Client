@@ -31,6 +31,7 @@ import {
   shouldRunOverlayClock,
   situationFromState,
   type OverlayCue,
+  type OverlayEnemy,
   type OverlayState,
 } from './overlayLogic';
 import { SummonerTimers } from '../components/SummonerTimers';
@@ -336,6 +337,24 @@ function usePageVisible(): boolean {
  * referentially stable for the memoized rail panels.
  */
 
+/**
+ * Every enemy field the gank/ward derivations read — assessJungleThreat()
+ * keys on champion name, position, level, creep score, both summoner spell
+ * names (Smite detection) and death state, so a memo key that omits CS or
+ * spells would keep a stale gank/ward read after those change.
+ */
+function enemyThreatKey(e: OverlayEnemy): string {
+  return [
+    e.championName,
+    e.level ?? 0,
+    e.position || '',
+    e.scores?.creepScore ?? 0,
+    e.summonerSpells?.summonerSpellOne?.displayName || '',
+    e.summonerSpells?.summonerSpellTwo?.displayName || '',
+    e.isDead ? 1 : 0,
+  ].join(':');
+}
+
 /** Key of every field buildInGameCues() reads. */
 function cueStateKey(state: OverlayState): string {
   const lp = state.localPlayer;
@@ -345,7 +364,7 @@ function cueStateKey(state: OverlayState): string {
     state.gameMode || '',
     state.mapName || '',
     Math.floor((state.gameTime ?? 0) / 10),
-    (state.momentCues || []).map((c) => c.id).join(','),
+    (state.momentCues || []).map((c) => `${c.id}:${c.label}:${c.detail}:${c.urgency}`).join(','),
     lp?.championName || '',
     lp?.level ?? 0,
     lp?.isDead ? 1 : 0,
@@ -379,9 +398,7 @@ function wardStatusKey(state: OverlayState): string {
       .map((i) => `${i.itemID}:${i.count}`)
       .join(','),
     lp?.scores?.wardScore ?? 0,
-    (state.enemies || [])
-      .map((e) => `${e.championName}:${e.level ?? 0}:${e.position || ''}:${e.isDead ? 1 : 0}`)
-      .join('|'),
+    (state.enemies || []).map(enemyThreatKey).join('|'),
   ].join('~');
 }
 
@@ -391,9 +408,7 @@ function gankStatusKey(state: OverlayState): string {
     state.gameMode || '',
     state.mapName || '',
     Math.floor((state.gameTime ?? 0) / 10),
-    (state.enemies || [])
-      .map((e) => `${e.championName}:${e.level ?? 0}:${e.position || ''}:${e.isDead ? 1 : 0}`)
-      .join('|'),
+    (state.enemies || []).map(enemyThreatKey).join('|'),
   ].join('~');
 }
 

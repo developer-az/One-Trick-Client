@@ -86,8 +86,13 @@ ok(
 );
 ok(throttle.flush() === null, 'flush consumes the union exactly once');
 now = 100;
+ok(throttle.accept({ x: 0, y: 0, width: 1, height: 1 }) === null, 'a paint right after a flush is held (flush opened a new window)');
+now = 200;
+ok(throttle.flush() !== null, 'the held paint flushes once the post-flush window closes');
+now = 400;
+throttle.flush(); // nothing held: closes the window
 const fresh: PaintRect = throttle.accept({ x: 0, y: 0, width: 1, height: 1 });
-ok(!!fresh && throttle.windowOpen(), 'a later paint opens a fresh window and ships immediately');
+ok(!!fresh && throttle.windowOpen(), 'an idle paint opens a fresh window and ships immediately');
 throttle.reset();
 ok(throttle.flush() === null && !throttle.windowOpen(), 'reset() clears the pending union and window');
 

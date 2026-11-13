@@ -223,7 +223,11 @@ export const PixelPet: React.FC<PixelPetProps> = ({ stage, preference, mode = 'l
       });
       stateRef.current = next;
       const pose = petPoseFromState(next);
-      const key = `${pose.mood}|${pose.x.toFixed(3)}|${pose.dir}|${pose.phase.toFixed(3)}|${pose.popProgress.toFixed(3)}`;
+      // The redraw key must include the rendered species/color: under
+      // prefers-reduced-motion the pose is frozen (phase stays 0, no
+      // wandering), so without them a settings change never redraws the
+      // sprite on screen.
+      const key = `${prefRef.current.species}|${prefRef.current.color}|${pose.mood}|${pose.x.toFixed(3)}|${pose.dir}|${pose.phase.toFixed(3)}|${pose.popProgress.toFixed(3)}`;
       if (key === lastKey) return;
       lastKey = key;
       drawPose(ctx, pose, prefRef.current, reducedRef.current);

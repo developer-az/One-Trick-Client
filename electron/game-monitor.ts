@@ -877,10 +877,17 @@ function resetMatchCaches(): void {
     lastClipQueuedAt = 0;
 }
 
-/** Cue content fingerprint for the warm-push gate (id + rendered label). */
+/**
+ * Cue content fingerprint for the warm-push gate — every field the HUD renders
+ * (id, label, detail, urgency), plus the empty state: when no cues remain,
+ * withPlayMoments() returns the plain payload, so this yields '' and the send
+ * decision below treats cue retirement as a real change.
+ */
 function momentCueContent(payload: unknown): string {
-    const cues = (payload as { momentCues?: Array<{ id: string; label: string }> }).momentCues || [];
-    return cues.map((cue) => `${cue.id}:${cue.label}`).join('|');
+    const cues =
+        (payload as { momentCues?: Array<{ id: string; label: string; detail: string; urgency: string }> })
+            .momentCues || [];
+    return cues.map((cue) => `${cue.id}:${cue.label}:${cue.detail}:${cue.urgency}`).join('|');
 }
 
 function selfHpFromStats(stats: { currentHealth?: number; maxHealth?: number } | null | undefined): number | null {
@@ -1219,12 +1226,14 @@ async function liveTick(): Promise<void> {
                     lastOverlayFingerprint = fp;
                     lastSentMomentCueContent = momentCueContent(enriched);
                     sendFullOverlayUpdate(enriched);
-                } else if (enriched !== payload) {
-                    // No stat changed but the moment engine produced live
-                    // cues: pushing them out IS a real payload change, so it
-                    // is allowed and keeps the HUD cue rail live. Only resend
-                    // when the cue content actually changed — a sticky cue
-                    // must not force a send every 2 s.
+                } else {
+                    // No stat changed, but the moment engine may have produced
+                    // live cues — or retired the last one (when the last cue
+                    // expires withPlayMoments returns the plain payload, so
+                    // the empty state is exactly the "clear the HUD rail"
+                    // signal). Comparing the cue content — including that
+                    // empty state — decides the send: a sticky, unchanged cue
+                    // must not force a resend every 2 s.
                     const content = momentCueContent(enriched);
                     if (content !== lastSentMomentCueContent) {
                         lastSentMomentCueContent = content;
@@ -1340,4 +1349,11 @@ export function stopGameMonitor(): void {
 /** Re-export for main-process IPC handlers that need a one-off LCU read. */
 export { makeLCURequest };
 
-export { buildOverlayPayload, overlayFingerprint, withPlayMoments, resetMatchCaches, liveTick };
+export {
+    buildOverlayPayload,
+    overlayFingerprint,
+    withPlayMoments,
+    momentCueContent,
+    resetMatchCaches,
+    liveTick,
+};
