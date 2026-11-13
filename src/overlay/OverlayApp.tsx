@@ -25,6 +25,7 @@ import {
   type OverlayState,
 } from './overlayLogic';
 import { SummonerTimers } from '../components/SummonerTimers';
+import { EnemyRespawns } from '../components/EnemyRespawns';
 import { ChampionIcon, ItemIcon } from '../components/GameIcons';
 import { ChromeGameHud } from './ChromeGameHud';
 import { ChromeMark } from './ChromeMark';
@@ -904,6 +905,7 @@ export const OverlayApp: React.FC = () => {
                     Sums show as spells are tracked
                   </p>
                 )}
+                <EnemyRespawns enemies={state.enemies} timestamp={state.timestamp} />
                 <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
                   {hotkeyHint}
                 </p>
@@ -1062,6 +1064,7 @@ export const OverlayApp: React.FC = () => {
               {showVision ? <WardIndicator status={wardStatus} compact /> : null}
               {!inAram ? actionLine : null}
               {showSums ? <SummonerTimers lanes={state.enemyBotSummoners || []} compact /> : null}
+              {showSums ? <EnemyRespawns enemies={state.enemies} timestamp={state.timestamp} /> : null}
               {buyRow}
             </div>
           )}

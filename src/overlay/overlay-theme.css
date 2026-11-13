@@ -332,3 +332,38 @@ html.overlay-root canvas {
   image-rendering: -webkit-optimize-contrast;
 }
 
+/* Enemy respawn countdowns under the summoner chips. Static: no motion. */
+html.overlay-root .hud-respawn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+html.overlay-root .hud-respawn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+html.overlay-root .hud-respawn-name {
+  font-size: calc(11px * var(--ov-fs));
+  color: var(--ov-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+html.overlay-root .hud-respawn-row .hud-chip {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+html.overlay-root .hud-respawn--soon .hud-respawn-name {
+  color: var(--ov-amber);
+}
+html.overlay-root .hud-respawn--soon .hud-chip {
+  border-color: rgba(242, 179, 80, 0.75);
+  background: rgba(242, 179, 80, 0.18);
+  color: var(--ov-amber);
+}
+

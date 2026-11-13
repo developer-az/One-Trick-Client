@@ -23,6 +23,7 @@ export interface OverlayEnemy {
   position?: string;
   isDead?: boolean;
   items?: string[];
+  respawnTimer?: number;
   scores?: {
     assists: number;
     creepScore: number;
@@ -34,6 +35,57 @@ export interface OverlayEnemy {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
   };
+}
+
+export interface EnemyRespawnRow {
+  championName: string;
+  position?: string;
+  remainingSec: number;
+}
+
+/**
+ * Countdown rows for dead enemies, derived locally from the payload clock.
+ * Only dead enemies with a live respawn timer are returned; elapsed wall time
+ * since the payload was built is subtracted so the list keeps ticking without
+ * new IPC sends. Never throws on malformed rows.
+ */
+export function enemyRespawns(
+  enemies: OverlayEnemy[] | undefined,
+  payloadTimestampMs: number | undefined,
+  nowMs: number
+): EnemyRespawnRow[] {
+  const list = Array.isArray(enemies) ? enemies : [];
+  const timestampValid =
+    typeof payloadTimestampMs === 'number' && Number.isFinite(payloadTimestampMs);
+  const elapsedSec = timestampValid
+    ? Math.max(0, nowMs - (payloadTimestampMs as number)) / 1000
+    : 0;
+  const rows: EnemyRespawnRow[] = [];
+  for (const enemy of list) {
+    if (!enemy || enemy.isDead !== true) continue;
+    const timer = enemy.respawnTimer;
+    if (typeof timer !== 'number' || !Number.isFinite(timer) || timer <= 0) continue;
+    const remaining = Math.ceil(timer - elapsedSec);
+    if (remaining <= 0) continue;
+    rows.push({
+      championName: typeof enemy.championName === 'string' ? enemy.championName : '',
+      position: enemy.position,
+      remainingSec: remaining,
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.remainingSec !== b.remainingSec) return a.remainingSec - b.remainingSec;
+    return a.championName.localeCompare(b.championName);
+  });
+  return rows.slice(0, 5);
+}
+
+/** "0:07" / "0:42" / "1:05"; zero or negative prints "0:00". */
+export function formatRespawn(sec: number): string {
+  const safe = Number.isFinite(sec) ? Math.max(0, Math.floor(sec)) : 0;
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export interface OverlayBotSummoner {

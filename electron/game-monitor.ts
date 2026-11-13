@@ -331,6 +331,10 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         items: p.items?.map((i) => i.displayName) || [],
         scores: p.scores,
         summonerSpells: p.summonerSpells,
+        respawnTimer:
+            typeof p.respawnTimer === 'number' && Number.isFinite(p.respawnTimer) && p.respawnTimer > 0
+                ? Math.ceil(p.respawnTimer)
+                : 0,
     }));
 
     const aramMatch = isAramOrMayhem(live?.gameData?.gameMode, live?.gameData?.mapName);
@@ -440,7 +444,7 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         .map((e) => {
             const cs = e.scores?.creepScore ?? 0;
             const itemCount = (e.items || []).filter((id) => id && id !== '0').length;
-            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}`;
+            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}:${Math.ceil((e.respawnTimer ?? 0) / 10)}`;
         })
         .join('|');
     // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
