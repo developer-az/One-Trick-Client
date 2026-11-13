@@ -285,14 +285,14 @@ async function main(): Promise<void> {
     { species: [...PET_SPECIES], colors: [...PET_COLORS] }
   );
   const tmpScript = `.tmp-relaunch-${process.pid}.ts`;
-  require('fs').writeFileSync(tmpScript, `(async () => { const { getAppSettings } = await import('./electron/app-settings'); console.log(JSON.stringify(getAppSettings().pet)); })().catch((e) => { console.error('CHILD_ERR', e); process.exit(2); });`);
+  fs.writeFileSync(tmpScript, `(async () => { const { getAppSettings } = await import('./electron/app-settings'); console.log(JSON.stringify(getAppSettings().pet)); })().catch((e) => { console.error('CHILD_ERR', e); process.exit(2); });`);
   const child = spawnSync('npx --yes tsx ' + tmpScript, {
     shell: true,
     cwd: process.cwd(),
     env: { ...process.env, ONETRICK_USER_DATA: dir },
     encoding: 'utf8',
   });
-  try { require('fs').unlinkSync(tmpScript); } catch { /* ignore */ }
+  try { fs.unlinkSync(tmpScript); } catch { /* ignore */ }
   check('relaunch child exited cleanly', child.status === 0);
   if (child.status !== 0) console.error('  stderr:', child.stderr?.slice(0, 600));
   const childLine = (child.stdout || '').trim().split('\n').pop() || '';

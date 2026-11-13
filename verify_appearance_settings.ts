@@ -117,14 +117,14 @@ async function main(): Promise<void> {
     })().catch((e) => { console.error('CHILD_ERR', e); process.exit(2); });
   `;
   const tmpScript = `.tmp-relaunch-${process.pid}.ts`;
-  require('fs').writeFileSync(tmpScript, code);
+  fs.writeFileSync(tmpScript, code);
   const child = spawnSync('npx --yes tsx ' + tmpScript, {
     shell: true,
     cwd: process.cwd(),
     env: { ...process.env, ONETRICK_USER_DATA: dir },
     encoding: 'utf8',
   });
-  try { require('fs').unlinkSync(tmpScript); } catch { /* ignore */ }
+  try { fs.unlinkSync(tmpScript); } catch { /* ignore */ }
   check('relaunch child exited cleanly', child.status === 0);
   if (child.status !== 0) console.error('  stderr:', child.stderr?.slice(0, 800));
   const childAppearance = (child.stdout || '').trim().split('\n').pop() || '';
