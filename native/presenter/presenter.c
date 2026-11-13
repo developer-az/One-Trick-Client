@@ -32,6 +32,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdarg.h>
 
 #define PIPE_NAME "\\\\.\\pipe\\onetrick-presenter"
 #define WM_APP_FRAME (WM_APP + 1)
@@ -53,6 +55,7 @@
 static HWND g_hwnd = NULL;
 static HDC g_memDc = NULL;
 static HBITMAP g_dib = NULL;
+static HBITMAP g_stockBitmap = NULL;
 static void *g_bits = NULL;
 static int g_w = 0, g_h = 0;
 static int g_clickThrough = 1;
@@ -63,6 +66,50 @@ static CRITICAL_SECTION g_dibLock;
 static FILE *g_log = NULL;
 static long g_frameCount = 0;
 static long g_lastLoggedFrame = 0;
+static char g_pipeName[512] = PIPE_NAME;
+static char g_logPath[MAX_PATH] = "";
+static DWORD g_connectTimeoutMs = 30000;
+static BYTE *g_payload = NULL;
+static DWORD g_payloadCap = 0;
+static DWORD g_lastZLog = 0, g_suppressedZ = 0;
+
+static char *nextArg(char **cursor) {
+    char *p = *cursor;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) { *cursor = p; return NULL; }
+    char *start;
+    if (*p == '"') {
+        start = ++p;
+        while (*p && *p != '"') p++;
+    } else {
+        start = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+    }
+    if (*p) *p++ = 0;
+    *cursor = p;
+    return start;
+}
+
+static int parseArgs(char *line) {
+    char *cursor = line, *flag, *value;
+    while ((flag = nextArg(&cursor)) != NULL) {
+        value = nextArg(&cursor);
+        if (!value) return 0;
+        if (!strcmp(flag, "--pipe")) {
+            if (strlen(value) >= sizeof(g_pipeName)) return 0;
+            strcpy(g_pipeName, value);
+        } else if (!strcmp(flag, "--log")) {
+            if (strlen(value) >= sizeof(g_logPath)) return 0;
+            strcpy(g_logPath, value);
+        } else if (!strcmp(flag, "--connect-timeout-ms")) {
+            char *end = NULL;
+            unsigned long n = strtoul(value, &end, 10);
+            if (!*value || *end || n == 0 || n > 600000) return 0;
+            g_connectTimeoutMs = (DWORD)n;
+        } else return 0;
+    }
+    return 1;
+}
 
 static void logLine(const char *fmt, ...) {
     if (!g_log) return;
@@ -79,6 +126,11 @@ static void logLine(const char *fmt, ...) {
 }
 
 static void openLog(void) {
+    if (g_logPath[0]) {
+        g_log = fopen(g_logPath, "a");
+        if (g_log) logLine("presenter-start pid=%lu", GetCurrentProcessId());
+        return;
+    }
     char appdata[MAX_PATH];
     if (!GetEnvironmentVariableA("APPDATA", appdata, MAX_PATH)) return;
     char dir[MAX_PATH];
@@ -123,11 +175,7 @@ static void sendError(const char *msg) {
 }
 
 static int createDib(int w, int h) {
-    if (g_dib) {
-        DeleteObject(g_dib);
-        g_dib = NULL;
-        g_bits = NULL;
-    }
+    if (w < 1 || h < 1 || w > 16384 || h > 16384) return 0;
     BITMAPINFO bmi;
     memset(&bmi, 0, sizeof(bmi));
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -137,14 +185,28 @@ static int createDib(int w, int h) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
     HDC screen = GetDC(NULL);
-    g_dib = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &g_bits, NULL, 0);
+    void *bits = NULL;
+    HBITMAP dib = CreateDIBSection(screen, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
     ReleaseDC(NULL, screen);
-    if (!g_dib || !g_bits) return 0;
+    if (!dib || !bits) { if (dib) DeleteObject(dib); return 0; }
     if (!g_memDc) g_memDc = CreateCompatibleDC(NULL);
-    SelectObject(g_memDc, g_dib);
-    memset(g_bits, 0, (size_t)w * h * 4);
+    if (!g_memDc) { DeleteObject(dib); return 0; }
+    EnterCriticalSection(&g_dibLock);
+    HBITMAP old = (HBITMAP)SelectObject(g_memDc, dib);
+    if (!old || old == HGDI_ERROR) {
+        LeaveCriticalSection(&g_dibLock);
+        DeleteObject(dib);
+        return 0;
+    }
+    if (!g_stockBitmap) g_stockBitmap = old;
+    HBITMAP previousDib = g_dib;
+    g_dib = dib;
+    g_bits = bits;
+    memset(bits, 0, (size_t)w * h * 4);
     g_w = w;
     g_h = h;
+    if (previousDib) DeleteObject(previousDib);
+    LeaveCriticalSection(&g_dibLock);
     return 1;
 }
 
@@ -167,14 +229,13 @@ static void present(void) {
     LeaveCriticalSection(&g_dibLock);
 }
 
-static void applyFrame(int x, int y, int w, int h, const BYTE *bgra) {
-    if (!g_bits || x < 0 || y < 0 || w <= 0 || h <= 0) return;
-    if (x + w > g_w) w = g_w - x;
-    if (y + h > g_h) h = g_h - y;
-    if (w <= 0 || h <= 0) return;
+static void applyFrame(DWORD x, DWORD y, DWORD w, DWORD h, const BYTE *bgra) {
+    if (!g_bits || !w || !h ||
+        (uint64_t)x + w > (uint64_t)g_w ||
+        (uint64_t)y + h > (uint64_t)g_h) return;
     EnterCriticalSection(&g_dibLock);
     BYTE *dst = (BYTE *)g_bits;
-    for (int row = 0; row < h; row++) {
+    for (DWORD row = 0; row < h; row++) {
         memcpy(dst + ((size_t)(y + row) * g_w + x) * 4,
                bgra + (size_t)row * w * 4,
                (size_t)w * 4);
@@ -226,7 +287,7 @@ static void applyShow(int show) {
 }
 
 static void applyBounds(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) return;
     if (w != g_w || h != g_h) {
         if (!createDib(w, h)) {
             logLine("dib-resize-failed %dx%d", w, h);
@@ -244,7 +305,40 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         PostQuitMessage(0);
         return 0;
     case WM_DISPLAYCHANGE:
-        // Display geometry changed; Electron re-sends BOUNDS. Nothing to do here.
+        logLine("display-change"); // Electron re-sends BOUNDS.
+        return 0;
+    case WM_NCHITTEST:
+        if (g_clickThrough) return HTTRANSPARENT;
+        return DefWindowProcA(hwnd, msg, wParam, lParam);
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_TIMER:
+        if (wParam == 1 && g_shown) {
+            LONG_PTR style = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
+            // Walk everything above us: hidden topmost helper windows (IME etc.)
+            // can sit between us and a visible topmost window.
+            int coveredByVisibleTopmost = 0;
+            HWND above = GetWindow(hwnd, GW_HWNDPREV);
+            for (int hops = 0; above && hops < 256; hops++, above = GetWindow(above, GW_HWNDPREV)) {
+                if (IsWindowVisible(above) &&
+                    (GetWindowLongPtrA(above, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+                    coveredByVisibleTopmost = 1;
+                    break;
+                }
+            }
+            if (!(style & WS_EX_TOPMOST) || coveredByVisibleTopmost) {
+                // Already topmost: HWND_TOPMOST is a no-op within the topmost
+                // band; HWND_TOP lifts us above the other topmost window.
+                SetWindowPos(hwnd, (style & WS_EX_TOPMOST) ? HWND_TOP : HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                DWORD now = GetTickCount();
+                if (!g_lastZLog || now - g_lastZLog >= 10000) {
+                    logLine("z-reasserted n=%lu", g_suppressedZ + 1);
+                    g_lastZLog = now;
+                    g_suppressedZ = 0;
+                } else g_suppressedZ++;
+            }
+        }
         return 0;
     default:
         return DefWindowProcA(hwnd, msg, wParam, lParam);
@@ -259,19 +353,20 @@ static DWORD WINAPI PipeThread(LPVOID param) {
         DWORD hdr[2];
         if (!readExact(g_pipe, hdr, sizeof(hdr))) break;
         DWORD type = hdr[0], len = hdr[1];
-        if (len > 256 * 1024 * 1024) { // sanity cap: 256 MB
+        if (len > 64u * 1024u * 1024u) {
             logLine("oversize-message type=%lu len=%lu", type, len);
             break;
         }
-        BYTE *payload = NULL;
         if (len > 0) {
-            payload = (BYTE *)malloc(len);
-            if (!payload) break;
-            if (!readExact(g_pipe, payload, len)) {
-                free(payload);
-                break;
+            if (len > g_payloadCap) {
+                BYTE *grown = (BYTE *)realloc(g_payload, len);
+                if (!grown) break;
+                g_payload = grown;
+                g_payloadCap = len;
             }
+            if (!readExact(g_pipe, g_payload, len)) break;
         }
+        BYTE *payload = g_payload;
         switch (type) {
         case MSG_HELLO: {
             if (len < 12) { sendError("short HELLO"); break; }
@@ -301,11 +396,14 @@ static DWORD WINAPI PipeThread(LPVOID param) {
             DWORD y = *(DWORD *)(payload + 4);
             DWORD w = *(DWORD *)(payload + 8);
             DWORD h = *(DWORD *)(payload + 12);
-            if (len - 16 != (DWORD)((long long)w * h * 4)) {
+            if (!g_bits || !w || !h ||
+                (uint64_t)w * h * 4 != (uint64_t)len - 16 ||
+                (uint64_t)x + w > (uint64_t)g_w ||
+                (uint64_t)y + h > (uint64_t)g_h) {
                 logLine("frame-size-mismatch rect=%lux%lu len=%lu", w, h, len);
                 break;
             }
-            applyFrame((int)x, (int)y, (int)w, (int)h, payload + 16);
+            applyFrame(x, y, w, h, payload + 16);
             break;
         }
         case MSG_SHOW:
@@ -336,8 +434,10 @@ static DWORD WINAPI PipeThread(LPVOID param) {
             logLine("unknown-message type=%lu", type);
             break;
         }
-        free(payload);
     }
+    free(g_payload);
+    g_payload = NULL;
+    g_payloadCap = 0;
     logLine("pipe-closed frames=%ld", g_frameCount);
     // Pipe broke: Electron is gone or respawning us. Exit; do not linger
     // as a stale topmost window over the game.
@@ -345,10 +445,17 @@ static DWORD WINAPI PipeThread(LPVOID param) {
     return 0;
 }
 
+static DWORD WINAPI ConnectThread(LPVOID param) {
+    HANDLE pipe = (HANDLE)param;
+    if (ConnectNamedPipe(pipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED)
+        return 0;
+    return GetLastError();
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrevInstance;
-    (void)lpCmdLine;
     (void)nCmdShow;
+    if (!parseArgs(lpCmdLine)) return 1;
     InitializeCriticalSection(&g_dibLock);
     openLog();
 
@@ -379,19 +486,43 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
     applyClickThrough(1);
+    SetTimer(g_hwnd, 1, 1000, NULL);
     logLine("created");
 
     g_pipe = CreateNamedPipeA(
-        PIPE_NAME, PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+        g_pipeName, PIPE_ACCESS_DUPLEX,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
         1, 1 << 20, 1 << 20, 0, NULL);
     if (g_pipe == INVALID_HANDLE_VALUE) {
         logLine("create-pipe-failed err=%lu", GetLastError());
         return 1;
     }
     logLine("waiting-for-client");
-    if (!ConnectNamedPipe(g_pipe, NULL) && GetLastError() != ERROR_PIPE_CONNECTED) {
-        logLine("connect-pipe-failed err=%lu", GetLastError());
+    HANDLE connector = CreateThread(NULL, 0, ConnectThread, g_pipe, 0, NULL);
+    if (!connector) {
+        logLine("connect-thread-failed err=%lu", GetLastError());
+        return 1;
+    }
+    DWORD wait = WaitForSingleObject(connector, g_connectTimeoutMs);
+    if (wait == WAIT_TIMEOUT) {
+        logLine("no-client-timeout");
+        CancelSynchronousIo(connector);
+        DisconnectNamedPipe(g_pipe);
+        WaitForSingleObject(connector, 1000);
+        CloseHandle(connector);
+        KillTimer(g_hwnd, 1);
+        DestroyWindow(g_hwnd);
+        CloseHandle(g_pipe);
+        logLine("destroy frames=%ld", g_frameCount);
+        if (g_log) fclose(g_log);
+        DeleteCriticalSection(&g_dibLock);
+        return 0;
+    }
+    DWORD connectError = 0;
+    GetExitCodeThread(connector, &connectError);
+    CloseHandle(connector);
+    if (wait != WAIT_OBJECT_0 || connectError) {
+        logLine("connect-pipe-failed err=%lu", connectError);
         return 1;
     }
     logLine("client-connected");
@@ -408,12 +539,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessageA(&msg);
     }
 
+    KillTimer(g_hwnd, 1);
+    DestroyWindow(g_hwnd);
+    WaitForSingleObject(thread, 1000);
+    CloseHandle(thread);
     logLine("destroy frames=%ld", g_frameCount);
     if (g_pipe != INVALID_HANDLE_VALUE) {
         DisconnectNamedPipe(g_pipe);
         CloseHandle(g_pipe);
     }
-    if (g_dib) DeleteObject(g_dib);
+    if (g_dib) {
+        if (g_memDc && g_stockBitmap) SelectObject(g_memDc, g_stockBitmap);
+        DeleteObject(g_dib);
+    }
     if (g_memDc) DeleteDC(g_memDc);
     if (g_log) fclose(g_log);
     DeleteCriticalSection(&g_dibLock);

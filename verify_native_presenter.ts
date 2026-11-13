@@ -46,6 +46,12 @@ ok(presenterC.includes('onetrick-presenter'), 'presenter.c listens on the onetri
 ok(presenterC.includes('presenter.log'), 'presenter.c logs its lifecycle to presenter.log');
 ok(presenterC.includes('"created"'), 'presenter.c logs created');
 ok(presenterC.includes('destroy frames='), 'presenter.c logs destroy with its frame count');
+for (const required of ['PIPE_TYPE_BYTE', 'WM_NCHITTEST', 'WM_MOUSEACTIVATE', 'MA_NOACTIVATE', 'SetTimer', 'no-client-timeout']) {
+    ok(presenterC.includes(required), `presenter.c contains ${required}`);
+}
+for (const banned of ['SetWinEventHook', 'SendInput', 'mouse_event', 'keybd_event', 'SetForegroundWindow', 'SetActiveWindow']) {
+    ok(!presenterC.includes(banned), `presenter.c never calls ${banned} (passive/read-only rule)`);
+}
 for (const banned of ['SetWindowsHookEx', 'ReadProcessMemory', 'WriteProcessMemory', 'CreateRemoteThread', 'WSAStartup']) {
     ok(!presenterC.includes(banned), `presenter.c never calls ${banned} (passive/read-only rule)`);
 }
