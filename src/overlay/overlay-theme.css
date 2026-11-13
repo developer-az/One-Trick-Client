@@ -192,6 +192,54 @@ html.overlay-root .hud-buy-icon {
   border-radius: 6px;
 }
 
+/* Buy rail detail: item name + price, then what to do about it. */
+html.overlay-root .hud-buy-detail {
+  font-family: var(--font-body);
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+html.overlay-root .hud-buy-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+html.overlay-root .hud-buy-detail-name {
+  font-size: calc(12px * var(--ov-fs));
+  font-weight: 700;
+  color: var(--ov-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+html.overlay-root .hud-buy-detail-price {
+  font-size: calc(12px * var(--ov-fs));
+  font-weight: 600;
+  color: var(--ov-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+}
+html.overlay-root .hud-buy-detail-status {
+  font-size: calc(11px * var(--ov-fs));
+  font-weight: 600;
+  color: var(--ov-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.overlay-root .hud-buy-detail-status--buy-full {
+  color: var(--ov-teal);
+}
+html.overlay-root .hud-buy-detail-status--buy-component {
+  color: var(--ov-text-2);
+}
+html.overlay-root .hud-buy-detail-status--save {
+  color: var(--ov-amber);
+}
+
 /* ---------- Readability pass ----------
  * Everything below is static: no blur, no filters, no animation. Sizing only.
  * Text scales through --ov-fs so a 4K player can enlarge type without

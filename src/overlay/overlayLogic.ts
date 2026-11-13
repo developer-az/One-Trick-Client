@@ -169,6 +169,54 @@ export function buyRailLine(
   return { action: plan.action, buyId, text, title: plan.cue };
 }
 
+export interface BuyRailDetail {
+  name: string;
+  itemId: string;
+  cost: number;
+  goldShort: number | null;
+  kind: 'buy-full' | 'buy-component' | 'save';
+  partOf: string | null;
+}
+
+/**
+ * Structured companion to buyRailLine: same guards and planning inputs,
+ * exposing the item to buy now, its price and how much gold is still missing.
+ * Returns null wherever buyRailLine returns null or has no purchasable item.
+ */
+export function buyRailDetail(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailDetail | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown' || plan.action === 'no-slot') return null;
+
+  const rawCost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  const cost = Math.round(rawCost);
+  const goldShort = Math.max(0, cost - wholeGold);
+
+  return {
+    name: plan.buy?.name ?? plan.targetName,
+    itemId: plan.buy?.id ?? plan.targetId,
+    cost,
+    goldShort,
+    kind: plan.action,
+    partOf: plan.action === 'buy-component' ? plan.targetName : null,
+  };
+}
+
 export interface OverlayCueContext {
   analysis?: MatchupAnalysis | null;
   build?: Build | null;

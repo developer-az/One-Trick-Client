@@ -9,6 +9,7 @@ import { trackBuildProgress, type BuildItemRef } from '../logic/buildProgress';
 import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
 import {
   buildInGameCues,
+  buyRailDetail,
   buyRailLine,
   formatGameTime,
   getGankStatus,
@@ -478,6 +479,10 @@ export const OverlayApp: React.FC = () => {
     () => (inMayhem || inAram ? null : buyRailLine(state, buildProgress, prices)),
     [state, buildProgress, prices, inMayhem, inAram]
   );
+  const buyDetail = useMemo(
+    () => (inMayhem || inAram ? null : buyRailDetail(state, buildProgress, prices)),
+    [state, buildProgress, prices, inMayhem, inAram]
+  );
 
   /** Buy rail — in Mayhem keep icons up for the whole match (don't vanish when remaining blips empty). */
   const buyQueue = useMemo((): BuildItemRef[] => {
@@ -778,7 +783,27 @@ export const OverlayApp: React.FC = () => {
           className={`hud-buy-icon${index === 0 && !buyQueueComplete && !(buyRail?.action === 'buy-component' && buyRail.buyId) ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
         />
       ))}
-      {buyRail ? (
+      {buyRail && buyDetail ? (
+        <div className="hud-buy-detail w-full" title={buyRail.title}>
+          <div className="hud-buy-detail-row">
+            <span className="hud-buy-detail-name">{buyDetail.name}</span>
+            <span className="hud-buy-detail-price">
+              {buyDetail.cost.toLocaleString('en-US')}g
+            </span>
+          </div>
+          <div
+            className={`hud-buy-detail-status hud-buy-detail-status--${buyDetail.kind}`}
+          >
+            {buyDetail.kind === 'buy-full'
+              ? 'Buy now'
+              : buyDetail.kind === 'buy-component'
+                ? `Part of ${buyDetail.partOf}`
+                : buyDetail.goldShort !== null && buyDetail.goldShort > 0
+                  ? `Need ${buyDetail.goldShort.toLocaleString('en-US')}g`
+                  : buyRail.text}
+          </div>
+        </div>
+      ) : buyRail ? (
         <div className="w-full text-[11px] leading-tight opacity-80 truncate" title={buyRail.title}>
           {buyRail.text}
         </div>
