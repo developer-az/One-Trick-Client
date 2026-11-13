@@ -47,6 +47,22 @@
   --ot-amber: #f2b350; /* caution / short window */
   --ot-amber-soft: rgba(242, 179, 80, 0.12);
 
+  /* Density — one spacing scale for the whole app.
+   *
+   * 4px base with 2px half-steps for chrome (2 4 6 8 10 12 14 16 20 24 28 32
+   * 48). Cards, controls, tables, and page headers all read from the roles
+   * below, so every screen shares one dense rhythm instead of the old mixed
+   * values (page 28px 32px 48px, cards 18px 20px, card gaps 20–24px — each
+   * landed one step tighter here). Component stylesheets consume these and
+   * never redefine them. */
+  --ot-space-page: 20px 24px 32px; /* .ot-page frame: top / sides / bottom */
+  --ot-space-header: 16px;         /* page header → first card */
+  --ot-space-card: 14px 16px;      /* .ot-card-pad */
+  --ot-space-stack: 16px;          /* card → card, grid gutters, section rules */
+  --ot-space-row: 8px 10px;        /* list and settings rows */
+  --ot-space-table: 6px 8px;       /* dense table cells */
+  --ot-space-control: 8px;         /* control clusters */
+
   /* Shape */
   --ot-radius: 6px;
   --ot-radius-sm: 5px;

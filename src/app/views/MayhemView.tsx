@@ -202,7 +202,7 @@ export const MayhemView: React.FC<{
         {lastFromNetwork === true ? ' · updated from network' : ''}
       </p>
 
-      <div className="grid gap-5 lg:grid-cols-2 mb-5">
+      <div className="grid gap-4 lg:grid-cols-2 mb-4">
         <Card>
           <CardHeader title="Your champion" sub="Match Riot's internal id (e.g. Pyke, Brand)." />
           {champion ? (
@@ -274,7 +274,7 @@ export const MayhemView: React.FC<{
         </Card>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2 mb-5">
+      <div className="grid gap-4 lg:grid-cols-2 mb-4">
         <AugmentList
           title="Already owned"
           sub="Augments you picked at 3 / 7 / 11…"
@@ -346,7 +346,7 @@ export const MayhemView: React.FC<{
                 <span className="ot-num ot-faint mr-2">{row.rank}.</span>
                 <span className="font-medium">{row.name}</span>
                 <RarityBadge rarity={row.rarity} />
-                <p className="ot-muted mt-0.5 pl-6">{row.headline}</p>
+                <p className="ot-muted mt-0.5 pl-4">{row.headline}</p>
               </li>
             ))}
           </ol>

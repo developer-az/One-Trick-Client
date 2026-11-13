@@ -156,10 +156,10 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
       </div>
 
       {!isDesktop ? (
-        <div className="ot-callout mb-5">The overlay runs in the desktop app. You can still arrange the layout below.</div>
+        <div className="ot-callout mb-4">The overlay runs in the desktop app. You can still arrange the layout below.</div>
       ) : null}
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="General" />
           <SettingRow
@@ -291,7 +291,7 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
 
         <Card className="lg:col-span-2">
           <CardHeader title="Panels" sub="Turn off anything you don't use. Fewer panels means less drawing over the game." />
-          <div className="grid gap-x-8 md:grid-cols-2">
+          <div className="grid gap-x-4 md:grid-cols-2">
             {HUD_MODULE_IDS.map((id) => (
               <SettingRow
                 key={id}

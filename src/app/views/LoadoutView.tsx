@@ -46,7 +46,7 @@ export const LoadoutView: React.FC<{
             }
           />
         </Card>
-        <div className="mt-5 max-w-xl">
+        <div className="mt-4 max-w-xl">
           <AutoImportCard />
         </div>
       </div>
@@ -86,20 +86,20 @@ export const LoadoutView: React.FC<{
         </div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-5">
-        <div className="lg:col-span-2 space-y-5">
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-2 space-y-4">
           <Card>
             <RunePanel runes={runes} />
           </Card>
           <AutoImportCard />
         </div>
 
-        <div className="lg:col-span-3 space-y-5">
+        <div className="lg:col-span-3 space-y-4">
           <Card>
             <CardHeader title="Build order" />
             <OrderedBuildPath build={build} />
             <div className="ot-divider my-4" />
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <ItemGroup title="Start" items={build.starter} />
               <ItemGroup title="Boots" items={[build.boots]} />
               {profile.role === 'Support' ? (
@@ -159,7 +159,7 @@ const OrderedBuildPath: React.FC<{ build: Build }> = ({ build }) => {
           {i > 0 ? <IconArrowRight className="ot-step-arrow" /> : null}
           <span className="relative inline-flex" data-build-step={step.rank} title={itemTitle(step)}>
             <Item id={step.id} name={step.name} size={44} title={itemTitle(step)} />
-            <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-200/50 bg-black/80 px-1 text-[10px] font-bold leading-none text-amber-100">
+            <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-200/50 bg-black/80 px-1 text-[11px] font-bold leading-none text-amber-100">
               {step.rank}
             </span>
           </span>

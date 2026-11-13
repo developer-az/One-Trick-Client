@@ -56,7 +56,7 @@ export const HomeView: React.FC<{
 
   return (
     <div className="ot-page">
-      <Card className="ot-hero mb-5">
+      <Card className="ot-hero mb-4">
         <div className="ot-splash" aria-hidden>
           <img
             src={championSplashUrl(profile.championId)}
@@ -64,7 +64,7 @@ export const HomeView: React.FC<{
             onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
           />
         </div>
-        <div className="flex flex-wrap items-end justify-between gap-6 py-2">
+        <div className="flex flex-wrap items-end justify-between gap-4 py-2">
           <div className="min-w-0 max-w-xl">
             <Pill tone={status.tone}>{status.short}</Pill>
             <h1 className="ot-page-title mt-3">{STAGE_TITLE[status.stage]}</h1>
@@ -80,13 +80,13 @@ export const HomeView: React.FC<{
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-5 mb-5">
+      <div className="grid gap-4 lg:grid-cols-5 mb-4">
         <Card className="lg:col-span-3">
           <CardHeader
             title="Your champion"
             sub="Follows your champ select pick automatically. Set it here for practice or to plan ahead."
           />
-          <div className="flex items-center gap-4 mb-5">
+          <div className="flex items-center gap-4 mb-4">
             <Portrait champion={profileChampion} size={64} ring="gold" />
             <div className="min-w-0">
               <div className="ot-card-heading truncate">{profile.label}</div>
@@ -134,7 +134,7 @@ export const HomeView: React.FC<{
           </div>
         </Card>
 
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-2 space-y-4">
           <OneTrickCard champion={profileChampion as Champion} role={profile.role} />
 
           {league.inGame && league.enemySummoners.length ? (

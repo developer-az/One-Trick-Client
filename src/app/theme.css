@@ -97,13 +97,13 @@ html:not(.overlay-root) ::selection {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 14px 10px;
+  padding: 12px 8px;
   border-right: 1px solid var(--ot-border);
   background: var(--ot-bg);
   overflow-y: auto;
 }
 .ot-sidebar-label {
-  padding: 14px 12px 6px;
+  padding: 12px 10px 6px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -114,9 +114,9 @@ html:not(.overlay-root) ::selection {
 .ot-nav {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
   width: 100%;
-  padding: 9px 12px;
+  padding: var(--ot-space-row);
   border-radius: var(--ot-radius-sm);
   font-size: 14px;
   font-weight: 500;
@@ -152,14 +152,14 @@ html:not(.overlay-root) ::selection {
 .ot-page {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 28px 32px 48px;
+  padding: var(--ot-space-page);
 }
 .ot-page-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 22px;
+  gap: var(--ot-space-stack);
+  margin-bottom: var(--ot-space-header);
 }
 .ot-page-title {
   font-family: var(--ot-font-display);
@@ -183,7 +183,7 @@ html:not(.overlay-root) ::selection {
   background: var(--ot-surface);
 }
 .ot-card-pad {
-  padding: 18px 20px;
+  padding: var(--ot-space-card);
 }
 .ot-card-title {
   font-size: 13px;
@@ -202,6 +202,21 @@ html:not(.overlay-root) ::selection {
 .ot-divider {
   height: 1px;
   background: var(--ot-border);
+}
+
+/* Dense data tables — one shared row rhythm (R4 "dense tables"). Cells carry
+   no per-view padding utilities; the first/last columns keep the card inset. */
+.ot-table th,
+.ot-table td {
+  padding: var(--ot-space-table);
+}
+.ot-table th:first-child,
+.ot-table td:first-child {
+  padding-left: var(--ot-space-stack);
+}
+.ot-table th:last-child,
+.ot-table td:last-child {
+  padding-right: var(--ot-space-stack);
 }
 
 /* ---------- Text ---------- */
@@ -235,9 +250,9 @@ html:not(.overlay-root) ::selection {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 14px;
+  gap: var(--ot-space-control);
+  height: 32px;
+  padding: 0 12px;
   border-radius: var(--ot-radius-sm);
   border: 1px solid var(--ot-border-strong);
   background: var(--ot-surface-2);
@@ -280,20 +295,20 @@ html:not(.overlay-root) ::selection {
   color: var(--ot-text);
 }
 .ot-btn-sm {
-  height: 30px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 8px;
   font-size: 13px;
 }
 .ot-btn-lg {
-  height: 44px;
-  padding: 0 20px;
+  height: 40px;
+  padding: 0 16px;
   font-size: 15px;
 }
 
 .ot-input {
   width: 100%;
-  height: 38px;
-  padding: 0 12px;
+  height: 32px;
+  padding: 0 10px;
   border-radius: var(--ot-radius-sm);
   border: 1px solid var(--ot-border-strong);
   background: var(--ot-bg);
@@ -336,15 +351,15 @@ html:not(.overlay-root) ::selection {
 
 .ot-segment {
   display: inline-flex;
-  padding: 3px;
+  padding: 2px;
   gap: 2px;
   border-radius: 10px;
   background: var(--ot-bg);
   border: 1px solid var(--ot-border);
 }
 .ot-segment button {
-  height: 28px;
-  padding: 0 12px;
+  height: 26px;
+  padding: 0 10px;
   border-radius: 7px;
   font-size: 13px;
   font-weight: 550;
@@ -361,8 +376,8 @@ html:not(.overlay-root) ::selection {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 26px;
-  padding: 0 10px;
+  height: 24px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid var(--ot-border);
   background: var(--ot-surface);
@@ -404,8 +419,8 @@ html:not(.overlay-root) ::selection {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 22px;
-  padding: 0 8px;
+  height: 20px;
+  padding: 0 6px;
   border-radius: 6px;
   font-size: 12px;
   font-weight: 600;
@@ -436,8 +451,8 @@ html:not(.overlay-root) ::selection {
 
 .ot-callout {
   display: flex;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: 10px;
+  padding: 10px 12px;
   border-radius: var(--ot-radius-sm);
   border: 1px solid var(--ot-border);
   background: var(--ot-surface-2);
@@ -512,7 +527,7 @@ html:not(.overlay-root) ::selection {
   place-items: center;
   width: 100%;
   height: 100%;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ot-text-3);
 }
 
@@ -541,8 +556,8 @@ html:not(.overlay-root) ::selection {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 60px;
-  padding: 8px 12px 8px 8px;
+  min-height: 56px;
+  padding: 6px 10px 6px 6px;
   border-radius: 10px;
   border: 1px solid var(--ot-border);
   background: var(--ot-surface-2);
@@ -626,8 +641,8 @@ html:not(.overlay-root) ::selection {
   align-items: center;
   gap: 6px;
   height: 30px;
-  min-width: 84px;
-  padding: 0 10px;
+  min-width: 80px;
+  padding: 0 8px;
   border-radius: 8px;
   border: 1px solid var(--ot-border-strong);
   background: var(--ot-surface-2);
@@ -689,7 +704,7 @@ html:not(.overlay-root) ::selection {
 .ot-toast {
   display: flex;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--ot-border-strong);
   background: var(--ot-surface-2);
@@ -778,7 +793,7 @@ html:not(.overlay-root) .uppercase.tracking-wide {
 
 .ot-page-header {
   position: relative;
-  padding-bottom: 16px;
+  padding-bottom: 12px;
 }
 .ot-page-header::after {
   content: '';
@@ -791,7 +806,7 @@ html:not(.overlay-root) .uppercase.tracking-wide {
 }
 .ot-page-title {
   font-weight: 700;
-  font-size: 28px;
+  font-size: 26px;
   letter-spacing: 0.04em;
   background: var(--ot-chrome);
   -webkit-background-clip: text;
