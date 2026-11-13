@@ -528,16 +528,23 @@ html.overlay-root body {
 .hud-ward-where {
   flex: 1 1 auto;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .hud-ward-meta {
-  flex-shrink: 0;
-  opacity: 0.75;
-  font-size: 9px;
-  letter-spacing: 0.1em;
+  flex: 1 1 auto;
+  min-width: 0;
+  opacity: 0.8;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
 }
 
 .hud-ward-copy {
@@ -545,7 +552,7 @@ html.overlay-root body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
+  gap: 0.1rem;
 }
 
 .hud-ward-why {

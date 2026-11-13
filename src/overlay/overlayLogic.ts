@@ -324,9 +324,14 @@ export function isCoachCueId(id: string): boolean {
   return COACH_CUE_ID.test(id);
 }
 
-function compactCueLabel(label: string): string {
+export function compactCueLabel(label: string): string {
   const t = label.replace(/\s+/g, ' ').trim();
-  return t.length <= 18 ? t : `${t.slice(0, 16).trimEnd()}`;
+  if (t.length <= 18) return t;
+  const space = t.lastIndexOf(' ', 17);
+  if (space > 0) {
+    return t.slice(0, space).replace(/[\s.,;:!?-]+$/, '');
+  }
+  return `${t.slice(0, 17)}\u2026`;
 }
 
 function actionCue(

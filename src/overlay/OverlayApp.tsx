@@ -789,7 +789,11 @@ export const OverlayApp: React.FC = () => {
   const actionLine = showAction ? (
     <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
       <div>{cues[0].label}</div>
-      {cues[0].rationale ? <div className="text-[11px] opacity-75">{cues[0].rationale}</div> : null}
+      {cues[0].rationale ? (
+        <div className="text-[12px] opacity-[0.85] leading-snug line-clamp-2">
+          {cues[0].rationale}
+        </div>
+      ) : null}
     </div>
   ) : null;
 
