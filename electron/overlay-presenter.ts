@@ -56,6 +56,8 @@ const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 5_000;
 const READY_TIMEOUT_MS = 5_000;
 const PING_EVERY_MS = 5_000;
+/** No PONG for this long means the presenter is wedged, not merely alive. */
+const PING_TIMEOUT_MS = 3 * PING_EVERY_MS;
 const CHILD_EXIT_TIMEOUT_MS = 1_500;
 /** Presenter-side sanity cap, mirrored here so a corrupt length never allocates blindly. */
 const MAX_MESSAGE_BYTES = 256 * 1024 * 1024;
@@ -191,6 +193,8 @@ class NativeSurface implements NativeSurfaceHandle {
     private queuedBytes = 0;
     private needsFullFrame = false;
     private pingTimer: ReturnType<typeof setInterval> | null = null;
+    /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
+    private lastPongAt = 0;
     private lastReloadAt = 0;
     private supervisor = new PresenterSupervisor();
     private spawning: Promise<void> | null = null;
@@ -228,7 +232,9 @@ class NativeSurface implements NativeSurfaceHandle {
             frames: this.frames,
             framesDropped: this.framesDropped,
             lastFrameAt: this.lastFrameAt,
-            respawns: this.supervisor.snapshot().respawns,
+            // The supervisor counts the initial attach as a spawn; health lines
+            // must report actual respawns.
+            respawns: Math.max(0, this.supervisor.snapshot().respawns - 1),
             fallbacks: this.fallbackNotified ? 1 : 0,
         };
     }
@@ -302,6 +308,12 @@ class NativeSurface implements NativeSurfaceHandle {
             if (this.spawning !== null) return;
             if (!this.isLive()) {
                 this.markDown('ping-no-live-presenter');
+                return;
+            }
+            const sinceMs = Date.now() - this.lastPongAt;
+            if (sinceMs > PING_TIMEOUT_MS) {
+                overlayLog('presenter-ping-timeout', { sinceMs });
+                this.markDown('ping-timeout');
                 return;
             }
             this.send(MSG_PING, Buffer.alloc(0));
@@ -386,6 +398,7 @@ class NativeSurface implements NativeSurfaceHandle {
             throw new Error('presenter spawn cancelled');
         }
         this.alive = true;
+        this.lastPongAt = Date.now();
         this.supervisor.noteReady(Date.now());
         this.send(MSG_CAPTURE, Buffer.from([this.captureProtection ? 1 : 0]));
         this.send(MSG_CLICKTHROUGH, Buffer.from([1]));
@@ -406,7 +419,11 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     private onReply(type: number, payload: Buffer): void {
-        if (type === MSG_PONG) return; // Liveness reply; nothing to do.
+        if (type === MSG_PONG) {
+            // Liveness reply: reset the wedged-presenter clock, nothing else.
+            this.lastPongAt = Date.now();
+            return;
+        }
         if (type === MSG_READY) {
             if (this.readyWaiter) {
                 const waiter = this.readyWaiter;
@@ -569,7 +586,8 @@ class NativeSurface implements NativeSurfaceHandle {
             }
             return;
         }
-        overlayLog('presenter-respawned', { attempt: action.attempt });
+        // The supervisor's attempt counts the initial attach; log human attempts.
+        overlayLog('presenter-respawned', { attempt: action.attempt - 1 });
         const task = this.runRespawn();
         this.spawning = task;
         void task

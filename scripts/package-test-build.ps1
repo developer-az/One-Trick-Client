@@ -11,7 +11,10 @@
 param(
     [string]$Label = 'native-overlay',
     [string]$Tag = 'test-native-overlay-20261111',
-    [string]$Backend = 'native'
+    [string]$Backend = 'native',
+    [string]$Version = '',
+    [string]$NotesFile = '',
+    [switch]$NoPublish
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
@@ -32,7 +35,7 @@ Step 'presenter build' { npm run build:presenter }
 # package.json via extraMetadata (the same mechanism as the earlier test
 # builds — the source file is untouched).
 try {
-    node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));const b={...p.build};b.win={...b.win,target:['zip']};b.extraResources=(b.extraResources||[]).filter(r=>!(r.from||'').includes('ffmpeg'));b.extraMetadata={testBuildLabel:'$Label',overlayBackend:'$Backend'};fs.writeFileSync('build-scratch.json',JSON.stringify(b,null,2))"
+    node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));const b={...p.build};b.win={...b.win,target:['zip']};b.extraResources=(b.extraResources||[]).filter(r=>!(r.from||'').includes('ffmpeg'));b.extraMetadata={testBuildLabel:'$Label',overlayBackend:'$Backend'};if('$Version')b.extraMetadata.version='$Version';fs.writeFileSync('build-scratch.json',JSON.stringify(b,null,2))"
     if ($LASTEXITCODE -ne 0) { throw 'scratch config failed' }
 
     Step 'electron-builder (zip, no ffmpeg)' { npx electron-builder --config build-scratch.json --win zip }
@@ -40,7 +43,7 @@ try {
     Remove-Item 'build-scratch.json' -ErrorAction SilentlyContinue
 }
 
-$version = (Get-Content 'package.json' -Raw | ConvertFrom-Json).version
+$version = if ($Version) { $Version } else { (Get-Content 'package.json' -Raw | ConvertFrom-Json).version }
 $zip = "release/One.Trick.$version.zip"
 if (-not (Test-Path $zip)) { throw "expected artifact missing: $zip" }
 
@@ -54,5 +57,7 @@ Pass = overlay visible at match end, and %APPDATA%\One Trick\logs\presenter.log 
 Auto-clipping unavailable in this build (no ffmpeg). Recorder unchanged, not included.
 "@
 
+if ($NotesFile -and (Test-Path $NotesFile)) { $notes = Get-Content $NotesFile -Raw }
+if ($NoPublish) { Write-Host "Built $zip (not published)"; return }
 Step 'publish pre-release' { gh release create $Tag --prerelease --title "Test build $Tag" --notes $notes $zip }
 Write-Host "Done: pre-release $Tag published with $zip"

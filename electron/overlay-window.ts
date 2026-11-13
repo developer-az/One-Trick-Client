@@ -44,6 +44,13 @@ let nativeSurface: NativeSurfaceHandle | null = null;
 let electronSurfaceActive = false;
 /** One fallback per process is enough; the log keeps the reason. */
 let fallbackCount = 0;
+/**
+ * Once the presenter falls back, the process stays on the Electron overlay.
+ * loadSettings() re-derives the backend from disk/packaging on every
+ * createOverlayWindow(), so without this latch the fallback was overwritten
+ * and the native surface came straight back. Never persisted.
+ */
+let nativeFallbackLatched = false;
 let nativeWatchersInstalled = false;
 let nativeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -755,6 +762,8 @@ function loadSettings(): void {
         // No saved settings yet.
         backend = readPackagedOverlayBackend() ?? 'electron';
     }
+    // A fallback this process already made survives every settings reload.
+    if (nativeFallbackLatched && backend === 'native') backend = 'electron';
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -894,6 +903,7 @@ function installNativeWatchers(): void {
 function handleNativeFallback(reason: string): void {
     if (backend !== 'native') return;
     overlayLog('backend-fallback', { reason });
+    nativeFallbackLatched = true;
     backend = 'electron';
     fallbackCount += 1;
     if (nativeSurface) {

@@ -75,6 +75,18 @@ ok(fallbackBody !== '', 'handleNativeFallback is a top-level function with a sin
 ok(!fallbackBody.includes('saveSettings('), 'fallback does not persist settings');
 ok(!fallbackBody.includes('setOverlayBackend('), 'fallback does not call setOverlayBackend');
 
+// ---- the fallback latches: loadSettings() must not re-arm the native surface ----
+ok(windowSource.includes('nativeFallbackLatched'), 'overlay-window.ts latches the native fallback');
+const loadBody = functionBody(windowSource, 'function loadSettings(');
+ok(loadBody !== '', 'loadSettings is a top-level function with a single closing brace');
+ok(loadBody.includes('nativeFallbackLatched'), 'loadSettings honours the fallback latch after its try/catch');
+ok(fallbackBody.includes('nativeFallbackLatched = true'), 'handleNativeFallback sets the fallback latch');
+
+// ---- a wedged-but-connected presenter is detected and torn down ----
+for (const required of ['presenter-ping-timeout', 'lastPongAt', 'PING_TIMEOUT_MS']) {
+    ok(driver.includes(required), `overlay-presenter.ts contains ${required}`);
+}
+
 // ---- the old bug: polls during one in-flight spawn burn the budget ----
 const supervisor = new PresenterSupervisor();
 const first = supervisor.decide(0, { wanted: true });

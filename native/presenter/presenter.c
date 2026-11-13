@@ -318,10 +318,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // Walk everything above us: hidden topmost helper windows (IME etc.)
             // can sit between us and a visible topmost window.
             int coveredByVisibleTopmost = 0;
+            RECT ourRect;
             HWND above = GetWindow(hwnd, GW_HWNDPREV);
             for (int hops = 0; above && hops < 256; hops++, above = GetWindow(above, GW_HWNDPREV)) {
+                RECT aboveRect, overlap;
                 if (IsWindowVisible(above) &&
-                    (GetWindowLongPtrA(above, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+                    (GetWindowLongPtrA(above, GWL_EXSTYLE) & WS_EX_TOPMOST) &&
+                    GetWindowRect(above, &aboveRect) && GetWindowRect(hwnd, &ourRect) &&
+                    IntersectRect(&overlap, &aboveRect, &ourRect)) {
+                    // Only a topmost window that actually overlaps the HUD counts;
+                    // a toast on another monitor must not trigger a 1 Hz lift.
                     coveredByVisibleTopmost = 1;
                     break;
                 }
@@ -353,7 +359,7 @@ static DWORD WINAPI PipeThread(LPVOID param) {
         DWORD hdr[2];
         if (!readExact(g_pipe, hdr, sizeof(hdr))) break;
         DWORD type = hdr[0], len = hdr[1];
-        if (len > 64u * 1024u * 1024u) {
+        if (len > 256u * 1024u * 1024u) { // matches the driver's MAX_MESSAGE_BYTES
             logLine("oversize-message type=%lu len=%lu", type, len);
             break;
         }
