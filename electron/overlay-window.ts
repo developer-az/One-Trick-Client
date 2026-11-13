@@ -900,6 +900,11 @@ function installNativeWatchers(): void {
     powerMonitor.on('unlock-screen', refreshAfterWake);
 }
 
+/** Dispose a surface whose attach finished after its window was superseded. */
+function discardStaleNativeSurface(handle: NativeSurfaceHandle): void {
+    handle.destroy();
+}
+
 function handleNativeFallback(reason: string): void {
     if (backend !== 'native') return;
     overlayLog('backend-fallback', { reason });
@@ -968,12 +973,20 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
         }
     )
         .then((handle) => {
+            if (osrWin !== win || win.isDestroyed()) {
+                // This attach was superseded (window closed/replaced while the
+                // presenter was starting): never adopt or keep its sidecar.
+                discardStaleNativeSurface(handle);
+                return;
+            }
             nativeSurface = handle;
             syncNativeVisibility();
         })
         .catch((error: unknown) => {
             console.warn('[overlay] presenter attach failed', error);
             overlayLog('presenter-spawn-failed', { error: String(error) });
+            // A stale attach must not tear down a newer window or latch the fallback.
+            if (osrWin !== win || win.isDestroyed()) return;
             handleNativeFallback(`attach-failed: ${String(error)}`);
         });
     return win;

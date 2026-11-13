@@ -176,6 +176,17 @@ async function test() {
     const [a, z] = pixels.split(';').map((s) => s.split(',').map(Number));
     check('magenta dirty rect appears on screen', a[0] > 240 && a[1] < 20 && a[2] > 240, pixels);
     check('outside dirty rect is not magenta', !(z[0] > 240 && z[1] < 20 && z[2] > 240), pixels);
+    // Regression: Electron's OSR image can be 1px larger than the surface (DPI rounding).
+    // A 641x361 frame on the 640x360 surface must be clipped, not dropped, and its
+    // rows must not shear (right half magenta, left half transparent).
+    const wide = Buffer.alloc(641 * 361 * 4);
+    for (let yy = 0; yy < 361; yy++) for (let xx = 320; xx < 641; xx++) { const o = (yy * 641 + xx) * 4; wide[o] = 255; wide[o + 2] = 255; wide[o + 3] = 255; }
+    await send(socket, 2, Buffer.concat([words(0, 0, 641, 361), wide]));
+    await sleep(300);
+    const widePx = await ps(`Add-Type -AssemblyName System.Drawing; $b=New-Object Drawing.Bitmap 640,360; $g=[Drawing.Graphics]::FromImage($b); $g.CopyFromScreen(0,0,0,0,$b.Size); $r=@(@(400,10),@(400,300),@(100,10),@(100,300)); ($r | ForEach-Object { $c=$b.GetPixel($_[0],$_[1]); "$($c.R),$($c.G),$($c.B)" }) -join ';'; $g.Dispose(); $b.Dispose()`);
+    const [w1, w2, w3, w4] = widePx.split(';').map((s) => s.split(',').map(Number));
+    const isMagenta = (p) => p[0] > 240 && p[1] < 20 && p[2] > 240;
+    check('oversize (surface+1px) frame is clipped, not dropped, without shear', isMagenta(w1) && isMagenta(w2) && !isMagenta(w3) && !isMagenta(w4), widePx);
     // A separate PowerShell process owns the competitor until its stdin closes.
     const competitorCode = `Add-Type -TypeDefinition @'
 ${native}

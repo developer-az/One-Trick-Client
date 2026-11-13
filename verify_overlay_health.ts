@@ -92,11 +92,18 @@ ok(
 // presenter cannot be kept alive, handleNativeFallback tears down the native
 // surface once and switches to the Electron window. Nothing else may.
 const fbStart = ow.indexOf('function handleNativeFallback');
-ok(fbStart !== -1, 'handleNativeFallback exists (the one sanctioned destroy outside destroyOverlay)');
+ok(fbStart !== -1, 'handleNativeFallback exists (a sanctioned destroy site outside destroyOverlay)');
 const fbEnd = fbStart === -1 ? -1 : ow.indexOf('\n}\n', fbStart) + 3;
-const owSansFallback = fbStart === -1 ? ow : ow.slice(0, fbStart) + ow.slice(fbEnd);
 const fallbackBody = fbStart === -1 ? '' : ow.slice(fbStart, fbEnd);
 ok(!fallbackBody.includes('saveSettings(') && !fallbackBody.includes('setOverlayBackend('), 'fallback never persists the backend choice');
+// Second sanctioned site: an attach that finished after its window was superseded.
+const stStart = ow.indexOf('function discardStaleNativeSurface');
+ok(stStart !== -1, 'discardStaleNativeSurface exists (disposes a superseded attach)');
+const stEnd = stStart === -1 ? -1 : ow.indexOf('\n}\n', stStart) + 3;
+let owSansFallback = ow;
+for (const [s, e] of [[stStart, stEnd], [fbStart, fbEnd]].sort((x, y) => y[0] - x[0])) {
+    if (s !== -1) owSansFallback = owSansFallback.slice(0, s) + owSansFallback.slice(e);
+}
 const beforeDestroy = owSansFallback.slice(0, owSansFallback.indexOf('export function destroyOverlay'));
 const destroyBody = owSansFallback.slice(owSansFallback.indexOf('export function destroyOverlay'), owSansFallback.indexOf('export function toggleOverlayVisibility'));
 const afterDestroy = owSansFallback.slice(owSansFallback.indexOf('export function toggleOverlayVisibility'));

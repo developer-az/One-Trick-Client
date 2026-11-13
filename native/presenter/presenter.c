@@ -405,10 +405,11 @@ static DWORD WINAPI PipeThread(LPVOID param) {
             DWORD y = *(DWORD *)(payload + 4);
             DWORD w = *(DWORD *)(payload + 8);
             DWORD h = *(DWORD *)(payload + 12);
+            // Right/bottom overhang is legal (Electron's OSR image can be a pixel
+            // larger than the surface); applyFrame clips. Origin must be inside.
             if (!g_bits || !w || !h ||
                 (uint64_t)w * h * 4 != (uint64_t)len - 16 ||
-                (uint64_t)x + w > (uint64_t)g_w ||
-                (uint64_t)y + h > (uint64_t)g_h) {
+                x >= (DWORD)g_w || y >= (DWORD)g_h) {
                 logLine("frame-size-mismatch rect=%lux%lu len=%lu", w, h, len);
                 break;
             }
