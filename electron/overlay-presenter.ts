@@ -16,6 +16,7 @@ import net from 'net';
 import path from 'path';
 import { overlayLog } from './overlay-log';
 import { nativePresenterPath } from './paths';
+import { cropDirtyRect } from './presenter-frame';
 
 export const PRESENTER_PIPE_NAME = '\\\\.\\pipe\\onetrick-presenter';
 export const PRESENTER_PROTOCOL_VERSION = 1;
@@ -396,15 +397,16 @@ class NativeSurface implements NativeSurfaceHandle {
         }
         const size = image.getSize();
         const bytes = image.toBitmap();
-        if (bytes.length !== size.width * size.height * 4) {
-            // Bitmap does not match its own dimensions — never send a corrupt frame.
+        // The dirty rect is already in physical pixels of this bitmap; ship
+        // exactly that sub-rectangle so the presenter pastes it at (x, y).
+        const cropped = cropDirtyRect(bytes, size.width, size.height, dirtyRect);
+        if (!cropped) {
+            // Corrupt bitmap or empty rect — never send a broken frame.
             this.framesDropped++;
             return;
         }
-        const rect = this.physicalRect(dirtyRect);
-        // The bitmap defines the frame: its pixel size wins over the scaled rect.
-        const header = encodeU32s([rect.x, rect.y, size.width, size.height]);
-        if (!this.send(MSG_FRAME, Buffer.concat([header, bytes]))) {
+        const header = encodeU32s([cropped.x, cropped.y, cropped.width, cropped.height]);
+        if (!this.send(MSG_FRAME, Buffer.concat([header, cropped.data]))) {
             this.framesDropped++;
             return;
         }
