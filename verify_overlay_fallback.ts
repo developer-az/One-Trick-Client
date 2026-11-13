@@ -19,7 +19,8 @@ function ok(cond: boolean, msg: string): void {
 }
 
 function read(rel: string): string {
-    return fs.readFileSync(rel, 'utf8');
+    // Normalise line endings: git/autocrlf may hand us CRLF on Windows.
+    return fs.readFileSync(rel, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function functionBody(source: string, marker: string): string {
