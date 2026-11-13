@@ -6,6 +6,7 @@ import {
     readLiveBoard,
     readLiveClock,
     resetStateService,
+    clearStateBoard,
     setStateServiceEngaged,
     setStateServiceHudHidden,
     startStateService,
@@ -1027,6 +1028,10 @@ function endGameSession(): void {
     console.info('[match] ended', lastMatchEndReason || '(manual)');
     overlayLog('match-end', { reason: lastMatchEndReason || 'manual' });
     inGame = false;
+    // The board cached from the finished game would let a late live tick (or a
+    // poll still in flight) restart the whole match lifecycle via beginMatch
+    // after the overlay was taken down. Void it: readLiveBoard() is null again.
+    clearStateBoard();
     setOverlayMatchActive(false);
     resetMatchCaches();
     // Ring buffer pauses with the match; captured segments stay available.

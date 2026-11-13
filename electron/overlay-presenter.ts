@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import net from 'net';
 import path from 'path';
 import { overlayLog } from './overlay-log';
+import { isWinAlive, safeCall } from './safe-window';
 import { nativePresenterPath } from './paths';
 import { cropDirtyRect } from './presenter-frame';
 import { PresenterSupervisor } from './presenter-supervisor';
@@ -288,15 +289,18 @@ class NativeSurface implements NativeSurfaceHandle {
         }
         this.armRenderer();
         this.osrWin.webContents.on('did-finish-load', () => {
-            try {
-                this.osrWin.webContents.startPainting();
-            } catch {
-                // Older Electron — painting starts on load.
-            }
+            // The window can be torn down between the load event and this
+            // callback (post-match destroy races the finished render).
+            if (!isWinAlive(this.osrWin)) return;
+            safeCall(() => this.osrWin.webContents.startPainting(), (error) => {
+                // Older Electron — painting starts on load; log anything else.
+                console.warn('[presenter] startPainting failed', error);
+            });
             this.requestFullFrame();
             this.onLoaded();
         });
         this.osrWin.webContents.on('paint', (_event, dirtyRect, image) => {
+            if (!isWinAlive(this.osrWin)) return;
             this.forwardPaint(dirtyRect, image);
         });
         const url = getOverlayUrl();
@@ -471,8 +475,15 @@ class NativeSurface implements NativeSurfaceHandle {
         dirtyRect: { x: number; y: number; width: number; height: number },
         image: Electron.NativeImage
     ): void {
-        const size = image.getSize();
-        const bytes = image.toBitmap();
+        // A paint can land just as the offscreen window is destroyed; reading
+        // the bitmap off a dead NativeImage throws "Object has been destroyed".
+        const size = safeCall(() => image.getSize(), (error) => {
+            console.warn('[presenter] paint getSize failed', error);
+        });
+        const bytes = safeCall(() => image.toBitmap(), (error) => {
+            console.warn('[presenter] paint toBitmap failed', error);
+        });
+        if (!size || !bytes) return;
         // The paint bitmap is the complete frame, so keep it even when this
         // paint is dropped (presenter down or queue full): respawn/resize can
         // then re-send it without waiting for the next dirty rect.
@@ -688,14 +699,19 @@ class NativeSurface implements NativeSurfaceHandle {
     private armRenderer(): void {
         const contents = this.osrWin.webContents;
         const reload = (): void => {
+            if (this.destroyed || this.osrWin.isDestroyed()) return;
             const now = Date.now();
             if (now - this.lastReloadAt < 5_000) return;
             this.lastReloadAt = now;
             const url = getOverlayUrl();
-            const load = url.startsWith('http') ? this.osrWin.loadURL(url) : this.osrWin.loadFile(url);
-            void load.catch((error: unknown) => {
+            const load = safeCall(() => (url.startsWith('http') ? this.osrWin.loadURL(url) : this.osrWin.loadFile(url)), (error) => {
                 console.warn('[presenter] overlay reload failed', error);
             });
+            if (load) {
+                void load.catch((error: unknown) => {
+                    console.warn('[presenter] overlay reload failed', error);
+                });
+            }
             overlayLog('presenter-renderer-reload', {});
         };
         contents.on('render-process-gone', (_event, details) => {

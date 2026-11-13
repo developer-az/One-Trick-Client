@@ -5,6 +5,7 @@ import path from 'path';
 import { readLeagueHudScales } from './league-settings';
 import { overlayWindowFaults, overlayWindowWanted } from './overlay-bounds';
 import { overlayLog } from './overlay-log';
+import { isWinAlive, safeCall } from './safe-window';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
 import { attachNativeSurface, createOsrWindow, type NativeSurfaceHandle } from './overlay-presenter';
@@ -94,6 +95,16 @@ export function setOverlayBackend(next: OverlayBackend): OverlayBackend {
  */
 function overlayWindows(): BrowserWindow[] {
     return overlayWin && !overlayWin.isDestroyed() ? [overlayWin] : [];
+}
+
+/**
+ * Whether a window still exists AND belongs to the given webContents id.
+ * Never throws: a window mid-teardown (methods raising
+ * "Object has been destroyed") simply reports false.
+ */
+function windowHasWebContents(win: BrowserWindow | null, webContentsId: number): boolean {
+    if (!isWinAlive(win)) return false;
+    return safeCall(() => win.webContents.id === webContentsId, () => undefined) === true;
 }
 
 /** Shown HUD rate. The clock moves once a second; 60 software frames of a transparent window hitch League. */
@@ -302,10 +313,8 @@ function syncWindowVisibility(win: BrowserWindow): void {
 
 /** Renderer reports whether it has anything to draw (see OverlayApp). */
 export function setOverlaySlotContent(webContentsId: number, hasContent: boolean): void {
-    const isNative =
-        isNativeLocked() && !!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId;
-    const isElectron =
-        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId;
+    const isNative = isNativeLocked() && windowHasWebContents(osrWin, webContentsId);
+    const isElectron = windowHasWebContents(overlayWin, webContentsId);
     if (!isNative && !isElectron) return;
     if (hasContent) {
         if (contentGraceTimer) {
@@ -340,7 +349,9 @@ function forgetSlot(webContentsId: number): void {
 }
 
 function reloadOverlayRenderer(win: BrowserWindow): void {
-    if (win.isDestroyed()) return;
+    // isWinAlive wraps both destroy checks in a try/catch, and the explicit
+    // webContents check closes the window-destroyed-but-webContents-alive gap.
+    if (!isWinAlive(win) || win.webContents.isDestroyed()) return;
     const now = Date.now();
     const previous = lastRendererReload.get(win) ?? 0;
     if (now - previous < RENDERER_RELOAD_MIN_MS) return;
@@ -348,15 +359,22 @@ function reloadOverlayRenderer(win: BrowserWindow): void {
     console.warn('[overlay] reloading renderer');
     overlayLog('renderer-reload', { window: win.webContents.id });
     const url = getOverlayUrl();
-    const load = url.startsWith('http') ? win.loadURL(url) : win.loadFile(url);
-    void load.catch((error: unknown) => {
-        console.warn('[overlay] renderer reload failed', error);
-        try {
-            overlayLog('renderer-reload-failed', { window: win.webContents.id, error: String(error) });
-        } catch {
-            // ignore
+    const load = safeCall(
+        () => (url.startsWith('http') ? win.loadURL(url) : win.loadFile(url)),
+        (error) => {
+            console.warn('[overlay] renderer reload failed', error);
         }
-    });
+    );
+    if (load) {
+        void load.catch((error: unknown) => {
+            console.warn('[overlay] renderer reload failed', error);
+            try {
+                overlayLog('renderer-reload-failed', { window: win.webContents.id, error: String(error) });
+            } catch {
+                // ignore
+            }
+        });
+    }
 }
 
 function armOverlayRenderer(win: BrowserWindow): void {
@@ -416,10 +434,8 @@ export function noteOverlayHeartbeat(
     webContentsId: number,
     beat: { frames: boolean; pageVisible: boolean }
 ): void {
-    const isNative =
-        isNativeLocked() && !!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId;
-    const isElectron =
-        !!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId;
+    const isNative = isNativeLocked() && windowHasWebContents(osrWin, webContentsId);
+    const isElectron = windowHasWebContents(overlayWin, webContentsId);
     if (!isNative && !isElectron) return;
     const now = Date.now();
     const previous = overlayBeats.get(webContentsId);
@@ -1547,8 +1563,8 @@ export function overlaySlotFor(webContentsId: number): {
 } {
     const display = overlayDisplay();
     const isOverlay =
-        (!!overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === webContentsId) ||
-        (!!osrWin && !osrWin.isDestroyed() && osrWin.webContents.id === webContentsId);
+        windowHasWebContents(overlayWin, webContentsId) ||
+        windowHasWebContents(osrWin, webContentsId);
     return {
         slot: isOverlay ? currentSlot() : null,
         displayWidth: display.bounds.width,
@@ -1614,10 +1630,12 @@ export function sendOverlayUpdate(payload: unknown): void {
     const slim = slimForMainWindow(full);
 
     for (const win of BrowserWindow.getAllWindows()) {
-        if (win.isDestroyed()) continue;
+        if (!isWinAlive(win)) continue;
         const isOverlay =
             overlayWindows().some((overlay) => overlay.id === win.id) ||
             (!!osrWin && !osrWin.isDestroyed() && osrWin.id === win.id);
-        win.webContents.send('overlay-update', isOverlay ? full : slim);
+        safeCall(() => win.webContents.send('overlay-update', isOverlay ? full : slim), (error) => {
+            console.warn('[overlay] overlay-update send failed', error);
+        });
     }
 }

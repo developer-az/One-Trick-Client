@@ -93,10 +93,23 @@ import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
 import { overlayLog } from './overlay-log';
+import { isWinAlive, safeCall, installCrashNet } from './safe-window';
 import { readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
+
+// Last-chance uncaughtException/unhandledRejection handlers: the known
+// post-match "Object has been destroyed" race is logged and absorbed, any
+// other error is logged loudly — nothing exits the process silently.
+// Installed before anything else can throw.
+installCrashNet((message) => {
+    try {
+        overlayLog('uncaught-exception', { message });
+    } catch {
+        console.error(message);
+    }
+});
 
 // Read our own package.json once at startup so a test build can identify itself.
 let testBuildLabel: string | null = null;
@@ -153,6 +166,11 @@ function showDashboard(): void {
 
 function sendToDashboard(channel: string, payload: unknown): void {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/** Never crash the process because a window died mid-teardown. */
+function reportWindowError(error: unknown): void {
+    console.warn('[main] window call failed', error);
 }
 
 function createTray(): void {
@@ -410,14 +428,18 @@ function registerOverlayHotkeys() {
     const hideOk = globalShortcut.register('CommandOrControl+Shift+H', () => {
         const visible = toggleOverlayVisibility();
         refreshLiveCadence();
-        win?.webContents.send('overlay-visibility-changed', { visible });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+        }
     });
 
     const clickOk = globalShortcut.register('CommandOrControl+Shift+U', () => {
         // Unlock = compact movable panel; Lock = fullscreen click-through.
         // (HUD align is a separate mode — do not cover the whole screen here.)
         const clickThrough = toggleClickThrough();
-        win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+        }
         broadcastOverlayMeta();
     });
 
@@ -802,7 +824,9 @@ app.whenReady().then(() => {
         try {
             const visible = toggleOverlayVisibility();
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+            }
             return { success: true, visible };
         } catch (error) {
             console.error('[overlay] Failed to toggle visibility:', error);
@@ -817,7 +841,9 @@ app.whenReady().then(() => {
                 showOverlay();
             }
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() }), reportWindowError);
+            }
             return { success: true, visible: !isOverlayUserHidden() };
         } catch (error) {
             console.error('[overlay] Failed to set visibility:', error);
@@ -828,7 +854,9 @@ app.whenReady().then(() => {
     ipcMain.handle('overlay-toggle-clickthrough', async () => {
         try {
             const clickThrough = toggleClickThrough();
-            win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+            }
             return { success: true, clickThrough };
         } catch (error) {
             console.error('[overlay] Failed to change interaction mode:', error);
@@ -993,20 +1021,23 @@ app.whenReady().then(() => {
 
     // Window Controls
     ipcMain.handle('window-minimize', () => {
-        if (win) win.minimize();
+        if (isWinAlive(win)) safeCall(() => win?.minimize(), reportWindowError);
     });
 
     ipcMain.handle('window-maximize', () => {
-        if (win) {
-            if (win.isMaximized()) {
-                win.unmaximize();
-            } else {
-                win.maximize();
+        if (!isWinAlive(win)) return;
+        safeCall(() => {
+            if (win) {
+                if (win.isMaximized()) {
+                    win.unmaximize();
+                } else {
+                    win.maximize();
+                }
             }
-        }
+        }, reportWindowError);
     });
 
     ipcMain.handle('window-close', () => {
-        if (win) win.close();
+        if (isWinAlive(win)) safeCall(() => win?.close(), reportWindowError);
     });
 });

@@ -461,4 +461,16 @@ export function resetStateService(reason = 'match start'): void {
 }
 
 
+/**
+ * Void only the cached live board and clock. Called at match end so a late
+ * poll (already in flight when the game ended) cannot hand the monitor a
+ * fresh board and make readLiveBoard()/readLiveClock() non-null again — which
+ * would let a late liveTick restart the whole match lifecycle (beginMatch)
+ * after the overlay was torn down.
+ */
+export function clearStateBoard(): void {
+    lastBoard = null;
+    lastClock = null;
+}
+
 export { rotateIfNeeded, LOG_MAX_BYTES, logFilePath, flushLog, fetchBoardParts };

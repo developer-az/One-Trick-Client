@@ -55,3 +55,41 @@ No League match is available, so true borderless/fullscreen behavior, MPO intera
 - DELTA (Codex, LOW): 1 medium (sidecar left alive if start() rejects) fixed; that last 6-line fix was NOT re-reviewed.
 - Host evidence: probe-presenter.mjs all ok; smoke-native-overlay.mjs 8/8 ok at 125% DPI; verify suites for all touched areas PASS; 3 typechecks ok; lint 0 errors. Pre-existing/environmental: verify_clipper_lifecycle fails because ffmpeg is installed here (clipper.ts unchanged).
 - Not done: Milestone 3 (HUD content/design) and a packaged-app run against a mock match (the mock Live Client does not produce a self-player here, so match-start never fired).
+
+---
+# ROUND 2 (2026-11-13) — post-test feedback: crash, overlay layout, perf, premium UI, pet, pro features
+Task class: mixed. R2-A..C SPEC-COMPLETE (Sonnet orchestrator ok); R2-D..F DESIGN/VISUAL/ambiguous (top-tier orchestrator + look-checks, no queue mode).
+Orchestrator model: Sonnet 5.5 (escalate D-F verification to top tier).
+Context pack: as above. Extra key files: `src/overlay/OverlayApp.tsx` (1076 loc), `overlayLogic.ts`, `overlay-theme.css`, `ChromeGameHud.tsx`, `hudLayout.ts`, `src/logic/purchasePlan.ts`, `buildProgress.ts`, `bootChains.ts`, `src/app/views/*`, `src/app/theme.css`, `tokens.css`, `electron/main.ts`, `overlay-window.ts` (1623 loc), `match-lifecycle.ts`, `state-service.ts`. Existing `isDestroyed()` guards cover most overlay-window.ts paths; unguarded candidates are timers/IPC callbacks firing after match-end teardown (`handle.destroy()` ~L905, destroy blocks ~L1183-1193) and `main.ts:1010 win.close()`.
+DO-NOT-FLAG: as above.
+
+## R2-A (P0) Post-match "Object has been destroyed" uncaught exception
+1. Reproduce: unit-level harness `verify_destroyed_guards.ts` with fake BrowserWindow/webContents whose methods throw after destroy(); drive match-end teardown ordering (timers, IPC send, setFrameRate, health log, presenter osrWin paint).
+2. Fix: guard every deferred callback (timers, `paint`/`did-finish-load`, `webContents.send`, `setFrameRate`) with a `safeWin()` helper; clear all timers in teardown; register a process-level `uncaughtException` handler that logs to overlay.log and never shows the native dialog for this class. Allowlist: `electron/overlay-window.ts`, `electron/overlay-presenter.ts`, `electron/main.ts`, `electron/clipper.ts`, new `electron/safe-window.ts`, new test, `package.json`.
+Done when: new harness green + existing verify_overlay_health/overlay_fallback/presenter_* green + 3 typechecks.
+
+## R2-B Overlay layout fixes (clipped right edge, left side translucency/sectioning)
+1. Measure: Pi survey of `overlay-theme.css` + `OverlayApp.tsx` + `hudLayout.ts` for fixed widths, `overflow:hidden`, missing `min-width:0`, absolute-right items, and whether HUD geometry (native presenter surface size vs DOM width) crops the right edge (DPI/physical px).
+2. Fix every row to flex with `min-width:0`, price/right column `flex-shrink:0`, safe right padding; verify with a headless-render look-check at 1080p/1440p, 100/125/150% DPI. Left rail: reduce opacity (glass backing ~0.35-0.5, blur off for perf), group into labelled sections (Summoners / Cooldowns / Objectives) with hairline dividers.
+Done when: `verify_hud_geometry`, `verify_layout`, `verify_overlay_bounds` green + screenshots at each DPI show no clipped text.
+
+## R2-C Performance (esp. early game)
+1. Profile: Pi survey for hot paths: 1 s polling fan-out, state-service recompute, full-frame OSR repaint cadence (OVERLAY_SHOWN_FPS), CSS `backdrop-filter`/animations forcing repaints, DDragon/catalog fetch at match start, React re-render storms in OverlayApp (memo/selectors), IPC payload size. Existing `scripts/perf/` harness reused for before/after numbers.
+2. Fix top offenders only, with before/after numbers in the PR. Dirty-rect friendly rendering, throttle idle frames, defer catalog prefetch until after first HUD paint.
+Done when: perf harness shows measurable CPU/frame-time drop; no behavior suites regress.
+
+## R2-D Build order clarity ("this, then that")
+Single numbered linear build path in overlay + app: `purchasePlan.ts` emits an ordered `NextBuy` list (1 Boots? vs item decision resolved by explicit rule + reason chip e.g. "Boots first: lane-lock, 1100g"), overlay shows ONE highlighted "BUY NEXT" with a numbered queue behind it; ambiguity branches become "if X then A else B" with the condition evaluated live. Tests first: `verify_purchase_order.ts`.
+
+## R2-E Premium UI + customization + pixel pet
+1. Frontend master prompt (deliverable `docs/UI-MASTER-PROMPT.md`): design tokens, density, type scale, spacing, glass/gothic material rules, motion, anti-"airy" rules.
+2. Apply to app views (tighter density, cards, consistent tokens) in `src/app/theme.css`/`tokens.css`/views.
+3. Settings: themes (accent palettes, density, corner radius, glass level, font scale), saved in app-settings; live preview.
+4. Pixel pet for the loading screen/lobby: canvas sprite pet (idle/walk/sleep/react-to-queue-pop), choose species/color in settings; rendered in the app window (not injected into the League client — passive-only constraint).
+Look-checks required at each sub-step.
+
+## R2-F Pro-feature parity with Blitz/U.GG/OP.GG (scoped honestly)
+Survey first (Pi): current coverage vs. matrix: champion tier list, per-champ builds/runes/skill order/matchups, live-game scouting of 10 players (rank, winrate, mastery), post-game timeline review, summoner profile/match history, counters, ARAM/Mayhem. Aggregated stats need a data source: no scraping of blitz/u.gg/op.gg (ToS + legal); use Riot API (needs production key) / Data Dragon / CommunityDragon and own aggregation of players' fetched matches. Deliver a bounded set after the survey; this is a roadmap-sized item and will be split into follow-up PRs rather than pretended done.
+
+## Order / milestones
+M-A: R2-A. M-B: R2-B + R2-C. M-C: R2-D. M-D: R2-E. M-E: R2-F survey + first slice. Verify at each; first-pass GLM review at end; Codex final review (HIGH for crash fix).
