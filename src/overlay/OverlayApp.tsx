@@ -11,6 +11,7 @@ import {
   buildInGameCues,
   buyRailDetail,
   buyRailLine,
+  enemyRespawns,
   formatGameTime,
   getGankStatus,
   getWardStatus,
@@ -70,7 +71,7 @@ function OverlayChromePanel({
   className?: string;
 }) {
   return (
-    <div className={`hud-overlay-panel overflow-hidden ${className}`}>
+    <div className={`hud-overlay-panel ${className}`}>
       <span className="hud-corner hud-corner-tl" aria-hidden />
       <span className="hud-corner hud-corner-br" aria-hidden />
       <span className="hud-rail hud-rail-top" aria-hidden />
@@ -505,6 +506,10 @@ export const OverlayApp: React.FC = () => {
     buildProgress.remaining.length === 0 &&
     buildProgress.path.every((i) => buildProgress.ownedIds.has(i.id));
 
+  /** Pending respawn countdowns; keep in step with EnemyRespawns' own filter. */
+  const showRespawns =
+    enemyRespawns(state.enemies, state.timestamp, Date.now()).length > 0;
+
   const mayhemChampion = useMemo(
     () => championForMayhem(state.localPlayer?.championName, champions),
     [state.localPlayer?.championName, champions]
@@ -763,7 +768,7 @@ export const OverlayApp: React.FC = () => {
     showGank || showVision || showAction || showBuy || !profileMatchesLocal;
 
   const buyRow = showBuy ? (
-    <div className="flex flex-wrap gap-0.5 items-center">
+    <div className="flex flex-wrap gap-0.5 items-center min-w-0">
       {buyRail?.action === 'buy-component' && buyRail.buyId ? (
         <ItemIcon
           key={`buy-now-${buyRail.buyId}`}
@@ -787,8 +792,8 @@ export const OverlayApp: React.FC = () => {
       {buyRail && buyDetail ? (
         <div className="hud-buy-detail w-full" title={buyRail.title}>
           <div className="hud-buy-detail-row">
-            <span className="hud-buy-detail-name">{buyDetail.name}</span>
-            <span className="hud-buy-detail-price">
+            <span className="hud-buy-detail-name truncate min-w-0">{buyDetail.name}</span>
+            <span className="hud-buy-detail-price shrink-0">
               {buyDetail.cost.toLocaleString('en-US')}g
             </span>
           </div>
@@ -822,6 +827,13 @@ export const OverlayApp: React.FC = () => {
       ) : null}
     </div>
   ) : null;
+
+  // Panel width is fixed; the transform (--overlay-scale) scales the whole box once, and it never exceeds the
+  // viewport, so a scaled panel cannot be cut at the display's right edge.
+  const railPanelSize = {
+    width: '220px',
+    maxWidth: 'calc(100vw - 24px)',
+  } as const;
 
   return (
     <div
@@ -887,35 +899,38 @@ export const OverlayApp: React.FC = () => {
           <OverlayStickers stickers={slotStickers} geo={paintGeo} />
           {showSumsRail && (
           <div
-            className="hud-overlay-scale hud-overlay-scale--left w-[220px]"
-            style={layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo)}
+            className="hud-overlay-scale hud-overlay-scale--left"
+            style={{ ...layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo), ...railPanelSize }}
           >
-            <OverlayChromePanel>
-              <div className="hud-chrome-header !py-1 !px-2">
-                <div className="hud-chrome-title truncate text-[11px]">Enemy sums</div>
-                <div className="hud-chrome-meta !text-[11px]">
-                  {clockSec > 0 ? formatGameTime(clockSec) : 'Live'}
-                </div>
-              </div>
-              <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
-                {showSumsRail ? (
+            <div className="hud-rail-stack" data-hud-rail="sums">
+              <section className="hud-rail-card" data-hud-section="summoners">
+                <h3 className="hud-rail-label">
+                  <span className="hud-rail-label-text">Summoners</span>
+                  <span className="hud-rail-label-meta">
+                    {clockSec > 0 ? formatGameTime(clockSec) : 'Live'}
+                  </span>
+                </h3>
+                <div className="hud-rail-body">
                   <SummonerTimers lanes={state.enemyBotSummoners || []} compact />
-                ) : (
-                  <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide">
-                    Sums show as spells are tracked
-                  </p>
-                )}
-                <EnemyRespawns enemies={state.enemies} timestamp={state.timestamp} />
-                <p className="text-[11px] font-mono text-chrome-dim/60 tracking-wide pt-0.5">
-                  {hotkeyHint}
-                </p>
-              </div>
-            </OverlayChromePanel>
+                </div>
+              </section>
+              {showRespawns && (
+                <section className="hud-rail-card" data-hud-section="respawns">
+                  <h3 className="hud-rail-label">
+                    <span className="hud-rail-label-text">Respawns</span>
+                  </h3>
+                  <div className="hud-rail-body">
+                    <EnemyRespawns enemies={state.enemies} timestamp={state.timestamp} />
+                  </div>
+                </section>
+              )}
+              <p className="hud-rail-hint">{hotkeyHint}</p>
+            </div>
           </div>
           )}
 
           {showGank && slotHasModule('gank') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5"><GankSquare threat={gankStatus} compact /></div>
             </OverlayChromePanel>
@@ -923,7 +938,7 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showVision && slotHasModule('vision') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5"><WardIndicator status={wardStatus} compact /></div>
             </OverlayChromePanel>
@@ -931,7 +946,7 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showAction && slotHasModule('action') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5">{actionLine}</div>
             </OverlayChromePanel>
@@ -939,17 +954,21 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showBuy && slotHasModule('buy') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
             <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5">{buyRow}</div>
+              <div className="relative z-10 px-2 py-1.5 min-w-0">{buyRow}</div>
             </OverlayChromePanel>
           </div>
           )}
 
           {showMayhem && (
           <div
-            className="hud-overlay-scale hud-overlay-scale--right w-[min(380px,92vw)] z-30"
-            style={layoutStyle(mayhemLayoutPos, paintGeo)}
+            className="hud-overlay-scale hud-overlay-scale--right z-30"
+            style={{
+              ...layoutStyle(mayhemLayoutPos, paintGeo),
+              width: 'min(380px, 92vw)',
+              maxWidth: 'calc(100vw - 24px)',
+            }}
           >
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5">
@@ -964,7 +983,10 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showRightRail && !profileMatchesLocal && slotHasModule('gank') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px] absolute top-14 right-3">
+          <div
+            className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3"
+            style={railPanelSize}
+          >
             <OverlayChromePanel>
               <div className="hud-chrome-header !py-1 !px-2">
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -975,11 +997,11 @@ export const OverlayApp: React.FC = () => {
                     className="hud-champ-icon shrink-0"
                   />
                   <div className="min-w-0">
-                    <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
+                    <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
                     <div className="hud-chrome-meta !text-[11px]">{profile.shortLabel}</div>
                   </div>
                 </div>
-                <button type="button" onClick={() => setCollapsed(true)} className="hud-btn" title="Collapse rails">
+                <button type="button" onClick={() => setCollapsed(true)} className="hud-btn shrink-0" title="Collapse rails">
                   –
                 </button>
               </div>
@@ -1020,7 +1042,7 @@ export const OverlayApp: React.FC = () => {
                 className="hud-champ-icon shrink-0"
               />
               <div className="min-w-0">
-                <div className="hud-chrome-title truncate text-[11px]">One Trick</div>
+                <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
                 <div className="hud-chrome-meta !text-[11px]">
                   {profile.shortLabel}
                   {clockSec > 0 ? ` · ${formatGameTime(clockSec)}` : ''}
@@ -1047,7 +1069,7 @@ export const OverlayApp: React.FC = () => {
           </div>
 
           {!collapsed && (
-            <div className="relative z-10 px-2 py-1.5 space-y-1 overflow-hidden">
+            <div className="relative z-10 px-2 py-1.5 space-y-1 min-w-0">
               {!profileMatchesLocal ? (
                 <div className="hud-chrome-cue hud-chrome-cue--warn !text-[12px] !py-1">
                   Switch profile → {state.localPlayer?.championName || '?'}

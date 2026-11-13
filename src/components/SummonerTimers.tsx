@@ -109,7 +109,7 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
     <div className={compact ? 'space-y-1.5' : 'space-y-3'}>
       {liveLanes.map((lane) => (
         <div key={lane.role} className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <ChampionIcon
               championName={lane.championName}
               championKey={lane.championId}
@@ -122,10 +122,10 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
             >
               {lane.role}
             </span>
-            <span className={`text-chrome-bright truncate ${compact ? 'text-[11px]' : 'text-sm'} min-w-[4rem]`}>
+            <span className={`text-chrome-bright truncate ${compact ? 'text-[11px]' : 'text-sm'} min-w-0`}>
               {lane.championName}
             </span>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1 shrink-0">
               {[...lane.spells]
                 .sort((a, b) => Number(chipTone(b).priority === 'primary') - Number(chipTone(a).priority === 'primary'))
                 .map((sp) => {
@@ -145,7 +145,7 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
                       e.preventDefault();
                       markSpell(lane.role, sp.name, true);
                     }}
-                    className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100 hud-chip--${tone.priority} hud-chip--${tone.state} ${
+                    className={`hud-chip !py-0.5 flex-none whitespace-nowrap ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100 hud-chip--${tone.priority} hud-chip--${tone.state} ${
                       ready ? 'hud-accent-green !text-chrome-bright' : 'is-down'
                     }`}
                   >
@@ -160,11 +160,11 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
           </div>
         </div>
       ))}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 min-w-0">
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100`}
+          className={`hud-chip !py-0.5 flex-none whitespace-nowrap ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100`}
           title={midFocus ? 'Copy mid laner summoner timers' : 'Copy ADC summoner timers'}
         >
           {copied ? copiedLabel : copyLabel}

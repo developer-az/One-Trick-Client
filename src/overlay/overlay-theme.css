@@ -244,7 +244,7 @@ html.overlay-root .hud-buy-detail-name {
   font-weight: 700;
   color: var(--ov-text);
   white-space: nowrap;
-  overflow: hidden;
+  overflow: clip;
   text-overflow: ellipsis;
   min-width: 0;
 }
@@ -261,7 +261,7 @@ html.overlay-root .hud-buy-detail-status {
   font-weight: 600;
   color: var(--ov-text-2);
   white-space: nowrap;
-  overflow: hidden;
+  overflow: clip;
   text-overflow: ellipsis;
 }
 html.overlay-root .hud-buy-detail-status--buy-full {
@@ -284,7 +284,10 @@ html.overlay-root .hud-overlay-panel {
   /* Slightly more opaque than before: the old 0.86 washed out over bright
    * Rift terrain (river, base floors) at 100% brightness. */
   background: rgba(8, 8, 11, 0.92);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  /* Isolate the panel's layout/paint so scaled, right-anchored panels never
+   * repaint neighbors or the page while the overlay re-lays out. No blur. */
+  contain: layout paint;
 }
 
 /* Scaled type inside a panel. Components keep their semantic elements; only
@@ -350,7 +353,7 @@ html.overlay-root .hud-respawn-name {
   font-size: calc(11px * var(--ov-fs));
   color: var(--ov-text-2);
   white-space: nowrap;
-  overflow: hidden;
+  overflow: clip;
   text-overflow: ellipsis;
   min-width: 0;
 }
@@ -367,3 +370,89 @@ html.overlay-root .hud-respawn--soon .hud-chip {
   color: var(--ov-amber);
 }
 
+
+/* ---------- Left rail: labelled, translucent section cards ----------
+ * The old monolithic opaque slab is split into lightweight cards
+ * ("Summoners", "Respawns", hint). Far more transparent than the slab, a
+ * hairline divider between sections, and text-shadow for legibility over a
+ * moving game. No backdrop-filter / blur (GPU tax while League is open).
+ */
+html.overlay-root .hud-rail-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+html.overlay-root .hud-rail-card {
+  position: relative;
+  background: rgba(8, 8, 11, 0.48);
+  border: 1px solid rgba(212, 216, 222, 0.14);
+  border-radius: 5px;
+  padding: 6px 9px 8px;
+  min-width: 0;
+  color: var(--ov-text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+/* Hairline divider between labelled sections. */
+html.overlay-root .hud-rail-card + .hud-rail-card::before {
+  content: '';
+  display: block;
+  height: 1px;
+  margin: 0 0 6px;
+  background: linear-gradient(90deg, transparent, rgba(212, 216, 222, 0.3), transparent);
+}
+html.overlay-root .hud-rail-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: clamp(9px, calc(10px * var(--ov-fs)), 13px);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(212, 216, 222, 0.78);
+  min-width: 0;
+}
+html.overlay-root .hud-rail-label-text {
+  min-width: 0;
+}
+html.overlay-root .hud-rail-label-meta {
+  font-family: var(--font-body);
+  font-size: clamp(9px, calc(9.5px * var(--ov-fs)), 12px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ov-gold);
+  white-space: nowrap;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+html.overlay-root .hud-rail-body {
+  min-width: 0;
+}
+html.overlay-root .hud-rail-hint {
+  font-family: var(--font-body);
+  font-size: clamp(9px, calc(10px * var(--ov-fs)), 12px);
+  line-height: 1.35;
+  color: rgba(167, 174, 187, 0.82);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  padding: 1px 4px;
+  min-width: 0;
+}
+/* Inner chips on the translucent cards sit at ~0.25 alpha (variant tones like
+   --soon / is-down keep their own stronger backgrounds via :where() zeroing
+   this rule's specificity). */
+html.overlay-root .hud-rail-card :where(.hud-chip) {
+  background: rgba(8, 8, 11, 0.25);
+  border-color: rgba(212, 216, 222, 0.22);
+  color: var(--ov-text);
+}
+/* Rows that truncate clip (not hidden): no scroll-container semantics, so a
+   scaled panel still truncates cleanly at its own edge without cutting the
+   panel box itself. */
+html.overlay-root .hud-overlay-panel .truncate,
+html.overlay-root .hud-overlay-panel .hud-chrome-title,
+html.overlay-root .hud-rail-card .truncate {
+  overflow: clip;
+}

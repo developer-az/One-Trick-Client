@@ -247,10 +247,20 @@ export function storeHudLayout(layout: HudLayout): void {
 
 export function layoutStyle(
   el: Pick<HudElement, 'x' | 'y' | 'scale' | 'opacity' | 'anchor'>,
-  geo: { offsetX: number; offsetY: number; gameViewW: number; gameViewH: number }
+  geo: {
+    offsetX: number;
+    offsetY: number;
+    gameViewW: number;
+    gameViewH: number;
+    /** Viewport width in CSS px; falls back to the game-view extent when omitted. */
+    vw?: number;
+  }
 ): {
   position: 'absolute';
-  left: number;
+  /** tl/bl/center boxes: the layout box's left edge sits at x. */
+  left?: number;
+  /** tr/br boxes: the layout box's RIGHT edge sits at x (never left-anchored). */
+  right?: number;
   top: number;
   transform: string;
   transformOrigin: string;
@@ -266,12 +276,22 @@ export function layoutStyle(
           : el.anchor === 'center'
             ? 'center'
             : 'top left';
-  return {
-    position: 'absolute',
-    left: geo.offsetX + el.x * geo.gameViewW,
-    top: geo.offsetY + el.y * geo.gameViewH,
-    transform: `scale(${el.scale})`,
+  const left = geo.offsetX + el.x * geo.gameViewW;
+  const top = geo.offsetY + el.y * geo.gameViewH;
+  // Keep --overlay-scale (set from hudScale on the overlay root) inside the
+  // inline transform so it COMPOSES with el.scale instead of being overridden
+  // by it; transformOrigin pins the anchored corner so scaling never moves the
+  // box's edge that faces the game-view border.
+  const transform = `scale(var(--overlay-scale, 1)) scale(${el.scale})`;
+  const shared = {
+    position: 'absolute' as const,
+    top,
+    transform,
     transformOrigin: origin,
     opacity: el.opacity,
   };
+  if (el.anchor === 'tr' || el.anchor === 'br') {
+    return { ...shared, right: (geo.vw ?? geo.offsetX + geo.gameViewW) - left };
+  }
+  return { ...shared, left };
 }
