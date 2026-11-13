@@ -796,7 +796,14 @@ export async function attachNativeSurface(
     opts: NativeSurfaceOptions
 ): Promise<NativeSurfaceHandle> {
     const surface = new NativeSurface(osrWin, display, opts);
-    await surface.start();
+    try {
+        await surface.start();
+    } catch (error) {
+        // Never leave a started sidecar/pipe behind when the attach fails
+        // (e.g. the window closed while the presenter was starting).
+        surface.destroy();
+        throw error;
+    }
     return surface;
 }
 
