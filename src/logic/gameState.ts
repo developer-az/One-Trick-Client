@@ -20,6 +20,15 @@ export interface GameEvent {
     raw: Record<string, unknown>;
 }
 
+export type PlayerPosition = 'TOP' | 'JUNGLE' | 'MIDDLE' | 'BOTTOM' | 'UTILITY' | '';
+
+export interface PlayerItemSlot {
+    id: number;
+    slot: number;
+    count: number;
+    price: number | null;
+}
+
 export interface PlayerSnapshot {
     riotId: string;
     champion: string;
@@ -33,6 +42,12 @@ export interface PlayerSnapshot {
     assists: number;
     cs: number;
     items: number[];
+    position: PlayerPosition;
+    isBot: boolean;
+    wardScore: number;
+    summonerSpells: [string, string];
+    keystone: string | null;
+    itemSlots: PlayerItemSlot[];
 }
 
 export interface MinimapDetection {
@@ -49,6 +64,32 @@ export interface MinimapState {
     detections: MinimapDetection[];
 }
 
+export interface SelfStats {
+    maxHealth: number | null;
+    currentHealth: number | null;
+    armor: number | null;
+    magicResist: number | null;
+    attackDamage: number | null;
+    abilityPower: number | null;
+    attackSpeed: number | null;
+    moveSpeed: number | null;
+    critChance: number | null;
+    abilityHaste: number | null;
+    lifeSteal: number | null;
+    omnivamp: number | null;
+    armorPenetrationPercent: number | null;
+    physicalLethality: number | null;
+    magicPenetrationFlat: number | null;
+    magicPenetrationPercent: number | null;
+}
+
+export interface AbilityRanks {
+    Q: number;
+    W: number;
+    E: number;
+    R: number;
+}
+
 export interface SelfState {
     champion: string;
     level: number;
@@ -56,6 +97,14 @@ export interface SelfState {
     manaPct: number | null;
     currentGold: number | null;
     cs: number | null;
+    stats: SelfStats;
+    abilityRanks: AbilityRanks | null;
+}
+
+export interface GameModeState {
+    gameMode: string | null;
+    mapNumber: number | null;
+    mapName: string | null;
 }
 
 export interface GameState {
@@ -68,6 +117,7 @@ export interface GameState {
     minimap: MinimapState | null;
     events: GameEvent[];
     lastEvent: GameEvent | null;
+    mode: GameModeState;
 }
 
 
@@ -83,6 +133,8 @@ export interface LiveItemLike {
     itemID?: number;
     itemId?: number;
     count?: number;
+    slot?: number;
+    price?: number;
 }
 
 export interface LiveScoresLike {
@@ -99,11 +151,20 @@ export interface LivePlayerLike {
     summonerName?: string;
     championName?: string;
     team?: string;
+    position?: string;
+    isBot?: boolean;
     isDead?: boolean;
     respawnTimer?: number;
     level?: number;
     scores?: LiveScoresLike;
     items?: LiveItemLike[];
+    summonerSpells?: {
+        summonerSpellOne?: { displayName?: string } | null;
+        summonerSpellTwo?: { displayName?: string } | null;
+    } | null;
+    runes?: {
+        keystone?: { displayName?: string } | null;
+    } | null;
 }
 
 export interface ChampionStatsLike {
@@ -115,6 +176,20 @@ export interface ChampionStatsLike {
     currentMana?: number;
     maxMana?: number;
     resourceType?: string | number;
+    armor?: number;
+    magicResist?: number;
+    attackDamage?: number;
+    abilityPower?: number;
+    attackSpeed?: number;
+    moveSpeed?: number;
+    critChance?: number;
+    abilityHaste?: number;
+    lifeSteal?: number;
+    omnivamp?: number;
+    armorPenetrationPercent?: number;
+    physicalLethality?: number;
+    magicPenetrationFlat?: number;
+    magicPenetrationPercent?: number;
     [key: string]: number | string | undefined;
 }
 
@@ -150,6 +225,25 @@ export interface LiveBoardLike {
     gameData?: LiveGameDataLike;
 }
 
+export const EMPTY_SELF_STATS: SelfStats = {
+    maxHealth: null,
+    currentHealth: null,
+    armor: null,
+    magicResist: null,
+    attackDamage: null,
+    abilityPower: null,
+    attackSpeed: null,
+    moveSpeed: null,
+    critChance: null,
+    abilityHaste: null,
+    lifeSteal: null,
+    omnivamp: null,
+    armorPenetrationPercent: null,
+    physicalLethality: null,
+    magicPenetrationFlat: null,
+    magicPenetrationPercent: null,
+};
+
 export const EMPTY_SELF: SelfState = {
     champion: '',
     level: 0,
@@ -157,6 +251,8 @@ export const EMPTY_SELF: SelfState = {
     manaPct: null,
     currentGold: null,
     cs: null,
+    stats: { ...EMPTY_SELF_STATS },
+    abilityRanks: null,
 };
 
 export function emptyGameState(ts = 0): GameState {
@@ -164,11 +260,12 @@ export function emptyGameState(ts = 0): GameState {
         ts,
         inGame: false,
         gameTime: 0,
-        self: { ...EMPTY_SELF },
+        self: { ...EMPTY_SELF, stats: { ...EMPTY_SELF_STATS } },
         players: [],
         minimap: null,
         events: [],
         lastEvent: null,
+        mode: { gameMode: null, mapNumber: null, mapName: null },
     };
 }
 
@@ -199,8 +296,9 @@ export interface EventDiff {
     maxEventId: number;
     /**
      * The API renumbers EventID from 0 each game, so a payload whose highest id
-     * is below the cursor means a new match started. The cursor is dropped and
-     * the payload is NOT replayed as fresh events.
+     * is below the cursor means a new match started. The diff itself does not
+     * replay the payload; the caller resets the cursor to -1 and diffs again
+     * so the new match's events (including EventID 0) are emitted once.
      */
     restarted: boolean;
 }
@@ -341,6 +439,31 @@ function asTeamSide(value: unknown): 'ORDER' | 'CHAOS' {
     return String(value).toUpperCase() === 'ORDER' ? 'ORDER' : 'CHAOS';
 }
 
+const PLAYER_POSITIONS = new Set<string>(['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY']);
+
+function asPosition(value: unknown): PlayerPosition {
+    return typeof value === 'string' && PLAYER_POSITIONS.has(value) ? (value as PlayerPosition) : '';
+}
+
+function asStatNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function spellName(spell: { displayName?: string } | null | undefined): string {
+    return typeof spell?.displayName === 'string' ? spell.displayName : '';
+}
+
+function deriveItemSlots(items: LiveItemLike[] | undefined): PlayerItemSlot[] {
+    return (items || [])
+        .map((item) => ({
+            id: item.itemID ?? item.itemId ?? 0,
+            slot: asStatNumber(item.slot) ?? 0,
+            count: asStatNumber(item.count) ?? 1,
+            price: asStatNumber(item.price),
+        }))
+        .sort((a, b) => a.slot - b.slot);
+}
+
 function riotIdOf(player: LivePlayerLike): string {
     if (player.riotId) return player.riotId;
     if (player.riotIdGameName) return player.riotIdGameName;
@@ -383,6 +506,18 @@ export function derivePlayerSnapshots(
         items: (player.items || [])
             .map((item) => item.itemID ?? item.itemId ?? 0)
             .filter((id) => !!id),
+        position: asPosition(player.position),
+        isBot: player.isBot === true,
+        wardScore: asStatNumber(player.scores?.wardScore) ?? 0,
+        summonerSpells: [
+            spellName(player.summonerSpells?.summonerSpellOne),
+            spellName(player.summonerSpells?.summonerSpellTwo),
+        ],
+        keystone:
+            typeof player.runes?.keystone?.displayName === 'string'
+                ? player.runes.keystone.displayName
+                : null,
+        itemSlots: deriveItemSlots(player.items),
     }));
 }
 
@@ -390,6 +525,40 @@ function ratio(current: number | undefined, max: number | undefined): number | n
     if (typeof current !== 'number' || typeof max !== 'number') return null;
     if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return null;
     return Math.max(0, Math.min(1, current / max));
+}
+
+function deriveSelfStats(stats: ChampionStatsLike | undefined): SelfStats {
+    return {
+        maxHealth: asStatNumber(stats?.maxHealth),
+        currentHealth: asStatNumber(stats?.currentHealth),
+        armor: asStatNumber(stats?.armor),
+        magicResist: asStatNumber(stats?.magicResist),
+        attackDamage: asStatNumber(stats?.attackDamage),
+        abilityPower: asStatNumber(stats?.abilityPower),
+        attackSpeed: asStatNumber(stats?.attackSpeed),
+        moveSpeed: asStatNumber(stats?.moveSpeed),
+        critChance: asStatNumber(stats?.critChance),
+        abilityHaste: asStatNumber(stats?.abilityHaste),
+        lifeSteal: asStatNumber(stats?.lifeSteal),
+        omnivamp: asStatNumber(stats?.omnivamp),
+        armorPenetrationPercent: asStatNumber(stats?.armorPenetrationPercent),
+        physicalLethality: asStatNumber(stats?.physicalLethality),
+        magicPenetrationFlat: asStatNumber(stats?.magicPenetrationFlat),
+        magicPenetrationPercent: asStatNumber(stats?.magicPenetrationPercent),
+    };
+}
+
+type AbilitySlot = 'Q' | 'W' | 'E' | 'R';
+
+function deriveAbilityRanks(
+    abilities: LiveActivePlayerLike['abilities']
+): AbilityRanks | null {
+    if (!abilities) return null;
+    const rank = (slot: AbilitySlot): number => {
+        const level = abilities[slot]?.abilityLevel;
+        return typeof level === 'number' && Number.isFinite(level) ? level : 0;
+    };
+    return { Q: rank('Q'), W: rank('W'), E: rank('E'), R: rank('R') };
 }
 
 /**
@@ -401,11 +570,14 @@ export function deriveSelfState(
     activePlayer: LiveActivePlayerLike | undefined,
     acknowledgeMissing = false
 ): SelfState {
-    if (!selfPlayer && !activePlayer) return { ...EMPTY_SELF };
+    if (!selfPlayer && !activePlayer) {
+        return { ...EMPTY_SELF, stats: { ...EMPTY_SELF_STATS } };
+    }
 
     const stats = activePlayer?.championStats;
     const champion = selfPlayer?.championName || '';
     const gold = asFiniteNumber(activePlayer?.currentGold);
+    const abilityRanks = deriveAbilityRanks(activePlayer?.abilities);
 
     if (!stats && acknowledgeMissing) {
         // Active player block missing mid-match: keep identity, admit the
@@ -417,6 +589,8 @@ export function deriveSelfState(
             manaPct: null,
             currentGold: null,
             cs: selfPlayer?.scores?.creepScore ?? null,
+            stats: { ...EMPTY_SELF_STATS },
+            abilityRanks,
         };
     }
 
@@ -427,6 +601,8 @@ export function deriveSelfState(
         manaPct: ratio(stats?.resourceValue ?? stats?.currentMana, stats?.resourceMax ?? stats?.maxMana),
         currentGold: gold,
         cs: selfPlayer?.scores?.creepScore ?? null,
+        stats: deriveSelfStats(stats),
+        abilityRanks,
     };
 }
 
@@ -460,6 +636,12 @@ export function buildGameState({ board, events, ts, minimap = null }: BuildGameS
         minimap,
         events: sorted,
         lastEvent: sorted.length ? sorted[sorted.length - 1] : null,
+        mode: {
+            gameMode:
+                typeof board.gameData?.gameMode === 'string' ? board.gameData.gameMode : null,
+            mapNumber: asStatNumber(board.gameData?.mapNumber),
+            mapName: typeof board.gameData?.mapName === 'string' ? board.gameData.mapName : null,
+        },
     };
 }
 

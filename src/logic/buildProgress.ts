@@ -6,8 +6,10 @@
 
 import {
   ALL_BOOT_IDS,
+  BASE_BOOT_ID,
   MID_TIER_BOOT_IDS,
-  nextBootStep,
+  bootChainIds,
+  bootStepName,
   ownsAnyCompleteBoots,
   ownsFinishedBoots,
 } from './bootChains';
@@ -41,6 +43,90 @@ export const SUPPORT_QUEST_IDS = new Set([
   '3877', // Bloodsong
 ]);
 
+/** A boots chain step with a human reason. */
+function bootStepRef(id: string, recommended: { id: string; name: string; reason?: string }): BuildItemRef {
+  const chain = bootChainIds(recommended.id);
+  const isLast = chain[chain.length - 1] === id;
+  if (id === BASE_BOOT_ID) {
+    return {
+      id,
+      name: bootStepName(id),
+      reason: `Base Boots (${bootStepName(id)}) — ${recommended.name} needs Boots first.`,
+    };
+  }
+  if (isLast && recommended.id === id) {
+    return {
+      id,
+      name: bootStepName(id),
+      reason: recommended.reason || `Finish ${recommended.name} — mid-tier is enough for support.`,
+    };
+  }
+  return {
+    id,
+    name: bootStepName(id),
+    reason: `Boot path → ${recommended.name}: buy ${bootStepName(id)} next.`,
+  };
+}
+
+/**
+ * The one ordered buy path for a build, resolved live against inventory:
+ * first core → base Boots if absent → recommended mid-tier boots → remaining
+ * core → situational. A higher boot tier (Noxian upgrade) only ever appears
+ * when its ID is the build's own recommendation, and owning any complete boots
+ * absorbs the whole boot segment (base Boots are consumed into them, so the
+ * base step is never offered again). Every id appears at most once.
+ */
+export function resolveOrderedBuyPath(
+  build: {
+    core: BuildItemRef[];
+    boots: BuildItemRef;
+    situational: BuildItemRef[];
+  } | null | undefined,
+  ownedIds: ReadonlySet<string>
+): BuildItemRef[] {
+  if (!build) return [];
+  const path: BuildItemRef[] = [];
+  const seen = new Set<string>();
+  const push = (item: BuildItemRef): void => {
+    if (seen.has(item.id)) return;
+    seen.add(item.id);
+    path.push(item);
+  };
+
+  // 1) First core — the real first spike, ahead of boots.
+  if (build.core[0]) push(build.core[0]);
+
+  // 2) Boots segment, driven by the recommended chain resolved against what is
+  //    actually owned: base Boots first when absent, then the mid-tier, then an
+  //    upgrade tier only when the build's own recommendation is that upgrade.
+  //    Owning a step later on the same line consumes the steps before it (so
+  //    1001 is never offered again), and owning complete boots of a different
+  //    line stops this segment without re-buying a second pair.
+  const chain = bootChainIds(build.boots.id);
+  const pendingFor = (id: string | undefined): boolean => !!id && ownedIds.has(id);
+  const progress =
+    pendingFor(chain[2]) ? 3 : pendingFor(chain[1]) ? 2 : pendingFor(chain[0]) ? 1 : 0;
+  if (progress < chain.length) {
+    const bootsOwnedElsewhere =
+      ownsAnyCompleteBoots(ownedIds) && !ownedIds.has(chain[0]) && !ownedIds.has(chain[1] ?? '');
+    if (!(progress === 0 && bootsOwnedElsewhere)) {
+      for (let i = progress; i < chain.length; i++) {
+        const id = chain[i];
+        if (ownedIds.has(id)) continue;
+        push(bootStepRef(id, build.boots));
+      }
+    }
+  }
+
+  // 3) Remaining core after the boot segment.
+  for (const c of build.core.slice(1)) push(c);
+
+  // 4) Top situational.
+  for (const s of build.situational.slice(0, 2)) push(s);
+
+  return path;
+}
+
 export function trackBuildProgress(
   inventory: Array<{ itemID: number; displayName?: string; count?: number }> | undefined,
   build: {
@@ -72,50 +158,7 @@ export function trackBuildProgress(
     };
   }
 
-  const path: BuildItemRef[] = [];
-  const pushUnique = (item: BuildItemRef) => {
-    if (!path.some((p) => p.id === item.id)) path.push(item);
-  };
-
-  // 1) First core (Umbral / first legendary) — real first spike, before boots
-  if (build.core[0]) pushUnique(build.core[0]);
-
-  // 2) Boots mid-tier step (only after first core is owned, or if somehow already done)
-  const firstCoreOwned =
-    !build.core[0] ||
-    ownedIds.has(String(build.core[0].id)) ||
-    (build.core[0].id === '3865' && [...ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id)));
-
-  const bootStep = nextBootStep(ownedIds, build.boots.id);
-  if (bootStep && !bootDone && firstCoreOwned) {
-    const chainEnd = bootStep.id === build.boots.id;
-    pushUnique({
-      id: bootStep.id,
-      name: bootStep.name,
-      reason: chainEnd
-        ? build.boots.reason || 'Finish boots (mid-tier is enough for support).'
-        : `Boot path → ${build.boots.name}: buy ${bootStep.name} next.`,
-    });
-  } else if (build.boots && !bootDone && firstCoreOwned) {
-    pushUnique({ ...build.boots });
-  }
-
-  // 3) Remaining core
-  for (const c of build.core.slice(1)) pushUnique(c);
-
-  // 4) If first core not owned yet, still surface boots after it in the list
-  //    (so the full path is visible) but remaining[] will prioritize core first
-  if (!firstCoreOwned && bootStep && !bootDone) {
-    pushUnique({
-      id: bootStep.id,
-      name: bootStep.name,
-      reason: build.boots.reason || 'Boots after first spike.',
-    });
-  }
-
-  // 5) Top situational
-  for (const s of build.situational.slice(0, 2)) pushUnique(s);
-
+  const path = resolveOrderedBuyPath(build, ownedIds);
   const hasSupportQuest = [...ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id));
 
   let completedCount = 0;

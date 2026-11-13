@@ -1,6 +1,10 @@
 /**
- * Tight overlay window rects. A fullscreen transparent HWND forces DWM to
- * composite the entire game (~24 FPS). Dual-rail becomes two slim columns.
+ * Overlay geometry and pure visibility/health decisions.
+ * History: clusters were once separate tight HWNDs ("a fullscreen transparent
+ * HWND forces DWM to composite the entire game"). The multi-window lifecycle
+ * was retired 2026-11-10 (Step 2 single-window remake) after the overlay kept
+ * vanishing mid-match inside it; the geometry math remains as the reference
+ * for where widgets sit on the display, guarded by verify_overlay_bounds.
  */
 
 export interface OverlayRect {
@@ -194,6 +198,58 @@ export function clusterOverlayWindows(opts: {
             stickerIds: group.filter((row) => row.widget.kind === 'sticker').map((row) => row.widget.id),
         };
     });
+}
+
+/** How often an overlay page reports that it is still producing frames. */
+export const OVERLAY_BEAT_EVERY_MS = 5000;
+/** A shown window that has not produced a frame for this long is treated as not drawing. */
+export const OVERLAY_PAINT_STALL_MS = 25000;
+
+/**
+ * What the OS and the page say about one overlay window. The app's own
+ * "visible" flag is not enough: a window can be shown, on top and still not
+ * be drawn, and only the page can tell whether frames are being produced.
+ */
+export interface OverlayWindowHealth {
+    visible: boolean;
+    minimized: boolean;
+    onTop: boolean;
+    /** Window bounds match the slot it was placed in. */
+    boundsOk: boolean;
+    /** How long the window has been shown; null when hidden. */
+    msShown: number | null;
+    /** Since the page last reported at all; null when it never has. */
+    msSinceBeat: number | null;
+    /** Since the page last reported a produced frame; null when it never has. */
+    msSinceFrame: number | null;
+    /** Page Visibility state from the last report; null when unknown. */
+    pageVisible: boolean | null;
+}
+
+export type OverlayFault =
+    | 'minimized'
+    | 'not-on-top'
+    | 'bounds'
+    | 'no-heartbeat'
+    | 'no-frames'
+    | 'page-hidden';
+
+/** Faults for one window. A hidden window has none: it is hidden on purpose. */
+export function overlayWindowFaults(health: OverlayWindowHealth): OverlayFault[] {
+    if (!health.visible) return [];
+    const faults: OverlayFault[] = [];
+    if (health.minimized) faults.push('minimized');
+    if (!health.onTop) faults.push('not-on-top');
+    if (!health.boundsOk) faults.push('bounds');
+    const shownLongEnough = health.msShown !== null && health.msShown >= OVERLAY_PAINT_STALL_MS;
+    if (shownLongEnough) {
+        const beatStale = health.msSinceBeat === null || health.msSinceBeat >= OVERLAY_PAINT_STALL_MS;
+        const frameStale = health.msSinceFrame === null || health.msSinceFrame >= OVERLAY_PAINT_STALL_MS;
+        if (beatStale) faults.push('no-heartbeat');
+        else if (frameStale) faults.push('no-frames');
+    }
+    if (health.pageVisible === false) faults.push('page-hidden');
+    return faults;
 }
 
 /**

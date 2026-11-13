@@ -3,6 +3,7 @@ import {
   type CatalogBundle,
   type CatalogChampion,
   type CatalogItem,
+  type CatalogItemStats,
   type CatalogRecommendation,
   type CatalogRole,
   type CatalogRuneTree,
@@ -73,6 +74,7 @@ interface DDragonChampion {
 
 interface DDragonItem {
   name: string;
+  description?: string;
   gold?: { total?: number; purchasable?: boolean };
   tags?: string[];
   from?: string[];
@@ -81,6 +83,7 @@ interface DDragonItem {
   requiredAlly?: string;
   hideFromAll?: boolean;
   consumed?: boolean;
+  stats?: Record<string, number>;
 }
 
 interface CDragonRuneRec {
@@ -118,6 +121,36 @@ export function determineDamageType(
   }
   if (tags.includes('Support')) return 'Magic';
   return 'Physical';
+}
+
+const DDRAGON_ITEM_STATS: Record<string, keyof CatalogItemStats> = {
+  FlatPhysicalDamageMod: 'ad',
+  FlatMagicDamageMod: 'ap',
+  FlatHPPoolMod: 'hp',
+  FlatMPPoolMod: 'mana',
+  FlatArmorMod: 'armor',
+  FlatSpellBlockMod: 'mr',
+  PercentAttackSpeedMod: 'as',
+  FlatCritChanceMod: 'crit',
+  FlatMovementSpeedMod: 'ms',
+  PercentMovementSpeedMod: 'msPct',
+  PercentLifeStealMod: 'lifesteal',
+  FlatHPRegenMod: 'hpRegen',
+};
+
+export function itemStatsFromDDragon(stats: Record<string, number> | undefined): CatalogItemStats {
+  const result: CatalogItemStats = {};
+  if (!stats) return result;
+  for (const [key, value] of Object.entries(stats)) {
+    const field = DDRAGON_ITEM_STATS[key];
+    if (!field || typeof value !== 'number' || !Number.isFinite(value) || value === 0) continue;
+    result[field] = value;
+  }
+  return result;
+}
+
+export function antiHealFromDescription(description: string | undefined): boolean {
+  return !!description && /\bwounds\b/i.test(description);
 }
 
 function onSummonersRift(item: DDragonItem): boolean {
@@ -517,6 +550,8 @@ export async function buildCatalogBundle(): Promise<CatalogBundle> {
     from: item.from || [],
     into: item.into || [],
     maps: item.maps || {},
+    stats: itemStatsFromDDragon(item.stats),
+    antiHeal: antiHealFromDescription(item.description),
   }));
 
   const recsByChamp = new Map<number, CDragonRuneRec['runeRecommendations']>();

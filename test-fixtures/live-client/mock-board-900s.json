@@ -1,0 +1,1204 @@
+{
+  "source": "scripts/perf/mock-live-client.mjs --start-time 900 (synthetic, deterministic)",
+  "allgamedata": {
+    "activePlayer": {
+      "riotId": "PykeDiff#NA1",
+      "summonerName": "PykeDiff",
+      "level": 13,
+      "currentGold": 5911,
+      "championStats": {
+        "currentHealth": 1369,
+        "maxHealth": 1670,
+        "resourceValue": 575,
+        "resourceMax": 820,
+        "resourceType": "MANA",
+        "armor": 69,
+        "magicResist": 49.5,
+        "attackDamage": 112,
+        "abilityPower": 0,
+        "moveSpeed": 340,
+        "critChance": 0,
+        "attackSpeed": 0.65
+      },
+      "abilities": {
+        "Passive": {
+          "abilityLevel": 1,
+          "displayName": "Gift of the Drowned Ones",
+          "id": "PykePassive",
+          "rawDescription": "Generated Gift of the Drowned Ones description."
+        },
+        "Q": {
+          "abilityLevel": 5,
+          "displayName": "Bone Skewer",
+          "id": "PykeQ",
+          "rawDescription": "Generated Bone Skewer description."
+        },
+        "W": {
+          "abilityLevel": 4,
+          "displayName": "Ghostwater Dive",
+          "id": "PykeW",
+          "rawDescription": "Generated Ghostwater Dive description."
+        },
+        "E": {
+          "abilityLevel": 4,
+          "displayName": "Phantom Undertow",
+          "id": "PykeE",
+          "rawDescription": "Generated Phantom Undertow description."
+        },
+        "R": {
+          "abilityLevel": 4,
+          "displayName": "Death from Below",
+          "id": "PykeR",
+          "rawDescription": "Generated Death from Below description."
+        }
+      },
+      "fullRunes": {
+        "generalRunes": [
+          {
+            "displayName": "Electrocute",
+            "id": 8112
+          }
+        ],
+        "keystone": {
+          "displayName": "Electrocute",
+          "id": 8112
+        },
+        "mainRunes": {
+          "displayName": "Domination",
+          "id": 8100
+        },
+        "subRunes": {
+          "displayName": "Sorcery",
+          "id": 8200
+        },
+        "statRunes": [
+          {
+            "id": 5008
+          },
+          {
+            "id": 5008
+          },
+          {
+            "id": 5002
+          }
+        ]
+      }
+    },
+    "allPlayers": [
+      {
+        "championName": "Pyke",
+        "rawChampionName": "game_character_displayname_Pyke",
+        "riotId": "PykeDiff#NA1",
+        "riotIdGameName": "PykeDiff",
+        "riotIdTagLine": "NA1",
+        "summonerName": "PykeDiff",
+        "team": "ORDER",
+        "position": "UTILITY",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 3858,
+            "displayName": "Relic Shield",
+            "count": 1,
+            "slot": 0,
+            "price": 400,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3858"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3176,
+            "displayName": "Caulfield's Warhammer",
+            "count": 1,
+            "slot": 3,
+            "price": 1050,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3176"
+          },
+          {
+            "itemID": 6692,
+            "displayName": "Eclipse",
+            "count": 1,
+            "slot": 4,
+            "price": 2900,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_6692"
+          }
+        ],
+        "scores": {
+          "kills": 2,
+          "deaths": 1,
+          "assists": 0,
+          "creepScore": 45,
+          "wardScore": 14
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Ignite",
+            "rawDisplayName": "Generated_Ignite",
+            "id": "Ignite"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Electrocute",
+            "id": 8000
+          },
+          "mainRunes": {
+            "displayName": "Precision",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Sorcery",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Garen",
+        "rawChampionName": "game_character_displayname_Garen",
+        "riotId": "GarenGod#NA1",
+        "riotIdGameName": "GarenGod",
+        "riotIdTagLine": "NA1",
+        "summonerName": "GarenGod",
+        "team": "ORDER",
+        "position": "TOP",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 3,
+          "deaths": 1,
+          "assists": 1,
+          "creepScore": 62,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Teleport",
+            "rawDisplayName": "Generated_Teleport",
+            "id": "Teleport"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Conqueror",
+            "id": 8001
+          },
+          "mainRunes": {
+            "displayName": "Precision",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Sorcery",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Ahri",
+        "rawChampionName": "game_character_displayname_Ahri",
+        "riotId": "AhriNine#NA1",
+        "riotIdGameName": "AhriNine",
+        "riotIdTagLine": "NA1",
+        "summonerName": "AhriNine",
+        "team": "ORDER",
+        "position": "MIDDLE",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 2,
+          "deaths": 1,
+          "assists": 1,
+          "creepScore": 79,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Ignite",
+            "rawDisplayName": "Generated_Ignite",
+            "id": "Ignite"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Electrocute",
+            "id": 8002
+          },
+          "mainRunes": {
+            "displayName": "Precision",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Sorcery",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Jinx",
+        "rawChampionName": "game_character_displayname_Jinx",
+        "riotId": "JinxCarry#NA1",
+        "riotIdGameName": "JinxCarry",
+        "riotIdTagLine": "NA1",
+        "summonerName": "JinxCarry",
+        "team": "ORDER",
+        "position": "BOTTOM",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 2,
+          "deaths": 1,
+          "assists": 0,
+          "creepScore": 96,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Heal",
+            "rawDisplayName": "Generated_Heal",
+            "id": "Heal"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "LethalTempo",
+            "id": 8003
+          },
+          "mainRunes": {
+            "displayName": "Precision",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Sorcery",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "LeeSin",
+        "rawChampionName": "game_character_displayname_LeeSin",
+        "riotId": "LeeSinX#NA1",
+        "riotIdGameName": "LeeSinX",
+        "riotIdTagLine": "NA1",
+        "summonerName": "LeeSinX",
+        "team": "ORDER",
+        "position": "JUNGLE",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 2,
+          "deaths": 3,
+          "assists": 0,
+          "creepScore": 113,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Smite",
+            "rawDisplayName": "Generated_Smite",
+            "id": "Smite"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Conqueror",
+            "id": 8004
+          },
+          "mainRunes": {
+            "displayName": "Precision",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Sorcery",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Darius",
+        "rawChampionName": "game_character_displayname_Darius",
+        "riotId": "DariusBleed#EUW",
+        "riotIdGameName": "DariusBleed",
+        "riotIdTagLine": "EUW",
+        "summonerName": "DariusBleed",
+        "team": "CHAOS",
+        "position": "TOP",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 1,
+          "deaths": 2,
+          "assists": 1,
+          "creepScore": 55,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Ghost",
+            "rawDisplayName": "Generated_Ghost",
+            "id": "Ghost"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Conqueror",
+            "id": 8005
+          },
+          "mainRunes": {
+            "displayName": "Domination",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Resolve",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Lux",
+        "rawChampionName": "game_character_displayname_Lux",
+        "riotId": "LuxLaser#EUW",
+        "riotIdGameName": "LuxLaser",
+        "riotIdTagLine": "EUW",
+        "summonerName": "LuxLaser",
+        "team": "CHAOS",
+        "position": "MIDDLE",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 1,
+          "deaths": 2,
+          "assists": 0,
+          "creepScore": 72,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Barrier",
+            "rawDisplayName": "Generated_Barrier",
+            "id": "Barrier"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "ArcaneComet",
+            "id": 8006
+          },
+          "mainRunes": {
+            "displayName": "Domination",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Resolve",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Caitlyn",
+        "rawChampionName": "game_character_displayname_Caitlyn",
+        "riotId": "CaitTrap#EUW",
+        "riotIdGameName": "CaitTrap",
+        "riotIdTagLine": "EUW",
+        "summonerName": "CaitTrap",
+        "team": "CHAOS",
+        "position": "BOTTOM",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 1,
+          "deaths": 2,
+          "assists": 0,
+          "creepScore": 89,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Heal",
+            "rawDisplayName": "Generated_Heal",
+            "id": "Heal"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "FleetFootwork",
+            "id": 8007
+          },
+          "mainRunes": {
+            "displayName": "Domination",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Resolve",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Thresh",
+        "rawChampionName": "game_character_displayname_Thresh",
+        "riotId": "ThreshHook#EUW",
+        "riotIdGameName": "ThreshHook",
+        "riotIdTagLine": "EUW",
+        "summonerName": "ThreshHook",
+        "team": "CHAOS",
+        "position": "UTILITY",
+        "level": 13,
+        "isDead": true,
+        "respawnTimer": 7,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 1,
+          "deaths": 2,
+          "assists": 1,
+          "creepScore": 106,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Ignite",
+            "rawDisplayName": "Generated_Ignite",
+            "id": "Ignite"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Aftershock",
+            "id": 8008
+          },
+          "mainRunes": {
+            "displayName": "Domination",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Resolve",
+            "id": 8200
+          }
+        }
+      },
+      {
+        "championName": "Vi",
+        "rawChampionName": "game_character_displayname_Vi",
+        "riotId": "ViPunch#EUW",
+        "riotIdGameName": "ViPunch",
+        "riotIdTagLine": "EUW",
+        "summonerName": "ViPunch",
+        "team": "CHAOS",
+        "position": "JUNGLE",
+        "level": 13,
+        "isDead": false,
+        "respawnTimer": 0,
+        "isBot": false,
+        "items": [
+          {
+            "itemID": 1036,
+            "displayName": "Long Sword",
+            "count": 1,
+            "slot": 0,
+            "price": 350,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1036"
+          },
+          {
+            "itemID": 2003,
+            "displayName": "Health Potion",
+            "count": 1,
+            "slot": 1,
+            "price": 50,
+            "canUse": true,
+            "consumable": true,
+            "rawDisplayName": "generated_item_2003"
+          },
+          {
+            "itemID": 1001,
+            "displayName": "Boots",
+            "count": 1,
+            "slot": 2,
+            "price": 300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_1001"
+          },
+          {
+            "itemID": 3074,
+            "displayName": "Ravenous Hydra",
+            "count": 1,
+            "slot": 3,
+            "price": 3300,
+            "canUse": true,
+            "consumable": false,
+            "rawDisplayName": "generated_item_3074"
+          }
+        ],
+        "scores": {
+          "kills": 1,
+          "deaths": 1,
+          "assists": 1,
+          "creepScore": 123,
+          "wardScore": 7
+        },
+        "summonerSpells": {
+          "summonerSpellOne": {
+            "displayName": "Flash",
+            "rawDisplayName": "Generated_Flash",
+            "id": "Flash"
+          },
+          "summonerSpellTwo": {
+            "displayName": "Smite",
+            "rawDisplayName": "Generated_Smite",
+            "id": "Smite"
+          }
+        },
+        "runes": {
+          "keystone": {
+            "displayName": "Conqueror",
+            "id": 8009
+          },
+          "mainRunes": {
+            "displayName": "Domination",
+            "id": 8000
+          },
+          "subRunes": {
+            "displayName": "Resolve",
+            "id": 8200
+          }
+        }
+      }
+    ],
+    "events": {
+      "Events": [
+        {
+          "EventID": 1,
+          "EventTime": 0,
+          "EventName": "GameStart"
+        },
+        {
+          "EventID": 2,
+          "EventTime": 60,
+          "EventName": "ChampionKill",
+          "KillerName": "PykeDiff",
+          "VictimName": "LeeSinX",
+          "Assisters": []
+        },
+        {
+          "EventID": 3,
+          "EventTime": 65,
+          "EventName": "MinionsSpawning"
+        },
+        {
+          "EventID": 4,
+          "EventTime": 90,
+          "EventName": "FirstBlood",
+          "KillerName": "GarenGod",
+          "VictimName": "LeeSinX",
+          "Assisters": []
+        },
+        {
+          "EventID": 5,
+          "EventTime": 120,
+          "EventName": "ChampionKill",
+          "KillerName": "GarenGod",
+          "VictimName": "DariusBleed",
+          "Assisters": []
+        },
+        {
+          "EventID": 6,
+          "EventTime": 180,
+          "EventName": "ChampionKill",
+          "KillerName": "AhriNine",
+          "VictimName": "LuxLaser",
+          "Assisters": [
+            "ViPunch"
+          ]
+        },
+        {
+          "EventID": 7,
+          "EventTime": 240,
+          "EventName": "ChampionKill",
+          "KillerName": "JinxCarry",
+          "VictimName": "CaitTrap",
+          "Assisters": []
+        },
+        {
+          "EventID": 8,
+          "EventTime": 300,
+          "EventName": "ChampionKill",
+          "KillerName": "LeeSinX",
+          "VictimName": "ThreshHook",
+          "Assisters": []
+        },
+        {
+          "EventID": 9,
+          "EventTime": 360,
+          "EventName": "ChampionKill",
+          "KillerName": "DariusBleed",
+          "VictimName": "ViPunch",
+          "Assisters": [
+            "AhriNine"
+          ]
+        },
+        {
+          "EventID": 10,
+          "EventTime": 360,
+          "EventName": "DragonKill",
+          "KillerName": "LeeSinX",
+          "DragonType": "Fire",
+          "Stolen": false
+        },
+        {
+          "EventID": 11,
+          "EventTime": 420,
+          "EventName": "ChampionKill",
+          "KillerName": "LuxLaser",
+          "VictimName": "PykeDiff",
+          "Assisters": []
+        },
+        {
+          "EventID": 12,
+          "EventTime": 480,
+          "EventName": "ChampionKill",
+          "KillerName": "CaitTrap",
+          "VictimName": "GarenGod",
+          "Assisters": []
+        },
+        {
+          "EventID": 13,
+          "EventTime": 540,
+          "EventName": "ChampionKill",
+          "KillerName": "ThreshHook",
+          "VictimName": "AhriNine",
+          "Assisters": [
+            "DariusBleed"
+          ]
+        },
+        {
+          "EventID": 14,
+          "EventTime": 600,
+          "EventName": "ChampionKill",
+          "KillerName": "ViPunch",
+          "VictimName": "JinxCarry",
+          "Assisters": []
+        },
+        {
+          "EventID": 15,
+          "EventTime": 660,
+          "EventName": "ChampionKill",
+          "KillerName": "PykeDiff",
+          "VictimName": "LeeSinX",
+          "Assisters": []
+        },
+        {
+          "EventID": 16,
+          "EventTime": 720,
+          "EventName": "ChampionKill",
+          "KillerName": "GarenGod",
+          "VictimName": "DariusBleed",
+          "Assisters": [
+            "ThreshHook"
+          ]
+        },
+        {
+          "EventID": 17,
+          "EventTime": 780,
+          "EventName": "ChampionKill",
+          "KillerName": "AhriNine",
+          "VictimName": "LuxLaser",
+          "Assisters": []
+        },
+        {
+          "EventID": 18,
+          "EventTime": 840,
+          "EventName": "ChampionKill",
+          "KillerName": "JinxCarry",
+          "VictimName": "CaitTrap",
+          "Assisters": []
+        },
+        {
+          "EventID": 19,
+          "EventTime": 840,
+          "EventName": "HeraldKill",
+          "KillerName": "LeeSinX",
+          "Stolen": false
+        },
+        {
+          "EventID": 20,
+          "EventTime": 900,
+          "EventName": "ChampionKill",
+          "KillerName": "LeeSinX",
+          "VictimName": "ThreshHook",
+          "Assisters": [
+            "GarenGod"
+          ]
+        },
+        {
+          "EventID": 21,
+          "EventTime": 900,
+          "EventName": "TurretKilled",
+          "KillerName": "JinxCarry",
+          "TurretKilled": "Turret_Order_T1",
+          "Team": "CHAOS"
+        }
+      ]
+    },
+    "gameData": {
+      "gameMode": "CLASSIC",
+      "gameTime": 901.985,
+      "mapName": "Map11",
+      "mapNumber": 11,
+      "mapTerrain": "Default"
+    }
+  },
+  "abilities": {
+    "Passive": {
+      "abilityLevel": 1,
+      "displayName": "Gift of the Drowned Ones",
+      "id": "PykePassive",
+      "rawDescription": "Generated Gift of the Drowned Ones description."
+    },
+    "Q": {
+      "abilityLevel": 5,
+      "displayName": "Bone Skewer",
+      "id": "PykeQ",
+      "rawDescription": "Generated Bone Skewer description."
+    },
+    "W": {
+      "abilityLevel": 4,
+      "displayName": "Ghostwater Dive",
+      "id": "PykeW",
+      "rawDescription": "Generated Ghostwater Dive description."
+    },
+    "E": {
+      "abilityLevel": 4,
+      "displayName": "Phantom Undertow",
+      "id": "PykeE",
+      "rawDescription": "Generated Phantom Undertow description."
+    },
+    "R": {
+      "abilityLevel": 4,
+      "displayName": "Death from Below",
+      "id": "PykeR",
+      "rawDescription": "Generated Death from Below description."
+    }
+  }
+}

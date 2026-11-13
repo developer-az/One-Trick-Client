@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "patch": "16.20.1",
+  "patch": "16.22.1",
   "routes": [
     "/api/v1/manifest.json",
     "/api/v1/champions.json",

@@ -63,7 +63,7 @@ export const DraftView: React.FC<{
         </div>
       </div>
 
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <TeamColumn
           title="Your team"
           tone="blue"
@@ -94,7 +94,7 @@ export const DraftView: React.FC<{
         </div>
       ) : null}
 
-      <div className="mt-6">
+      <div className="mt-4">
         {loadout ? (
           <MatchupCard loadout={loadout} profile={profile} />
         ) : (
@@ -161,7 +161,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
   const { analysis, dominance } = loadout;
   return (
     <Card>
-      <div className="flex flex-wrap items-start justify-between gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 max-w-2xl">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <Badge tone="gold">{profile.label}</Badge>
@@ -177,9 +177,9 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
         </div>
       </div>
 
-      <div className="ot-divider my-5" />
+      <div className="ot-divider my-4" />
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <div>
           <h3 className="ot-card-title mb-2">Win condition</h3>
           <p className="text-[15px] leading-relaxed">{analysis.winCondition}</p>
@@ -200,7 +200,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
 
       {analysis.tips.length || analysis.loadingDoctrine?.length ? (
         <>
-          <div className="ot-divider my-5" />
+          <div className="ot-divider my-4" />
           <h3 className="ot-card-title mb-2">{analysis.loadingDoctrine?.length ? 'First 90 seconds' : 'Tips'}</h3>
           <ul className="space-y-2 text-[15px] leading-relaxed">
             {(analysis.loadingDoctrine?.length ? analysis.loadingDoctrine : analysis.tips).slice(0, 6).map((t, i) => (
@@ -215,7 +215,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
 
       {analysis.botLaneMatchup ? (
         <>
-          <div className="ot-divider my-5" />
+          <div className="ot-divider my-4" />
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <h3 className="ot-card-title">Bot lane</h3>
             <Badge tone={analysis.botLaneMatchup.matchupDifficulty === 'EASY' ? 'teal' : analysis.botLaneMatchup.matchupDifficulty === 'MEDIUM' ? 'gold' : 'red'}>
@@ -227,7 +227,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
         </>
       ) : null}
 
-      <p className="mt-5 text-xs ot-faint">
+      <p className="mt-4 text-xs ot-faint">
         A heuristic read from champion classes and {profile.shortLabel}'s doctrine. It is not based on win-rate data.
       </p>
     </Card>

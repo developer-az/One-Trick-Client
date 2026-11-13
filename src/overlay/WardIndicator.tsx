@@ -31,8 +31,8 @@ export const WardIndicator: React.FC<{ status: WardStatus | null; compact?: bool
       </svg>
       <div className="hud-ward-copy min-w-0">
         <span className="hud-ward-where">{status.where}</span>
+        {status.buyHint ? <span className="hud-ward-meta">{status.buyHint}</span> : null}
       </div>
-      {status.buyHint ? <span className="hud-ward-meta">{status.buyHint}</span> : null}
     </div>
   );
 };

@@ -128,8 +128,8 @@ async function run(): Promise<void> {
     ok(fp1 !== fpBoundary, 'fingerprint updates when crossing 10s time bucket (100s -> 110s)');
 
     // Gold change >= 50 changes fingerprint
-    const pGoldJump = buildOverlayPayload(makeMockBoard({ championName: 'Pyke', gameTime: 102, currentGold: 560 }), 'InProgress');
-    ok(fp1 !== overlayFingerprint(pGoldJump), 'fingerprint updates on gold change >= 50');
+    const pGoldJump = buildOverlayPayload(makeMockBoard({ championName: 'Pyke', gameTime: 102, currentGold: 700 }), 'InProgress');
+    ok(fp1 !== overlayFingerprint(pGoldJump), 'fingerprint updates on gold change >= 150 (coarsened bucket)');
 
     // Level up changes fingerprint
     const pLevelUp = buildOverlayPayload(makeMockBoard({ championName: 'Pyke', gameTime: 102, currentGold: 500, level: 7 }), 'InProgress');
