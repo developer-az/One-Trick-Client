@@ -1,10 +1,18 @@
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   type Champion,
   type Build,
   type MatchupAnalysis,
 } from '../logic/pykeLogic';
-import { getProfile, isProfileId, loadStoredProfileId, type ProfileId } from '../logic/profiles';
+import {
+  getProfile,
+  isProfileId,
+  loadStoredProfileId,
+  type ChampionProfile,
+  type ProfileId,
+} from '../logic/profiles';
+import type { JungleThreat } from '../logic/jungleLogic';
+import type { WardStatus } from '../logic/visionLogic';
 import { trackBuildProgress, type BuildItemRef } from '../logic/buildProgress';
 import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
 import {
@@ -62,6 +70,196 @@ const mayhemBundle = bundledMayhem as MayhemBundle;
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
 }
+
+/* ------------------------------------------------------------------ *
+ * Isolated 1 Hz overlay clock
+ * ------------------------------------------------------------------ *
+ * The HUD used to own the 1 Hz tick as component state, so every second the
+ * whole overlay tree re-rendered. The tick now lives in a tiny external
+ * store: OverlayApp only decides *whether* the clock should run and feeds it
+ * the base game time; leaf countdown components consume the value through
+ * useOverlayClock() (a useSyncExternalStore subscription) and re-render on
+ * their own. DOM output is identical — the same fields tick at the same
+ * cadence — but the rest of the HUD no longer renders every second.
+ */
+
+interface OverlayClockSnapshot {
+  /** Running game-time seconds (base + wall-clock elapsed); 0 before any tick. */
+  sec: number;
+  /** Wall-clock ms of the most recent tick, for expiry math (mayhem dismiss). */
+  nowMs: number;
+}
+
+const CLOCK_IDLE: OverlayClockSnapshot = { sec: 0, nowMs: 0 };
+
+let clockSnapshot: OverlayClockSnapshot = { sec: 0, nowMs: Date.now() };
+const clockListeners = new Set<() => void>();
+
+function publishClock(next: OverlayClockSnapshot): void {
+  clockSnapshot = next;
+  clockListeners.forEach((listener) => listener());
+}
+
+function subscribeOverlayClock(listener: () => void): () => void {
+  clockListeners.add(listener);
+  return () => {
+    clockListeners.delete(listener);
+  };
+}
+
+function getOverlayClock(): OverlayClockSnapshot {
+  return clockSnapshot;
+}
+
+/**
+ * Leaf hook for 1 Hz data (running game-time label, mayhem dismiss expiry).
+ * Only components that call this re-render on the tick.
+ * Exported for leaf components outside this file; the fast-refresh rule
+ * cannot see that a use* hook is component-safe, so it is opted out here.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function useOverlayClock(): OverlayClockSnapshot {
+  return useSyncExternalStore(
+    subscribeOverlayClock,
+    getOverlayClock,
+    () => ({ ...CLOCK_IDLE })
+  );
+}
+
+/** "12:34" while the clock runs, "Live" before the first tick. */
+function OverlayClockLabel(): React.ReactNode {
+  const { sec } = useOverlayClock();
+  return sec > 0 ? formatGameTime(sec) : 'Live';
+}
+
+/** " · 12:34" when the clock runs, nothing before it (compact panel meta). */
+function OverlayClockMeta(): React.ReactNode {
+  const { sec } = useOverlayClock();
+  return sec > 0 ? ` · ${formatGameTime(sec)}` : '';
+}
+
+/* ------------------------------------------------------------------ *
+ * Right-rail panels — React.memo with stable props so a render of the
+ * overlay app (alignment toggle, profile switch, a state payload that does
+ * not touch a given panel) skips the untouched panels entirely.
+ * ------------------------------------------------------------------ */
+
+const RAIL_PANEL_SIZE = {
+  width: '220px',
+  maxWidth: 'calc(100vw - 24px)',
+} as const;
+
+const DEFAULT_GANK_ANCHOR = { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' as const };
+const DEFAULT_VISION_ANCHOR = { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
+const DEFAULT_ACTION_ANCHOR = { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' as const };
+const DEFAULT_BUY_ANCHOR = { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' as const };
+
+const GankRailPanel = React.memo(function GankRailPanel({
+  status,
+  style,
+}: {
+  status: JungleThreat | null;
+  style: React.CSSProperties;
+}) {
+  return (
+    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
+      <OverlayChromePanel>
+        <div className="relative z-10 px-2 py-1.5">
+          <GankSquare threat={status} compact />
+        </div>
+      </OverlayChromePanel>
+    </div>
+  );
+});
+
+const VisionRailPanel = React.memo(function VisionRailPanel({
+  status,
+  style,
+}: {
+  status: WardStatus | null;
+  style: React.CSSProperties;
+}) {
+  return (
+    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
+      <OverlayChromePanel>
+        <div className="relative z-10 px-2 py-1.5">
+          <WardIndicator status={status} compact />
+        </div>
+      </OverlayChromePanel>
+    </div>
+  );
+});
+
+const ActionRailPanel = React.memo(function ActionRailPanel({
+  line,
+  style,
+}: {
+  line: React.ReactNode;
+  style: React.CSSProperties;
+}) {
+  return (
+    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
+      <OverlayChromePanel>
+        <div className="relative z-10 px-2 py-1.5">{line}</div>
+      </OverlayChromePanel>
+    </div>
+  );
+});
+
+const BuyRailPanel = React.memo(function BuyRailPanel({
+  row,
+  style,
+}: {
+  row: React.ReactNode;
+  style: React.CSSProperties;
+}) {
+  return (
+    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
+      <OverlayChromePanel>
+        <div className="relative z-10 px-2 py-1.5 min-w-0">{row}</div>
+      </OverlayChromePanel>
+    </div>
+  );
+});
+
+const SwitchProfileRailPanel = React.memo(function SwitchProfileRailPanel({
+  profile,
+  liveChampionName,
+  onCollapse,
+}: {
+  profile: ChampionProfile;
+  liveChampionName?: string;
+  onCollapse: () => void;
+}) {
+  return (
+    <div className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3" style={RAIL_PANEL_SIZE}>
+      <OverlayChromePanel>
+        <div className="hud-chrome-header !py-1 !px-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <ChampionIcon
+              championId={profile.championId}
+              championName={liveChampionName}
+              size={16}
+              className="hud-champ-icon shrink-0"
+            />
+            <div className="min-w-0">
+              <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
+              <div className="hud-chrome-meta !text-[11px]">{profile.shortLabel}</div>
+            </div>
+          </div>
+          <button type="button" onClick={onCollapse} className="hud-btn shrink-0" title="Collapse rails">
+            –
+          </button>
+        </div>
+        <div className="relative z-10 px-2 py-1.5">
+          <div className="hud-chrome-cue hud-chrome-cue--warn !text-[12px] !py-1">
+            Switch profile → {liveChampionName || '?'}
+          </div>
+        </div>
+      </OverlayChromePanel>
+    </div>
+  );
+});
 
 function OverlayChromePanel({
   children,
@@ -127,10 +325,82 @@ function usePageVisible(): boolean {
   return pageVisible;
 }
 
+/* ------------------------------------------------------------------ *
+ * Coarse state keys for the expensive HUD derivations.
+ * ------------------------------------------------------------------ *
+ * The cue builders and ward/gank reads used to memoize on the `state` object
+ * identity, so every payload forced a full recompute. These keys cover the
+ * fields each derivation actually reads (game time at the same 10 s bucket
+ * the main-process fingerprint uses), so a payload that does not touch a
+ * derivation keeps its previous result — and its memoized output object stays
+ * referentially stable for the memoized rail panels.
+ */
+
+/** Key of every field buildInGameCues() reads. */
+function cueStateKey(state: OverlayState): string {
+  const lp = state.localPlayer;
+  return [
+    state.inGame ? 1 : 0,
+    state.gameflowPhase || '',
+    state.gameMode || '',
+    state.mapName || '',
+    Math.floor((state.gameTime ?? 0) / 10),
+    (state.momentCues || []).map((c) => c.id).join(','),
+    lp?.championName || '',
+    lp?.level ?? 0,
+    lp?.isDead ? 1 : 0,
+    (lp?.items || []).map((i) => `${i.itemID}:${i.count}`).join(','),
+    lp?.scores
+      ? `${lp.scores.kills ?? 0}:${lp.scores.deaths ?? 0}:${lp.scores.assists ?? 0}:${lp.scores.wardScore ?? 0}`
+      : '',
+    Math.floor((lp?.currentGold ?? 0) / 100),
+    (state.enemies || [])
+      .map((e) => `${e.championName}:${e.level ?? 0}:${e.position || ''}:${e.isDead ? 1 : 0}`)
+      .join('|'),
+    (state.enemyBotSummoners || [])
+      .map((l) => `${l.role}:${l.championName}:${l.spells.map((s) => `${s.short}:${s.remaining}:${s.ready ? 1 : 0}`).join(',')}`)
+      .join('|'),
+    state.mayhemOfferIds?.join(',') || '',
+    state.mayhemOwnedIds?.join(',') || '',
+    state.mayhemAugmentWindow ? 1 : 0,
+    state.mayhemAugmentDismissedAt ?? 0,
+  ].join('~');
+}
+
+/** Key of every field getWardStatus() reads. */
+function wardStatusKey(state: OverlayState): string {
+  const lp = state.localPlayer;
+  return [
+    state.gameMode || '',
+    state.mapName || '',
+    Math.floor((state.gameTime ?? 0) / 10),
+    (lp?.items || [])
+      .filter((i) => i.itemID === 2055 || i.itemID === 3179 || i.itemID === 3364)
+      .map((i) => `${i.itemID}:${i.count}`)
+      .join(','),
+    lp?.scores?.wardScore ?? 0,
+    (state.enemies || [])
+      .map((e) => `${e.championName}:${e.level ?? 0}:${e.position || ''}:${e.isDead ? 1 : 0}`)
+      .join('|'),
+  ].join('~');
+}
+
+/** Key of every field getGankStatus() reads. */
+function gankStatusKey(state: OverlayState): string {
+  return [
+    state.gameMode || '',
+    state.mapName || '',
+    Math.floor((state.gameTime ?? 0) / 10),
+    (state.enemies || [])
+      .map((e) => `${e.championName}:${e.level ?? 0}:${e.position || ''}:${e.isDead ? 1 : 0}`)
+      .join('|'),
+  ].join('~');
+}
+
+
 export const OverlayApp: React.FC = () => {
   const [state, setState] = useState<OverlayState>({ inGame: false });
   const pageVisible = usePageVisible();
-  const [clockSec, setClockSec] = useState(0);
   const [champions, setChampions] = useState<Champion[]>([]);
   const [clickThrough, setClickThrough] = useState(true);
   const [alignMode, setAlignMode] = useState(false);
@@ -164,6 +434,10 @@ export const OverlayApp: React.FC = () => {
   const resolvedProfileId = useMemo(() => resolveProfileId(state), [state]);
   const profile = useMemo(() => getProfile(resolvedProfileId), [resolvedProfileId]);
 
+  // 1 Hz clock: the gating decision stays here, but the tick writes to the
+  // external clock store instead of component state — only useOverlayClock()
+  // leaves re-render, not the whole HUD. The game-time base is refreshed
+  // whenever the gating inputs change, exactly like the old setClockSec effect.
   useEffect(() => {
     const base = state.gameTime ?? 0;
     const at = state.timestamp ?? Date.now();
@@ -177,7 +451,10 @@ export const OverlayApp: React.FC = () => {
     });
     if (!wantsClock) return;
     const tick = (): void => {
-      setClockSec(base + Math.max(0, (Date.now() - at) / 1000));
+      publishClock({
+        sec: base + Math.max(0, (Date.now() - at) / 1000),
+        nowMs: Date.now(),
+      });
     };
     tick();
     const id = window.setInterval(tick, 1000);
@@ -196,6 +473,9 @@ export const OverlayApp: React.FC = () => {
         const res = await window.electronAPI?.getCatalog?.();
         return (res?.catalog as import('../catalog/types').CatalogBundle) || null;
       },
+      // The cached/static catalog is what first paint draws; only the live
+      // DDragon/CDragon refresh is deferred (see client.ts deferRefresh).
+      deferRefresh: true,
     })
       .then((bundle) => {
         if (bundle?.champions?.length) {
@@ -398,9 +678,11 @@ export const OverlayApp: React.FC = () => {
     [enemyChampions, build, adcForProfile, allyPartner, profile, situation]
   );
 
+  const cueKey = useMemo(() => cueStateKey(state), [state]);
   const rawCues = useMemo(
     () => buildInGameCues(state, { analysis, build, profileId, situation }),
-    [state, analysis, build, profileId, situation]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cueKey, analysis, build, profileId, situation]
   );
 
   const cueFirstSeen = useRef<Map<string, number>>(new Map());
@@ -462,8 +744,18 @@ export const OverlayApp: React.FC = () => {
     return [current];
   }, [rawCues, state.gameTime]);
 
-  const wardStatus = useMemo(() => getWardStatus(state, profileId), [state, profileId]);
-  const gankStatus = useMemo(() => getGankStatus(state, profileId), [state, profileId]);
+  const wardKey = useMemo(() => wardStatusKey(state), [state]);
+  const wardStatus = useMemo(
+    () => getWardStatus(state, profileId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wardKey, profileId]
+  );
+  const gankKey = useMemo(() => gankStatusKey(state), [state]);
+  const gankStatus = useMemo(
+    () => getGankStatus(state, profileId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [gankKey, profileId]
+  );
 
   const buildProgress = useMemo(
     () => trackBuildProgress(state.localPlayer?.items, build),
@@ -557,8 +849,9 @@ export const OverlayApp: React.FC = () => {
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
   // value the 120 s dismiss window never expired until some unrelated update
   // re-rendered the overlay, so a dismissed augment panel could stay hidden
-  // for the rest of the match.
-  const [nowMs, setNowMs] = useState(() => Date.now());
+  // for the rest of the match. The tick lives in the isolated clock store;
+  // this app only subscribes to the *derived* boolean, which flips at most
+  // twice per dismissal (set, then expiry) instead of once per second.
   useEffect(() => {
     const shouldTick = shouldRunMayhemDismissTick({
       inMayhem,
@@ -566,14 +859,23 @@ export const OverlayApp: React.FC = () => {
       pageVisible,
     });
     if (!shouldTick) return;
-    setNowMs(Date.now());
-    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    const tick = (): void => {
+      publishClock({ ...clockSnapshot, nowMs: Date.now() });
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, [inMayhem, state.mayhemAugmentDismissedAt, pageVisible]);
 
-  const mayhemDismissedRecently =
-    typeof state.mayhemAugmentDismissedAt === 'number' &&
-    nowMs - state.mayhemAugmentDismissedAt < 120_000;
+  const mayhemDismissedRecently = useSyncExternalStore(
+    subscribeOverlayClock,
+    () => {
+      const dismissedAt = state.mayhemAugmentDismissedAt;
+      const nowMs = getOverlayClock().nowMs;
+      return typeof dismissedAt === 'number' && nowMs - dismissedAt < 120_000;
+    },
+    () => false
+  );
 
   const mayhemPanelActive =
     inMayhem &&
@@ -591,6 +893,9 @@ export const OverlayApp: React.FC = () => {
       console.error('Unable to hide overlay:', error);
     });
   };
+
+  /** Stable callback for the memoized switch-profile rail panel. */
+  const handleCollapse = useCallback(() => setCollapsed(true), []);
 
   const handleToggleClicks = () => {
     void window.electronAPI?.toggleOverlayClickThrough?.()
@@ -736,6 +1041,90 @@ export const OverlayApp: React.FC = () => {
     };
   }, []);
 
+  const showAction = hudModules.action && cues.length > 0 && !inAram;
+  const showBuy =
+    hudModules.buy && buyQueue.length > 0 && (!inAram || inMayhem) && !mayhemPanelActive;
+
+  const buyRow = useMemo(() => {
+    if (!showBuy) return null;
+    return (
+      <div className="flex flex-wrap gap-0.5 items-center min-w-0">
+        {buyRail?.action === 'buy-component' && buyRail.buyId ? (
+          <ItemIcon
+            key={`buy-now-${buyRail.buyId}`}
+            itemId={buyRail.buyId}
+            alt={buyRail.text}
+            title={buyRail.title}
+            size={22}
+            className="hud-buy-icon is-next"
+          />
+        ) : null}
+        {buyQueue.map((item, index) => (
+          <ItemIcon
+            key={`buy-${item.id}`}
+            itemId={item.id}
+            alt={item.name}
+            title={buyQueueComplete ? `${item.name} (owned)` : item.name}
+            size={22}
+            className={`hud-buy-icon${index === 0 && !buyQueueComplete && !(buyRail?.action === 'buy-component' && buyRail.buyId) ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
+          />
+        ))}
+        {buyRail && buyDetail ? (
+          <div className="hud-buy-detail w-full" title={buyRail.title}>
+            <div className="hud-buy-detail-row">
+              <span className="hud-buy-detail-name truncate min-w-0">{buyDetail.name}</span>
+              <span className="hud-buy-detail-price shrink-0">
+                {buyDetail.cost.toLocaleString('en-US')}g
+              </span>
+            </div>
+            <div
+              className={`hud-buy-detail-status hud-buy-detail-status--${buyDetail.kind}`}
+            >
+              {buyDetail.kind === 'buy-full'
+                ? 'Buy now'
+                : buyDetail.kind === 'buy-component'
+                  ? `Part of ${buyDetail.partOf}`
+                  : buyDetail.goldShort !== null && buyDetail.goldShort > 0
+                    ? `Need ${buyDetail.goldShort.toLocaleString('en-US')}g`
+                    : buyRail.text}
+            </div>
+          </div>
+        ) : buyRail ? (
+          <div className="w-full text-[11px] leading-tight opacity-80 truncate" title={buyRail.title}>
+            {buyRail.text}
+          </div>
+        ) : null}
+      </div>
+    );
+  }, [showBuy, buyRail, buyDetail, buyQueue, buyQueueComplete]);
+
+  const actionLine = useMemo(() => {
+    if (!showAction) return null;
+    return (
+      <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
+        <div>{cues[0].label}</div>
+        {cues[0].rationale ? (
+          <div className="text-[12px] opacity-[0.85] leading-snug line-clamp-2">
+            {cues[0].rationale}
+          </div>
+        ) : null}
+      </div>
+    );
+  }, [showAction, cues]);
+
+  // Panel width is fixed; the transform (--overlay-scale) scales the whole box once, and it never exceeds the
+  // viewport, so a scaled panel cannot be cut at the display's right edge.
+  // Right-rail anchors/styles are memoized so the memoized rail panels receive
+  // referentially-stable style props and skip re-render when nothing moved.
+  const gankAnchor = useMemo(() => layoutElement(hudLayout, 'gank') || DEFAULT_GANK_ANCHOR, [hudLayout]);
+  const visionAnchor = useMemo(() => layoutElement(hudLayout, 'vision') || DEFAULT_VISION_ANCHOR, [hudLayout]);
+  const actionAnchor = useMemo(() => layoutElement(hudLayout, 'action') || DEFAULT_ACTION_ANCHOR, [hudLayout]);
+  const buyAnchor = useMemo(() => layoutElement(hudLayout, 'buy') || DEFAULT_BUY_ANCHOR, [hudLayout]);
+  const gankStyle = useMemo(() => ({ ...layoutStyle(gankAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [gankAnchor, paintGeo]);
+  const visionStyle = useMemo(() => ({ ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [visionAnchor, paintGeo]);
+  const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
+  const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
+
   if (!state.inGame || !slot) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
@@ -754,9 +1143,6 @@ export const OverlayApp: React.FC = () => {
   const showSums = showSumsRail;
   const showGank = hudModules.gank && !!gankStatus && !inAram;
   const showVision = hudModules.vision && !!wardStatus && !mayhemPanelActive;
-  const showAction = hudModules.action && cues.length > 0 && !inAram;
-  const showBuy =
-    hudModules.buy && buyQueue.length > 0 && (!inAram || inMayhem) && !mayhemPanelActive;
   const mayhemOnThisWindow =
     !lockedSlot ||
     slotHasModule('mayhem') ||
@@ -766,74 +1152,6 @@ export const OverlayApp: React.FC = () => {
   const showMayhem = mayhemPanelActive && mayhemOnThisWindow;
   const showRightRail =
     showGank || showVision || showAction || showBuy || !profileMatchesLocal;
-
-  const buyRow = showBuy ? (
-    <div className="flex flex-wrap gap-0.5 items-center min-w-0">
-      {buyRail?.action === 'buy-component' && buyRail.buyId ? (
-        <ItemIcon
-          key={`buy-now-${buyRail.buyId}`}
-          itemId={buyRail.buyId}
-          alt={buyRail.text}
-          title={buyRail.title}
-          size={22}
-          className="hud-buy-icon is-next"
-        />
-      ) : null}
-      {buyQueue.map((item, index) => (
-        <ItemIcon
-          key={`buy-${item.id}`}
-          itemId={item.id}
-          alt={item.name}
-          title={buyQueueComplete ? `${item.name} (owned)` : item.name}
-          size={22}
-          className={`hud-buy-icon${index === 0 && !buyQueueComplete && !(buyRail?.action === 'buy-component' && buyRail.buyId) ? ' is-next' : ''}${buyQueueComplete ? ' opacity-55' : ''}`}
-        />
-      ))}
-      {buyRail && buyDetail ? (
-        <div className="hud-buy-detail w-full" title={buyRail.title}>
-          <div className="hud-buy-detail-row">
-            <span className="hud-buy-detail-name truncate min-w-0">{buyDetail.name}</span>
-            <span className="hud-buy-detail-price shrink-0">
-              {buyDetail.cost.toLocaleString('en-US')}g
-            </span>
-          </div>
-          <div
-            className={`hud-buy-detail-status hud-buy-detail-status--${buyDetail.kind}`}
-          >
-            {buyDetail.kind === 'buy-full'
-              ? 'Buy now'
-              : buyDetail.kind === 'buy-component'
-                ? `Part of ${buyDetail.partOf}`
-                : buyDetail.goldShort !== null && buyDetail.goldShort > 0
-                  ? `Need ${buyDetail.goldShort.toLocaleString('en-US')}g`
-                  : buyRail.text}
-          </div>
-        </div>
-      ) : buyRail ? (
-        <div className="w-full text-[11px] leading-tight opacity-80 truncate" title={buyRail.title}>
-          {buyRail.text}
-        </div>
-      ) : null}
-    </div>
-  ) : null;
-
-  const actionLine = showAction ? (
-    <div className={`hud-chrome-cue hud-chrome-cue--${cues[0].urgency} !py-1 !px-1.5`}>
-      <div>{cues[0].label}</div>
-      {cues[0].rationale ? (
-        <div className="text-[12px] opacity-[0.85] leading-snug line-clamp-2">
-          {cues[0].rationale}
-        </div>
-      ) : null}
-    </div>
-  ) : null;
-
-  // Panel width is fixed; the transform (--overlay-scale) scales the whole box once, and it never exceeds the
-  // viewport, so a scaled panel cannot be cut at the display's right edge.
-  const railPanelSize = {
-    width: '220px',
-    maxWidth: 'calc(100vw - 24px)',
-  } as const;
 
   return (
     <div
@@ -900,14 +1218,14 @@ export const OverlayApp: React.FC = () => {
           {showSumsRail && (
           <div
             className="hud-overlay-scale hud-overlay-scale--left"
-            style={{ ...layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo), ...railPanelSize }}
+            style={{ ...layoutStyle(layoutElement(hudLayout, 'sums') || { x: 0.018, y: 0.078, scale: 1, opacity: 1, anchor: 'tl' }, paintGeo), ...RAIL_PANEL_SIZE }}
           >
             <div className="hud-rail-stack" data-hud-rail="sums">
               <section className="hud-rail-card" data-hud-section="summoners">
                 <h3 className="hud-rail-label">
                   <span className="hud-rail-label-text">Summoners</span>
                   <span className="hud-rail-label-meta">
-                    {clockSec > 0 ? formatGameTime(clockSec) : 'Live'}
+                    <OverlayClockLabel />
                   </span>
                 </h3>
                 <div className="hud-rail-body">
@@ -930,35 +1248,19 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showGank && slotHasModule('gank') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'gank') || { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
-            <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5"><GankSquare threat={gankStatus} compact /></div>
-            </OverlayChromePanel>
-          </div>
+            <GankRailPanel status={gankStatus} style={gankStyle} />
           )}
 
           {showVision && slotHasModule('vision') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
-            <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5"><WardIndicator status={wardStatus} compact /></div>
-            </OverlayChromePanel>
-          </div>
+            <VisionRailPanel status={wardStatus} style={visionStyle} />
           )}
 
           {showAction && slotHasModule('action') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'action') || { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
-            <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5">{actionLine}</div>
-            </OverlayChromePanel>
-          </div>
+            <ActionRailPanel line={actionLine} style={actionStyle} />
           )}
 
           {showBuy && slotHasModule('buy') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right" style={{ ...layoutStyle(layoutElement(hudLayout, 'buy') || { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo), ...railPanelSize }}>
-            <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5 min-w-0">{buyRow}</div>
-            </OverlayChromePanel>
-          </div>
+            <BuyRailPanel row={buyRow} style={buyStyle} />
           )}
 
           {showMayhem && (
@@ -983,35 +1285,11 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showRightRail && !profileMatchesLocal && slotHasModule('gank') && (
-          <div
-            className="hud-overlay-scale hud-overlay-scale--right absolute top-14 right-3"
-            style={railPanelSize}
-          >
-            <OverlayChromePanel>
-              <div className="hud-chrome-header !py-1 !px-2">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <ChampionIcon
-                    championId={profile.championId}
-                    championName={state.localPlayer?.championName}
-                    size={16}
-                    className="hud-champ-icon shrink-0"
-                  />
-                  <div className="min-w-0">
-                    <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
-                    <div className="hud-chrome-meta !text-[11px]">{profile.shortLabel}</div>
-                  </div>
-                </div>
-                <button type="button" onClick={() => setCollapsed(true)} className="hud-btn shrink-0" title="Collapse rails">
-                  –
-                </button>
-              </div>
-              <div className="relative z-10 px-2 py-1.5">
-                <div className="hud-chrome-cue hud-chrome-cue--warn !text-[12px] !py-1">
-                  Switch profile → {state.localPlayer?.championName || '?'}
-                </div>
-              </div>
-            </OverlayChromePanel>
-          </div>
+            <SwitchProfileRailPanel
+              profile={profile}
+              liveChampionName={state.localPlayer?.championName}
+              onCollapse={handleCollapse}
+            />
           )}
         </>
       )}
@@ -1045,7 +1323,7 @@ export const OverlayApp: React.FC = () => {
                 <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
                 <div className="hud-chrome-meta !text-[11px]">
                   {profile.shortLabel}
-                  {clockSec > 0 ? ` · ${formatGameTime(clockSec)}` : ''}
+                  <OverlayClockMeta />
                 </div>
               </div>
             </div>

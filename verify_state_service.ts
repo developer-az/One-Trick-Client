@@ -325,14 +325,14 @@ async function run(): Promise<void> {
         getStateServiceCadenceMs?: () => number;
     };
 
-    ok(svc.POLL_MS === 400, `POLL_MS === 400 (got ${String(svc.POLL_MS)})`);
+    ok(svc.POLL_MS === 600, `POLL_MS === 600 (got ${String(svc.POLL_MS)})`);
     ok(svc.HIDDEN_POLL_MS === 4000, `HIDDEN_POLL_MS === 4000 (got ${String(svc.HIDDEN_POLL_MS)})`);
     ok(svc.IDLE_PROBE_MS === 2000, `IDLE_PROBE_MS === 2000 (got ${String(svc.IDLE_PROBE_MS)})`);
 
     const cadenceFor = typeof svc.stateServiceCadence === 'function' ? svc.stateServiceCadence : null;
     ok(cadenceFor?.(false, false) === 2000, 'stateServiceCadence(false, false) is idle probe 2000');
     ok(cadenceFor?.(false, true) === 2000, 'stateServiceCadence(false, true) is idle probe 2000');
-    ok(cadenceFor?.(true, false) === 400, 'stateServiceCadence(true, false) is poll 400');
+    ok(cadenceFor?.(true, false) === 600, 'stateServiceCadence(true, false) is poll 600');
     ok(cadenceFor?.(true, true) === 4000, 'stateServiceCadence(true, true) is hidden poll 4000');
 
     if (

@@ -33,7 +33,11 @@ function formatPrimaryClipboard(lanes: OverlayBotSummoner[], now: number): strin
   return `${label} ${primary.championName}: ${bits.join(' · ')}`;
 }
 
-export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact }) => {
+export const SummonerTimers: React.FC<Props> = React.memo(function SummonerTimers({
+  lanes,
+  accentColor,
+  compact,
+}) {
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -188,4 +192,4 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
       {body}
     </HudFrame>
   );
-};
+});

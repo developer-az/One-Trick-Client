@@ -2,7 +2,7 @@
  * State Service — the Electron-side adapter around `src/logic/stateEngine.ts`.
  *
  * This is the only place that reads the Live Client for game state. It owns the
- * 400 ms timer; the engine owns the EventID cursor, the event bus and the
+ * 600 ms timer; the engine owns the EventID cursor, the event bus and the
  * objective timers. `game-monitor.ts` became a *consumer* of this module: it
  * reads the cached board on its own (slower) HUD cadence instead of doing its
  * own network fetch, so the HUD render rate and the state sample rate are
@@ -43,13 +43,13 @@ import {
 } from '../src/logic/latencyStats';
 
 /** The State Service sample rate. Events must land within a fight's reaction window. */
-export const POLL_MS = 400;
+export const POLL_MS = 600;
 /** In-game with the HUD hidden: still sample for timers/events, but far less often. */
 export const HIDDEN_POLL_MS = 4000;
 /** Idle probe: engaged but no match running yet (lobby / loading screen). */
 export const IDLE_PROBE_MS = 2000;
 /** `playerlist` is the big payload and changes slowly — read every Nth poll. */
-const PLAYERLIST_EVERY = 2;
+const PLAYERLIST_EVERY = 4;
 /** Debug log rotation cap. */
 const LOG_MAX_BYTES = 2 * 1024 * 1024;
 
@@ -187,8 +187,12 @@ function abilityRanksSum(abilities: LiveBoardParts['abilities']): number | null 
 /**
  * One board read across the granular endpoints.
  *
- * `gamestats` is fetched every poll because it is the liveness proof and the
- * cheap game clock. `playerlist` is staggered every 2nd poll. `activeplayer` is
+ * `gamestats` is read first because it is the liveness proof and the cheap game
+ * clock — and it gates `/eventdata`, which can only feed a board once the
+ * clock read succeeded (a failed clock read means no board this poll anyway,
+ * so skipping eventdata saves a second HTTP read exactly when the poll is
+ * already failing). `playerlist` is staggered every 4th poll (the big payload
+ * changes slowly and its last good value is reused between). `activeplayer` is
  * read every poll and its level drives `activeplayerabilities`: abilities are
  * fetched on the first read and then only when the level changes (ability ranks
  * only change on level-up). A failed staggered read keeps its last good value
@@ -210,10 +214,12 @@ async function fetchBoardParts(): Promise<LiveBoardLike | null> {
                 lastSelfLevelChangeAt === null ? null : now - lastSelfLevelChangeAt,
         });
 
-    const [events, activePlayer, gameData, players, abilities] = await Promise.all([
-        timeAsync(latencyRecorder, 'http.eventdata', fetchEventData),
+    const gameData = await timeAsync(latencyRecorder, 'http.gamestats', fetchGameStats);
+    const [events, activePlayer, players, abilities] = await Promise.all([
+        gameData
+            ? timeAsync(latencyRecorder, 'http.eventdata', fetchEventData)
+            : Promise.resolve(null),
         timeAsync(latencyRecorder, 'http.activeplayer', fetchActivePlayer),
-        timeAsync(latencyRecorder, 'http.gamestats', fetchGameStats),
         wantPlayers
             ? timeAsync(latencyRecorder, 'http.playerlist', fetchPlayerList)
             : Promise.resolve(null),

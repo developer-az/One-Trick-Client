@@ -7,7 +7,10 @@ interface Props {
 }
 
 /** Compact dead-enemy respawn countdowns under the summoner chips. */
-export const EnemyRespawns: React.FC<Props> = ({ enemies, timestamp }) => {
+export const EnemyRespawns: React.FC<Props> = React.memo(function EnemyRespawns({
+  enemies,
+  timestamp,
+}) {
   const [now, setNow] = useState(() => Date.now());
   const rows = useMemo(
     () => enemyRespawns(enemies, timestamp, now),
@@ -38,4 +41,4 @@ export const EnemyRespawns: React.FC<Props> = ({ enemies, timestamp }) => {
       ))}
     </div>
   );
-};
+});

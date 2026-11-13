@@ -18,6 +18,7 @@ import { overlayLog } from './overlay-log';
 import { isWinAlive, safeCall } from './safe-window';
 import { nativePresenterPath } from './paths';
 import { cropDirtyRect } from './presenter-frame';
+import { createPaintThrottle, type PaintRect } from './paint-throttle';
 import { PresenterSupervisor } from './presenter-supervisor';
 
 export const PRESENTER_PIPE_NAME = '\\\\.\\pipe\\onetrick-presenter';
@@ -52,8 +53,10 @@ const MSG_ERROR = PRESENTER_MSG.ERROR;
 const PROTOCOL_VERSION = PRESENTER_PROTOCOL_VERSION;
 /** Same HUD paint budget as the Electron overlay (12 fps shown). */
 const NATIVE_FRAME_RATE = 12;
+/** Strict main-process throttle window: one forwarded paint per 1000/12 ms. */
+const PAINT_THROTTLE_MS = Math.ceil(1000 / NATIVE_FRAME_RATE);
 /** Stop forwarding paints while this many bytes are still queued. */
-const MAX_QUEUED_BYTES = 32 * 1024 * 1024;
+const MAX_QUEUED_BYTES = 12 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 5_000;
 const READY_TIMEOUT_MS = 5_000;
 const PING_EVERY_MS = 5_000;
@@ -195,8 +198,7 @@ class NativeSurface implements NativeSurfaceHandle {
     private needsFullFrame = false;
     /** Latest complete paint (Electron 39 OSR always ships a full bitmap). */
     private lastFrame: { bytes: Buffer; width: number; height: number } | null = null;
-    private pingTimer: ReturnType<typeof setInterval> | null = null;
-    /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
+    private pingTimer: ReturnType<typeof setInterval> | null = null;    /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
     private lastPongAt = 0;
     private lastReloadAt = 0;
     private supervisor = new PresenterSupervisor();
@@ -208,6 +210,9 @@ class NativeSurface implements NativeSurfaceHandle {
     private onDown: () => void;
     private onFallback: (reason: string) => void;
     private captureProtection: boolean;
+    /** Strict paint throttle: drops intermediate paints, merges dirty rects, flushes the latest. */
+    private paintThrottle: ReturnType<typeof createPaintThrottle>;
+    private paintFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(osrWin: BrowserWindow, display: NativeDisplay, opts: NativeSurfaceOptions) {
         this.osrWin = osrWin;
@@ -218,6 +223,7 @@ class NativeSurface implements NativeSurfaceHandle {
         this.onDown = opts.onDown;
         this.onFallback = opts.onFallback;
         this.captureProtection = opts.captureProtection;
+        this.paintThrottle = createPaintThrottle(() => Date.now(), PAINT_THROTTLE_MS);
     }
 
     isLive(): boolean {
@@ -485,8 +491,9 @@ class NativeSurface implements NativeSurfaceHandle {
         });
         if (!size || !bytes) return;
         // The paint bitmap is the complete frame, so keep it even when this
-        // paint is dropped (presenter down or queue full): respawn/resize can
-        // then re-send it without waiting for the next dirty rect.
+        // paint is dropped (presenter down, queue full, or throttled): respawn/
+        // resize and the throttle flush can then re-send it without waiting
+        // for the next dirty rect.
         if (bytes.length === size.width * size.height * 4) {
             this.lastFrame = { bytes, width: size.width, height: size.height };
         }
@@ -495,13 +502,34 @@ class NativeSurface implements NativeSurfaceHandle {
             return;
         }
         if (this.queuedBytes > MAX_QUEUED_BYTES) {
+            // Queue full: drop this frame but force the next one to be a FULL
+            // frame so the presenter never ends up with a hole.
             this.needsFullFrame = true;
+            this.framesDropped++;
+            return;
+        }
+        // Strict main-process paint throttle: one forwarded paint per
+        // PAINT_THROTTLE_MS window. The leading paint of a window ships
+        // immediately; intermediate paints are dropped with their dirty rects
+        // merged into a union; the union is always flushed once the window
+        // elapses (see flushHeldPaint).
+        const shipped = this.paintThrottle.accept(dirtyRect);
+        this.schedulePaintFlush();
+        if (!shipped) {
+            this.framesDropped++;
+            return;
+        }
+        this.shipFrame(shipped);
+    }
+
+    private shipFrame(dirtyRect: PaintRect): void {
+        if (!this.lastFrame) {
             this.framesDropped++;
             return;
         }
         // The dirty rect is already in physical pixels of this bitmap; ship
         // exactly that sub-rectangle so the presenter pastes it at (x, y).
-        const cropped = cropDirtyRect(bytes, size.width, size.height, dirtyRect);
+        const cropped = cropDirtyRect(this.lastFrame.bytes, this.lastFrame.width, this.lastFrame.height, dirtyRect);
         if (!cropped) {
             // Corrupt bitmap or empty rect — never send a broken frame.
             this.framesDropped++;
@@ -518,6 +546,37 @@ class NativeSurface implements NativeSurfaceHandle {
             this.needsFullFrame = false;
             this.requestFullFrame();
         }
+    }
+
+    /** Arm (once) the timer that flushes the throttled paint union at window close. */
+    private schedulePaintFlush(): void {
+        const at = this.paintThrottle.flushAt();
+        if (at === null) {
+            if (this.paintFlushTimer) {
+                clearTimeout(this.paintFlushTimer);
+                this.paintFlushTimer = null;
+            }
+            return;
+        }
+        if (this.paintFlushTimer) return;
+        const wait = Math.max(0, at - Date.now());
+        this.paintFlushTimer = setTimeout(() => {
+            this.paintFlushTimer = null;
+            this.flushHeldPaint();
+        }, wait);
+    }
+
+    /** Flush the throttled union — the "final one" is always sent at window close. */
+    private flushHeldPaint(): void {
+        if (this.destroyed || !this.isLive()) return;
+        const rect = this.paintThrottle.flush();
+        if (!rect) return;
+        if (this.queuedBytes > MAX_QUEUED_BYTES) {
+            this.needsFullFrame = true;
+            this.framesDropped++;
+            return;
+        }
+        this.shipFrame(rect);
     }
 
     private resendLastFrame(): void {
@@ -738,6 +797,11 @@ class NativeSurface implements NativeSurfaceHandle {
         this.instance += 1;
         this.readyWaiter = null;
         this.lastFrame = null;
+        this.paintThrottle.reset();
+        if (this.paintFlushTimer) {
+            clearTimeout(this.paintFlushTimer);
+            this.paintFlushTimer = null;
+        }
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;
