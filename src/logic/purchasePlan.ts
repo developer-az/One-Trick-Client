@@ -3,7 +3,8 @@
  * All prices come from the supplied lookup (the shipped item catalog); nothing is hard-coded.
  */
 
-import { BASE_BOOT_ID, bootChainIds, isBootId } from './bootChains';
+import { ALL_BOOT_IDS, BASE_BOOT_ID, bootChainIds, isBootId } from './bootChains';
+import { isComponentItemId, isLegendaryItemId } from './itemTier';
 import { countFilledItemSlots, resolveOrderedBuyPath, TRINKET_ITEM_IDS } from './buildProgress';
 import type { BuildItemRef } from './buildProgress';
 
@@ -470,5 +471,39 @@ export function planNextPurchase(args: {
     buy: { id: component.id, name: component.name, cost: component.cost },
     needGold,
     cue: `Buy ${component.name} now (${formatGold(component.cost)}) — ${target.name} needs ${formatGold(needGold)} more.`,
+  };
+}
+
+export interface BuyQueueLabel {
+  shortTitle: string;
+  railHint: string;
+  isComponentStep: boolean;
+}
+
+export function buyQueueLabelForItem(item: BuildItemRef): BuyQueueLabel {
+  const isBoot = ALL_BOOT_IDS.has(item.id);
+  const isComponent = !isBoot && isComponentItemId(item.id);
+  const isLegendary = isLegendaryItemId(item.id);
+
+  if (isComponent) {
+    return {
+      shortTitle: item.name,
+      railHint: `Component → ${item.name}`,
+      isComponentStep: true,
+    };
+  }
+
+  if (isBoot) {
+    return {
+      shortTitle: item.name,
+      railHint: 'Finish boots (mid-tier counts)',
+      isComponentStep: false,
+    };
+  }
+
+  return {
+    shortTitle: item.name,
+    railHint: isLegendary ? `Spike: ${item.name}` : item.name,
+    isComponentStep: false,
   };
 }

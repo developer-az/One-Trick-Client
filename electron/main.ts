@@ -542,6 +542,16 @@ app.whenReady().then(() => {
 
     ipcMain.handle('lcu-status', () => lcuSocket.summary());
     ipcMain.handle('champ-select-get', () => ({ session: lcuSocket.champSelect }));
+    ipcMain.handle('scouting-get', async () => {
+        if (isCurrentlyInGame()) return { success: true, players: [] as import('./scouting').ScoutingPlayer[] };
+        try {
+            const { fetchScoutingForSession } = await import('./scouting');
+            const players = await fetchScoutingForSession(lcuSocket.champSelect);
+            return { success: true, players };
+        } catch (e) {
+            return { success: false, players: [], error: String(e) };
+        }
+    });
 
     ipcMain.handle('app-settings-get', () => getAppSettings());
     ipcMain.handle('app-settings-set', (_event, patch: unknown) => {

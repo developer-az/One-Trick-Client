@@ -13,6 +13,7 @@ import {
   ownsAnyCompleteBoots,
   ownsFinishedBoots,
 } from './bootChains';
+import { isComponentItemId, isLegendaryItemId } from './itemTier';
 
 export interface BuildItemRef {
   id: string;
@@ -203,6 +204,62 @@ export function countFilledItemSlots(
   }).length;
 }
 
+const INVENTORY_PRESSURE_SKIP = new Set(['2055', '2003', '2010', '2138', '2139', '2140']);
+
+/**
+ * Slots occupied by items that meaningfully block finishing the build path
+ * (excludes trinkets, pinks, pots, and cheap components).
+ */
+export function inventoryPressureSlots(
+  inventory: Array<{ itemID: number; displayName?: string }> | undefined
+): number {
+  let pressure = 0;
+  for (const row of inventory || []) {
+    if (!row.itemID || row.itemID === 0) continue;
+    const id = String(row.itemID);
+    if (TRINKET_ITEM_IDS.has(id)) continue;
+    if (INVENTORY_PRESSURE_SKIP.has(id)) continue;
+    if (isComponentItemId(id)) continue;
+    pressure += 1;
+  }
+  return pressure;
+}
+
+export interface SupportBuildMaturity {
+  legendariesOnPath: number;
+  ownedLegendaries: number;
+  /** True when only the final legendary (or last path step) remains unowned. */
+  nearComplete: boolean;
+}
+
+function pathLegendaryStep(item: BuildItemRef, bootsId?: string): boolean {
+  if (ALL_BOOT_IDS.has(item.id) || MID_TIER_BOOT_IDS.has(item.id)) return false;
+  if (bootsId && item.id === bootsId) return false;
+  if (item.id === '1001') return false;
+  return isLegendaryItemId(item.id) || item.id === '3865' || item.id === '3877';
+}
+
+export function supportBuildMaturity(
+  progress: BuildProgress,
+  build: { boots?: BuildItemRef } | null | undefined
+): SupportBuildMaturity {
+  const legendarySteps = progress.path.filter((item) => pathLegendaryStep(item, build?.boots?.id));
+  const hasSupportQuest = [...progress.ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id));
+  const owned = legendarySteps.filter((item) => {
+    if (progress.ownedIds.has(item.id)) return true;
+    if (item.id === '3865' && hasSupportQuest) return true;
+    if (item.id === '3877' && hasSupportQuest) return true;
+    return false;
+  });
+  const nearComplete =
+    legendarySteps.length > 0 && owned.length >= Math.max(1, legendarySteps.length - 1);
+  return {
+    legendariesOnPath: legendarySteps.length,
+    ownedLegendaries: owned.length,
+    nearComplete,
+  };
+}
+
 export interface SupportBootSlotAdvice {
   action: 'sell' | 'keep';
   label: string;
@@ -217,13 +274,37 @@ export function supportBootSlotAdvice(
   inventory: Array<{ itemID: number }> | undefined,
   progress: BuildProgress,
   gameTimeSec: number,
-  opts: { behind?: boolean } = {}
+  opts: { behind?: boolean; build?: { boots?: BuildItemRef } | null } = {}
 ): SupportBootSlotAdvice | null {
   if (!progress.hasFinishedBoots || !progress.next) return null;
   if (ALL_BOOT_IDS.has(progress.next.id)) return null;
 
   const filled = countFilledItemSlots(inventory);
-  if (filled < 6) return null;
+  const pressure = inventoryPressureSlots(inventory);
+  if (filled < 6 && pressure < 5) return null;
+
+  const maturity = supportBuildMaturity(progress, opts.build ?? null);
+  if (!maturity.nearComplete) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Inventory full but build not finished — complete cores before selling MS.',
+    };
+  }
+  if (!isLegendaryItemId(progress.next.id)) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: `Next buy ${progress.next.name} is not your final spike — keep boots for now.`,
+    };
+  }
+  if (pressure < 5) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Components and wards filling slots — finish items before selling boots.',
+    };
+  }
 
   const minutes = gameTimeSec / 60;
   const ownedBootId = [...progress.ownedIds].find((id) => ALL_BOOT_IDS.has(id) || MID_TIER_BOOT_IDS.has(id));

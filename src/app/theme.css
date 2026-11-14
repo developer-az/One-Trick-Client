@@ -149,6 +149,8 @@ html:not(.overlay-root) ::selection {
 
 .ot-main {
   overflow-y: auto;
+  overscroll-behavior: contain;
+  contain: paint;
   background: var(--ot-bg-raised);
 }
 .ot-page {
@@ -183,6 +185,8 @@ html:not(.overlay-root) ::selection {
   border: 1px solid var(--ot-border);
   border-radius: var(--ot-radius);
   background: var(--ot-surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 .ot-card-pad {
   padding: var(--ot-space-card);
@@ -911,13 +915,21 @@ html:not(.overlay-root) ::selection {
  * (loaded after tokens.css) so equal-specificity overrides win.
  * ========================================================================= */
 
-/* ---- Glass level (0 = opaque, off) ---- */
-html:not(.overlay-root) .ot-card,
-html:not(.overlay-root) .ot-appearance-drawer,
-html:not(.overlay-root) .ot-titlebar,
-html:not(.overlay-root) .ot-toast {
+/* ---- Glass level (0 = opaque, off) — only when glass > 0 (data-ot-glass-on).
+ * Backdrop blur on every card repaints the scroll container; disable while scrolling. */
+html:not(.overlay-root)[data-ot-glass-on] .ot-card,
+html:not(.overlay-root)[data-ot-glass-on] .ot-appearance-drawer,
+html:not(.overlay-root)[data-ot-glass-on] .ot-titlebar,
+html:not(.overlay-root)[data-ot-glass-on] .ot-toast {
   -webkit-backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
   backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
+}
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-card,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-appearance-drawer,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-titlebar,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* ---- Appearance drawer ---- */
@@ -1142,6 +1154,8 @@ html:not(.overlay-root) .ot-toast {
   height: 72px;
   pointer-events: none;
   user-select: none;
+  contain: layout paint;
+  isolation: isolate;
 }
 .ot-pet-area canvas,
 .ot-pet-preview canvas {

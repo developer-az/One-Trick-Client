@@ -4,9 +4,9 @@
  * No React, no DOM, no League-client or overlay code: everything here is a
  * plain function a test (or the component) can drive with an injected clock.
  *
- * The pet lives only in the dashboard window and only exists during the
- * `idle`, `queue` and `loading` stages (see PET_VISIBLE_STAGES — it disappears
- * in game). It idles, wanders back and forth inside its allotted area, sleeps
+ * The pet lives only in the dashboard window for every league stage except an
+ * active match (`game` — the overlay owns that). It idles, wanders back and
+ * forth inside its allotted area, sleeps
  * after a long quiet stretch, and reacts exactly once — with a queue-pop jump
  * — each time the stage enters `queue` (leagueStatus folds both Matchmaking
  * and ReadyCheck into stage 'queue').
@@ -96,14 +96,23 @@ export function normalizePet(raw: unknown): PetSettings {
 
 /* ------------------------------------------------------------- visibility */
 
-/** The pet is a dashboard companion: visible only when nothing urgent is up. */
-export const PET_VISIBLE_STAGES: ReadonlySet<LeagueStage> = new Set(['idle', 'queue', 'loading']);
+/** Dashboard stages where the companion may show (everything except in-match). */
+export const PET_VISIBLE_STAGES: ReadonlySet<LeagueStage> = new Set([
+  'preview',
+  'offline',
+  'connecting',
+  'idle',
+  'queue',
+  'draft',
+  'loading',
+  'post',
+]);
 
 /** The pet pops when the stage enters queue (Matchmaking + ReadyCheck both arrive here). */
 export const PET_POP_STAGES: ReadonlySet<LeagueStage> = new Set(['queue']);
 
 export function petVisibleForStage(stage: LeagueStage): boolean {
-  return PET_VISIBLE_STAGES.has(stage);
+  return stage !== 'game';
 }
 
 /* ------------------------------------------------------------------ timing */
@@ -330,7 +339,8 @@ export function stepPet(prev: PetState, input: PetStepInput): PetState {
         break;
       }
       const span = Math.max(1, width);
-      let x = s.x + (s.dir * PET_TIMING.walkPxPerSec * dt) / span;
+      const dtSec = dt / 1000;
+      let x = s.x + (s.dir * PET_TIMING.walkPxPerSec * dtSec) / span;
       let dir = s.dir;
       if (x <= 0) {
         x = 0;

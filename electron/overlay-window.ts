@@ -628,15 +628,15 @@ function widgetsFromSettings(): Array<{
     }) : null;
     const defaults = [
         { id: 'sums', visible: true, x: 0.018, y: 0.078, scale: 1, anchor: 'tl' },
-        { id: 'gank', visible: true, x: 0.835, y: 0.078, scale: 1, anchor: 'tr' },
-        { id: 'vision', visible: true, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
-        { id: 'buy', visible: true, x: 0.835, y: 0.42, scale: 1, anchor: 'tr' },
-        { id: 'action', visible: true, x: 0.835, y: 0.54, scale: 1, anchor: 'tr' },
-        { id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'gank', visible: true, x: 0.982, y: 0.078, scale: 1, anchor: 'tr' },
+        { id: 'vision', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'buy', visible: true, x: 0.982, y: 0.42, scale: 1, anchor: 'tr' },
+        { id: 'action', visible: true, x: 0.982, y: 0.54, scale: 1, anchor: 'tr' },
+        { id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
     ];
     const elements = Array.isArray(raw?.elements) && raw.elements.length ? [...raw.elements] : defaults;
     if (!elements.some((el) => el?.id === 'mayhem')) {
-        elements.push({ id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' });
+        elements.push({ id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' });
     }
     const widgets: Array<{
         id: string;
@@ -1593,6 +1593,7 @@ export function broadcastOverlayMeta(): void {
         alignMode,
         hudModules,
         hudLayout,
+        pet: getAppSettings().pet,
         displayWidth: display.bounds.width,
         displayHeight: display.bounds.height,
         slot: currentSlot(),
@@ -1616,6 +1617,9 @@ interface OverlayUpdatePayload {
 function slimForMainWindow(payload: OverlayUpdatePayload): OverlayUpdatePayload {
     return {
         inGame: payload.inGame,
+        loading: payload.loading,
+        gameTime: payload.gameTime,
+        trustedGameTime: payload.trustedGameTime,
         profileHint: payload.profileHint ?? null,
         enemyBotSummoners: payload.enemyBotSummoners,
         localPlayer: payload.localPlayer
