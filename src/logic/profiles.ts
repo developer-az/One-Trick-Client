@@ -318,3 +318,84 @@ export function storeProfileId(id: ProfileId): void {
     /* ignore */
   }
 }
+
+export type CueWeightKind =
+  | 'moment'
+  | 'threat'
+  | 'boot-slot'
+  | 'prey-focus'
+  | 'flash'
+  | 'roam'
+  | 'cannon'
+  | 'scheme'
+  | 'ult'
+  | 'buy'
+  | 'doctrine'
+  | 'vision'
+  | 'misc';
+
+export type CueWeightProfile = Partial<Record<CueWeightKind, number>>;
+
+const AUTHORED_CUE_WEIGHTS: Record<AuthoredProfileId, CueWeightProfile> = {
+  'pyke-support': {
+    'prey-focus': 24,
+    flash: 20,
+    threat: 16,
+    moment: 18,
+    ult: 14,
+    scheme: 10,
+    cannon: 8,
+    roam: 2,
+    doctrine: 12,
+    vision: 10,
+    'boot-slot': 4,
+    misc: 0,
+  },
+  'pantheon-support': {
+    'prey-focus': 22,
+    flash: 18,
+    threat: 14,
+    moment: 16,
+    ult: 16,
+    doctrine: 14,
+    roam: 6,
+    cannon: 8,
+    scheme: 10,
+    vision: 10,
+    'boot-slot': 4,
+    misc: 0,
+  },
+  'yone-mid': {
+    flash: 16,
+    threat: 14,
+    moment: 16,
+    ult: 18,
+    doctrine: 12,
+    roam: 8,
+    scheme: 10,
+    cannon: 4,
+    vision: 6,
+    'boot-slot': 2,
+    misc: 0,
+  },
+};
+
+const GENERIC_CUE_WEIGHTS: CueWeightProfile = {
+  threat: 12,
+  flash: 12,
+  moment: 14,
+  ult: 10,
+  scheme: 8,
+  cannon: 6,
+  roam: 4,
+  doctrine: 6,
+  vision: 6,
+  misc: 0,
+};
+
+export function cueWeightProfileFor(profileId: ProfileId): CueWeightProfile {
+  if (profileId === 'pyke-support' || profileId === 'pantheon-support' || profileId === 'yone-mid') {
+    return AUTHORED_CUE_WEIGHTS[profileId];
+  }
+  return GENERIC_CUE_WEIGHTS;
+}

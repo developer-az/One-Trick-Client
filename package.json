@@ -88,6 +88,9 @@
     "lint": "eslint .",
     "verify:cues": "npx --yes tsx verify_overlay_cues.ts",
     "verify:cue-labels": "npx --yes tsx verify_cue_labels.ts",
+    "verify:build-boot-slot": "npx --yes tsx verify_build_boot_slot.ts",
+    "verify:cue-rank": "npx --yes tsx verify_cue_rank.ts",
+    "verify:map-scheme": "npx --yes tsx verify_map_scheme.ts",
     "verify:buy-detail": "npx --yes tsx verify_buy_detail.ts",
     "verify:summoner-chip": "npx --yes tsx verify_summoner_chip.ts",
     "verify:enemy-respawns": "npx --yes tsx verify_enemy_respawns.ts",
@@ -132,7 +135,7 @@
     "verify:packaging": "npx --yes tsx verify_packaging.ts",
     "verify:ranked": "npx --yes tsx verify_ranked.ts && npx --yes tsx verify_aram_profile.ts",
     "verify:one-trick": "npx --yes tsx verify_one_trick.ts",
-    "verify:release": "npm run lint && npm run verify:perf-budget && npm run verify:cues && npm run verify:cue-labels && npm run verify:buy-detail && npm run verify:summoner-chip && npm run verify:enemy-respawns && npm run verify:overlay-clock && npm run verify:latency-stats && npm run verify:no-winrate-claims && npm run verify:signal-inventory && npm run verify:vision-validation && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-layout-edges && npm run verify:overlay-bounds && npm run verify:overlay-health && npm run verify:destroyed-guards && npm run verify:native-presenter && npm run verify:presenter-frame && npm run verify:presenter-supervisor && npm run verify:overlay-fallback && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:clipper-lifecycle && npm run verify:game-state && npm run verify:state-service && npm run verify:game-monitor && npm run verify:ipc-surface && npm run verify:hud-geometry && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit && npm run verify:purchase-order && npm run verify:app-density && npm run verify:appearance-settings && npm run verify:pixel-pet && npm run verify:review-fixes",
+    "verify:release": "npm run lint && npm run verify:perf-budget && npm run verify:cues && npm run verify:cue-labels && npm run verify:build-boot-slot && npm run verify:cue-rank && npm run verify:map-scheme && npm run verify:buy-detail && npm run verify:summoner-chip && npm run verify:enemy-respawns && npm run verify:overlay-clock && npm run verify:latency-stats && npm run verify:no-winrate-claims && npm run verify:signal-inventory && npm run verify:vision-validation && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-layout-edges && npm run verify:overlay-bounds && npm run verify:overlay-health && npm run verify:destroyed-guards && npm run verify:native-presenter && npm run verify:presenter-frame && npm run verify:presenter-supervisor && npm run verify:overlay-fallback && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:clipper-lifecycle && npm run verify:game-state && npm run verify:state-service && npm run verify:game-monitor && npm run verify:ipc-surface && npm run verify:hud-geometry && npm run verify:pixel-pet && npm run verify:loading-pet && npm run verify:scouting && npm run verify:appearance-settings && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit && npm run verify:purchase-order && npm run verify:app-density && npm run verify:review-fixes",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
@@ -158,6 +161,8 @@
     "verify:app-density": "npx --yes tsx verify_app_density.ts",
     "verify:appearance-settings": "npx --yes tsx verify_appearance_settings.ts",
     "verify:pixel-pet": "npx --yes tsx verify_pixel_pet.ts",
+    "verify:loading-pet": "npx --yes tsx verify_loading_pet.ts",
+    "verify:scouting": "npx --yes tsx verify_scouting.ts",
     "verify:review-fixes": "npx --yes tsx verify_review_fixes.ts"
   },
   "dependencies": {

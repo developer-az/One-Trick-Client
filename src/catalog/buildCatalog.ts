@@ -171,6 +171,12 @@ function legendary(item: CatalogItem): boolean {
   return riftItem(item) && item.gold >= 2000 && item.into.length === 0 && !item.tags.includes('Boots');
 }
 
+/** Shared tier read for inventory maturity / buy rails (matches catalog legendary filter). */
+export function isLegendaryCatalogItem(item: Pick<CatalogItem, 'id' | 'gold' | 'into' | 'tags' | 'purchasable'>): boolean {
+  const rift = item.purchasable && item.id.length <= 4;
+  return rift && item.gold >= 2000 && item.into.length === 0 && !item.tags.includes('Boots');
+}
+
 function bootsCandidate(item: CatalogItem): boolean {
   return riftItem(item) && item.tags.includes('Boots') && item.gold >= 900 && item.gold <= 1600;
 }

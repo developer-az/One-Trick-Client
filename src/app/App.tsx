@@ -122,6 +122,25 @@ export const App: React.FC = () => {
     applyAppearance(settings);
   }, [settings]);
 
+  // Glass backdrop-filter on cards is expensive while .ot-main scrolls — pause it briefly.
+  useEffect(() => {
+    const main = document.querySelector<HTMLElement>('.ot-main');
+    if (!main) return;
+    let scrollEndTimer = 0;
+    const onScroll = () => {
+      document.documentElement.setAttribute('data-ot-scrolling', '');
+      window.clearTimeout(scrollEndTimer);
+      scrollEndTimer = window.setTimeout(() => {
+        document.documentElement.removeAttribute('data-ot-scrolling');
+      }, 140);
+    };
+    main.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      main.removeEventListener('scroll', onScroll);
+      window.clearTimeout(scrollEndTimer);
+      document.documentElement.removeAttribute('data-ot-scrolling');
+    };
+  }, []);
   const appearance = settings?.appearance;
   const ap: AppearanceSettings = appearance ?? {
     theme: 'gothic',
@@ -134,7 +153,7 @@ export const App: React.FC = () => {
   const setAppearance = (patch: Partial<AppearanceSettings>) =>
     update({ appearance: patch as AppearanceSettings });
 
-  // Dashboard pet: persisted species + color, shown only while idle/queue/loading.
+  // Dashboard pet: persisted species + color; hidden only during an active match.
   const pet = settings?.pet ?? PET_DEFAULTS;
   const setPet = (patch: Partial<PetSettings>) => update({ pet: { ...pet, ...patch } });
   useAutoImport({

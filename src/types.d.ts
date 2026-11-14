@@ -23,6 +23,18 @@ declare global {
         connectedAt: number | null;
     }
 
+    /** LCU-backed champ-select scouting row (rank, mastery, recent form). */
+    interface ScoutingPlayer {
+        summonerId: number;
+        championId: number;
+        teamId: number;
+        rankTier?: string | null;
+        rankDivision?: string | null;
+        masteryLevel?: number | null;
+        recentWins?: number;
+        recentGames?: number;
+    }
+
     interface AppSettings {
         /** GPU compositing for One Trick's own windows. Off keeps the GPU for League. */
         gpuAcceleration: boolean;
@@ -221,6 +233,7 @@ declare global {
             onLcuStatus?: (callback: (payload: LcuStatus) => void) => () => void;
             getChampSelect?: () => Promise<{ session: unknown | null }>;
             onChampSelect?: (callback: (session: unknown | null) => void) => () => void;
+            getScouting?: () => Promise<{ success: boolean; players: ScoutingPlayer[]; error?: string }>;
 
             getAppSettings?: () => Promise<AppSettings>;
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;

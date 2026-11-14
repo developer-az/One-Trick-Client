@@ -1,5 +1,6 @@
 import type { DraftState, LeagueState } from './hooks';
 import { isDesktop } from './hooks';
+import { isMatchLoading } from '../logic/matchLoading';
 import type { Tone } from './ui';
 
 export interface LeagueStatus {
@@ -14,7 +15,6 @@ export interface LeagueStatus {
 }
 
 const QUEUE_PHASES = new Set(['Matchmaking', 'ReadyCheck']);
-const LOADING_PHASES = new Set(['GameStart']);
 const GAME_PHASES = new Set(['InProgress', 'Reconnect']);
 const POST_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 
@@ -32,6 +32,24 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
 
   const lcu = league.lcu;
   const phase = lcu?.phase || null;
+
+  if (
+    league.matchLoading ||
+    isMatchLoading({
+      phase,
+      gameTime: league.liveGameTime,
+      trustedGameTime: league.trustedGameTime,
+      matchEngaged: league.inGame,
+    })
+  ) {
+    return {
+      stage: 'loading',
+      tone: 'live',
+      short: 'Loading',
+      detail: 'Loading into the match. The overlay appears when the game starts.',
+      next: null,
+    };
+  }
 
   if (league.inGame || (phase && GAME_PHASES.has(phase))) {
     return {
@@ -72,16 +90,6 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
         ? 'You are locked in. Your loadout is ready to send to the client.'
         : 'Champ select is live. Picks fill in as they happen.',
       next: draft.localLocked ? 'Export your runes and items.' : null,
-    };
-  }
-
-  if (phase && LOADING_PHASES.has(phase)) {
-    return {
-      stage: 'loading',
-      tone: 'live',
-      short: 'Loading',
-      detail: 'Loading into the match. The overlay appears when the game starts.',
-      next: null,
     };
   }
 

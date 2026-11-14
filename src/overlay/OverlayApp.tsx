@@ -14,8 +14,7 @@ import {
 import type { JungleThreat } from '../logic/jungleLogic';
 import type { WardStatus } from '../logic/visionLogic';
 import { trackBuildProgress } from '../logic/buildProgress';
-import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
-import type { OrderedBuyStep } from '../logic/purchasePlan';
+import { catalogPriceLookup, type OrderedBuyStep, type PriceLookup } from '../logic/purchasePlan';
 import {
   buildInGameCues,
   buyOrderPlanForState,
@@ -65,6 +64,8 @@ import {
 } from '../logic/mayhem';
 import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
+import { OverlayPet } from './OverlayPet';
+import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
 
 const mayhemBundle = bundledMayhem as MayhemBundle;
 
@@ -270,7 +271,7 @@ function OverlayChromePanel({
   className?: string;
 }) {
   return (
-    <div className={`hud-overlay-panel ${className}`}>
+    <div className={`hud-overlay-panel hud-overlay-panel--rail overflow-hidden ${className}`}>
       <span className="hud-corner hud-corner-tl" aria-hidden />
       <span className="hud-corner hud-corner-br" aria-hidden />
       <span className="hud-rail hud-rail-top" aria-hidden />
@@ -442,6 +443,7 @@ export const OverlayApp: React.FC = () => {
     mode: 'locked' | 'compact' | 'align';
   } | null>(null);
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
+  const [petPreference, setPetPreference] = useState<PetSettings>(PET_DEFAULTS);
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
@@ -555,7 +557,9 @@ export const OverlayApp: React.FC = () => {
           stickerIds: string[];
           mode: 'locked' | 'compact' | 'align';
         };
+        pet?: unknown;
       };
+      if (meta.pet) setPetPreference(normalizePet(meta.pet));
       if (typeof meta.displayWidth === 'number' && typeof meta.displayHeight === 'number') {
         setDisplaySize({ w: meta.displayWidth, h: meta.displayHeight });
       }
@@ -900,7 +904,7 @@ export const OverlayApp: React.FC = () => {
 
   const mayhemLayoutPos =
     layoutElement(hudLayout, 'mayhem') ||
-    layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
+    layoutElement(hudLayout, 'vision') || { x: 0.982, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
 
   const handleHide = () => {
     void window.electronAPI?.toggleOverlay?.().catch((error) => {
@@ -1020,8 +1024,10 @@ export const OverlayApp: React.FC = () => {
   })();
 
   useEffect(() => {
-    window.electronAPI?.reportOverlayContent?.(slotHasContent);
-  }, [slotHasContent]);
+    window.electronAPI?.reportOverlayContent?.(state.loading || slotHasContent);
+  }, [state.loading, slotHasContent]);
+
+  const activePet = state.pet ? normalizePet(state.pet) : petPreference;
 
   // Paint heartbeat. The main process can see that this window is shown, but
   // only the page knows whether frames are still being produced. One
@@ -1180,6 +1186,14 @@ export const OverlayApp: React.FC = () => {
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
 
+  if (state.loading) {
+    return (
+      <div className="w-screen h-screen pointer-events-none bg-transparent">
+        <OverlayPet preference={activePet} />
+      </div>
+    );
+  }
+
   if (!state.inGame || !slot) {
     return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
   }
@@ -1198,6 +1212,11 @@ export const OverlayApp: React.FC = () => {
   const showSums = showSumsRail;
   const showGank = hudModules.gank && !!gankStatus && !inAram;
   const showVision = hudModules.vision && !!wardStatus && !mayhemPanelActive;
+  const objectiveTimers = state.objectiveTimers;
+  const showObjectives =
+    !inAram &&
+    !!objectiveTimers &&
+    (objectiveTimers.dragon || objectiveTimers.baron || objectiveTimers.herald);
   const mayhemOnThisWindow =
     !lockedSlot ||
     slotHasModule('mayhem') ||
@@ -1206,7 +1225,7 @@ export const OverlayApp: React.FC = () => {
     slot?.id === 'slot-0';
   const showMayhem = mayhemPanelActive && mayhemOnThisWindow;
   const showRightRail =
-    showGank || showVision || showAction || showBuy || !profileMatchesLocal;
+    showGank || showVision || showAction || showBuy || showObjectives || !profileMatchesLocal;
 
   return (
     <div
@@ -1308,6 +1327,18 @@ export const OverlayApp: React.FC = () => {
 
           {showVision && slotHasModule('vision') && (
             <VisionRailPanel status={wardStatus} style={visionStyle} />
+          )}
+
+          {showObjectives && slotHasModule('vision') && (
+          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.982, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+            <OverlayChromePanel>
+              <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
+                {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
+                {objectiveTimers?.baron ? <div>Baron {objectiveTimers.baron.inSec}s</div> : null}
+                {objectiveTimers?.herald ? <div>Herald {objectiveTimers.herald.inSec}s</div> : null}
+              </div>
+            </OverlayChromePanel>
+          </div>
           )}
 
           {showAction && slotHasModule('action') && (

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import { championLossProfile, lossMatchupInsights } from '../../logic/lossInsights';
-import { byChampion, pct, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
+import { byChampion, pct, personalTier, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
 import { isDesktop } from '../hooks';
 import { IconStats } from '../icons';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
@@ -112,7 +112,22 @@ export const StatsView: React.FC<{
         <Stat label="Champions played" value={String(rows.length)} hint={`Most: ${byKey.get(rows[0].championId)?.name || '–'}`} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="mb-5">
+        <CardHeader title="Your tier list" sub="Tiers from your own match history and Wilson intervals — not global meta." />
+        <div className="flex flex-wrap gap-2 mt-2">
+          {rows.slice(0, 12).map((r) => {
+            const c = byKey.get(r.championId);
+            const tier = personalTier(r, MIN_SAMPLE);
+            return (
+              <span key={r.championId} className="ot-chip text-xs">
+                {c?.name || r.championId}: <strong>{tier}</strong>
+              </span>
+            );
+          })}
+        </div>
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2" pad={false}>
           <div className="ot-card-pad !pb-2">
             <CardHeader title="By champion" sub="Select a row, then use Matchups for enemies or allies." />

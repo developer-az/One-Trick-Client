@@ -28,6 +28,7 @@ import {
     describeEndMatchReason,
     isInGamePhase,
 } from './match-lifecycle';
+import { isMatchLoading } from '../src/logic/matchLoading';
 import {
     showOverlay,
     hideOverlay,
@@ -439,11 +440,22 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
             isDead: p.isDead,
         })) || [];
 
+    const gameTime = live?.gameData?.gameTime ?? 0;
+    const loading = isMatchLoading({
+        phase: gameflowPhase,
+        gameTime,
+        trustedGameTime,
+        matchEngaged: true,
+    });
     const payload = {
-        inGame: true,
+        inGame: !loading,
+        loading,
         gameflowPhase,
         gameMode: live?.gameData?.gameMode || null,
-        gameTime: live?.gameData?.gameTime ?? 0,
+        gameTime,
+        trustedGameTime,
+        objectiveTimers: getObjectiveTimers() ?? undefined,
+        pet: getAppSettings().pet,
         mapName: live?.gameData?.mapName || null,
         localPlayer: localPlayer
             ? {
@@ -1281,6 +1293,20 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
+    if (phase === 'GameStart' && getAppSettings().overlayEnabled && !isOverlayUserHidden()) {
+        syncScalesFromLeague();
+        createOverlayWindow();
+        showOverlay();
+        sendOverlayUpdate({
+            inGame: true,
+            loading: true,
+            gameflowPhase: phase,
+            gameTime: 0,
+            trustedGameTime: 0,
+            pet: getAppSettings().pet,
+            timestamp: Date.now(),
+        });
+    }
     if (isInGamePhase(phase) && !liveTimer) {
         // Read immediately rather than waiting a full interval after loading.
         void liveTick().finally(scheduleLive);

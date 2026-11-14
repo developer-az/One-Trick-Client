@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useScouting, isDesktop } from '../hooks';
 import type { Champion } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
 import type { ViewId } from '../App';
@@ -27,6 +28,13 @@ export const DraftView: React.FC<{
   onClear: () => void;
   onNavigate: (view: ViewId) => void;
 }> = ({ draft, champions, profile, loadout, history, onManual, onClear, onNavigate }) => {
+  const scouting = useScouting(draft.live && isDesktop);
+  const scoutingByChamp = useMemo(() => {
+    const map = new Map<number, ScoutingPlayer>();
+    for (const row of scouting.players) map.set(row.championId, row);
+    return map;
+  }, [scouting.players]);
+
   const taken = useMemo(() => {
     const ids = new Set<string>();
     for (const r of ROLES) {
@@ -71,6 +79,8 @@ export const DraftView: React.FC<{
           members={draft.ally}
           champions={champions}
           taken={taken}
+          scoutingByChamp={scoutingByChamp}
+          scoutingLoading={scouting.loading}
           onManual={onManual}
         />
         <TeamColumn
@@ -81,6 +91,8 @@ export const DraftView: React.FC<{
           champions={champions}
           taken={taken}
           history={history}
+          scoutingByChamp={scoutingByChamp}
+          scoutingLoading={scouting.loading}
           onManual={onManual}
         />
       </div>
@@ -119,8 +131,10 @@ const TeamColumn: React.FC<{
   champions: Champion[];
   taken: Set<string>;
   history?: MatchSummary[] | null;
+  scoutingByChamp: Map<number, ScoutingPlayer>;
+  scoutingLoading: boolean;
   onManual: (side: 'ally' | 'enemy', role: Role, champion: Champion | null) => void;
-}> = ({ title, tone, side, members, champions, taken, history, onManual }) => (
+}> = ({ title, tone, side, members, champions, taken, history, scoutingByChamp, scoutingLoading, onManual }) => (
   <Card>
     <CardHeader title={title} action={<span className={`ot-dot ${tone === 'blue' ? '' : 'ot-tone-bad'}`} style={tone === 'blue' ? { background: 'var(--ot-blue)' } : undefined} />} />
     <div className="space-y-2">
@@ -139,7 +153,7 @@ const TeamColumn: React.FC<{
                 exclude={taken}
               />
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex flex-wrap gap-1.5 justify-end">
               {m?.isLocal ? <Badge tone="gold">You</Badge> : null}
               {m?.hovering ? <Badge>Hovering</Badge> : null}
               {m?.champion && history ? (
@@ -147,6 +161,12 @@ const TeamColumn: React.FC<{
                   history={history}
                   champKey={Number(m.champion.key)}
                   mode={side === 'enemy' ? 'against' : 'with'}
+                />
+              ) : null}
+              {m?.champion ? (
+                <ScoutingBadges
+                  row={scoutingByChamp.get(Number(m.champion.key))}
+                  loading={scoutingLoading}
                 />
               ) : null}
             </div>
@@ -259,6 +279,40 @@ const ChampList: React.FC<{ title: string; names: string[]; tone: 'teal' | 'red'
 function titleCase(s: string): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
+
+function formatRank(tier: string | null | undefined, division: string | null | undefined): string | null {
+  if (!tier) return null;
+  const t = titleCase(tier);
+  return division ? `${t} ${division}` : t;
+}
+
+const ScoutingBadges: React.FC<{ row: ScoutingPlayer | undefined; loading: boolean }> = ({ row, loading }) => {
+  if (!row) {
+    if (!loading) return null;
+    return (
+      <span title="Loading LCU scouting">
+        <Badge tone="muted">…</Badge>
+      </span>
+    );
+  }
+  const rank = formatRank(row.rankTier, row.rankDivision);
+  const mastery = typeof row.masteryLevel === 'number' && row.masteryLevel > 0 ? `M${row.masteryLevel}` : null;
+  const recent =
+    (row.recentGames ?? 0) > 0 ? `${row.recentWins ?? 0}W-${(row.recentGames ?? 0) - (row.recentWins ?? 0)}L/5` : null;
+  if (!rank && !mastery && !recent) return null;
+  const title = [rank, mastery, recent].filter(Boolean).join(' · ');
+  return (
+    <span className="flex flex-wrap gap-1 justify-end" title={title}>
+      {rank ? <Badge tone="muted">{rank}</Badge> : null}
+      {mastery ? <Badge tone="teal">{mastery}</Badge> : null}
+      {recent ? (
+        <span title="Last 5 games in client history">
+          <Badge tone="gold">{recent}</Badge>
+        </span>
+      ) : null}
+    </span>
+  );
+};
 
 /** Your record with or against this champion from match history. */
 const HistoryRecord: React.FC<{

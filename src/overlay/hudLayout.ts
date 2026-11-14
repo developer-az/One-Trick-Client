@@ -38,6 +38,15 @@ export const HUD_LAYOUT_STORAGE_KEY = 'onetrick.hudLayout';
 
 const ANCHORS: HudAnchor[] = ['tl', 'tr', 'bl', 'br', 'center'];
 
+/** Shipped dual-rail default before flush-right migration. */
+const LEGACY_RIGHT_RAIL_X = 0.835;
+const DEFAULT_RIGHT_RAIL_X = 0.982;
+
+function migrateRightRailX(x: number, anchor?: HudAnchor): number {
+  if (anchor === 'tr' && Math.abs(x - LEGACY_RIGHT_RAIL_X) < 0.002) return DEFAULT_RIGHT_RAIL_X;
+  return x;
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -71,11 +80,11 @@ export function dualRailLayout(): HudLayout {
     name: 'Locked dual-rail',
     elements: [
       moduleElement('sums', { x: 0.018, y: 0.078, visible: true, anchor: 'tl' }),
-      moduleElement('gank', { x: 0.835, y: 0.078, visible: true, anchor: 'tr' }),
-      moduleElement('vision', { x: 0.835, y: 0.26, visible: true, anchor: 'tr' }),
-      moduleElement('buy', { x: 0.835, y: 0.42, visible: true, anchor: 'tr' }),
-      moduleElement('action', { x: 0.835, y: 0.54, visible: true, anchor: 'tr' }),
-      moduleElement('mayhem', { x: 0.835, y: 0.26, visible: false, anchor: 'tr' }),
+      moduleElement('gank', { x: 0.982, y: 0.078, visible: true, anchor: 'tr' }),
+      moduleElement('vision', { x: 0.982, y: 0.26, visible: true, anchor: 'tr' }),
+      moduleElement('buy', { x: 0.982, y: 0.42, visible: true, anchor: 'tr' }),
+      moduleElement('action', { x: 0.982, y: 0.54, visible: true, anchor: 'tr' }),
+      moduleElement('mayhem', { x: 0.982, y: 0.26, visible: false, anchor: 'tr' }),
       moduleElement('frames', { x: 0.5, y: 0.82, visible: false, anchor: 'center' }),
     ],
     stickers: [],
@@ -86,11 +95,11 @@ export function compactRightLayout(): HudLayout {
   return {
     name: 'Compact right',
     elements: [
-      moduleElement('sums', { x: 0.835, y: 0.06, visible: true, anchor: 'tr' }),
-      moduleElement('gank', { x: 0.835, y: 0.28, visible: true, anchor: 'tr' }),
-      moduleElement('vision', { x: 0.835, y: 0.42, visible: true, anchor: 'tr' }),
-      moduleElement('buy', { x: 0.835, y: 0.56, visible: true, anchor: 'tr' }),
-      moduleElement('action', { x: 0.835, y: 0.68, visible: true, anchor: 'tr' }),
+      moduleElement('sums', { x: 0.982, y: 0.06, visible: true, anchor: 'tr' }),
+      moduleElement('gank', { x: 0.982, y: 0.28, visible: true, anchor: 'tr' }),
+      moduleElement('vision', { x: 0.982, y: 0.42, visible: true, anchor: 'tr' }),
+      moduleElement('buy', { x: 0.982, y: 0.56, visible: true, anchor: 'tr' }),
+      moduleElement('action', { x: 0.982, y: 0.68, visible: true, anchor: 'tr' }),
       moduleElement('frames', { x: 0.5, y: 0.82, visible: false, anchor: 'center' }),
     ],
     stickers: [],
@@ -156,7 +165,9 @@ export function normalizeHudLayout(value: unknown): HudLayout {
 
   const elements = fallback.elements.map((base) => {
     const override = byId.get(base.id);
-    return override ? moduleElement(base.id as HudModuleId, { ...base, ...override }) : base;
+    const merged = override ? { ...base, ...override } : { ...base };
+    if (typeof merged.x === 'number') merged.x = migrateRightRailX(merged.x, merged.anchor);
+    return moduleElement(base.id as HudModuleId, merged);
   });
 
   const stickers = Array.isArray(raw.stickers)

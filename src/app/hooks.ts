@@ -67,6 +67,10 @@ export function useCatalog(): { champions: Champion[]; stamp: string; patch: str
 export interface LeagueState {
   lcu: LcuStatus | null;
   inGame: boolean;
+  /** Overlay reports frozen-clock loading (GameStart / pre-clock). */
+  matchLoading: boolean;
+  liveGameTime: number;
+  trustedGameTime: number;
   enemySummoners: OverlayBotSummoner[];
   /** Live-reported champion of the local player (in game). */
   liveChampionName: string | null;
@@ -76,6 +80,9 @@ export interface LeagueState {
 export function useLeague(): LeagueState {
   const [lcu, setLcu] = useState<LcuStatus | null>(null);
   const [inGame, setInGame] = useState(false);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [liveGameTime, setLiveGameTime] = useState(0);
+  const [trustedGameTime, setTrustedGameTime] = useState(0);
   const [enemySummoners, setEnemySummoners] = useState<OverlayBotSummoner[]>([]);
   const [liveChampionName, setLiveChampionName] = useState<string | null>(null);
   const [liveProfileHint, setLiveProfileHint] = useState<string | null>(null);
@@ -91,6 +98,9 @@ export function useLeague(): LeagueState {
     const unsubUpdate = api.onOverlayUpdate?.((payload) => {
       const data = payload as {
         inGame?: boolean;
+        loading?: boolean;
+        gameTime?: number;
+        trustedGameTime?: number;
         enemyBotSummoners?: OverlayBotSummoner[];
         profileHint?: string | null;
         localPlayer?: { championName?: string } | null;
@@ -100,8 +110,14 @@ export function useLeague(): LeagueState {
         if (!data.inGame) {
           setLiveChampionName(null);
           setLiveProfileHint(null);
+          setMatchLoading(false);
+          setLiveGameTime(0);
+          setTrustedGameTime(0);
         }
       }
+      if (typeof data.loading === 'boolean') setMatchLoading(data.loading);
+      if (typeof data.gameTime === 'number') setLiveGameTime(data.gameTime);
+      if (typeof data.trustedGameTime === 'number') setTrustedGameTime(data.trustedGameTime);
       if (Array.isArray(data.enemyBotSummoners)) setEnemySummoners(data.enemyBotSummoners);
       if (data.localPlayer?.championName) setLiveChampionName(data.localPlayer.championName);
       if (typeof data.profileHint === 'string') setLiveProfileHint(data.profileHint);
@@ -112,7 +128,7 @@ export function useLeague(): LeagueState {
     };
   }, []);
 
-  return { lcu, inGame, enemySummoners, liveChampionName, liveProfileHint };
+  return { lcu, inGame, matchLoading, liveGameTime, trustedGameTime, enemySummoners, liveChampionName, liveProfileHint };
 }
 
 /* -------------------------------------------------------------------- draft */
@@ -493,6 +509,8 @@ export function applyAppearance(settings: AppSettings | null): void {
   const css = appearanceCssMap(settings.appearance);
   for (const [key, value] of Object.entries(css.attributes)) root.setAttribute(key, value);
   for (const [key, value] of Object.entries(css.vars)) root.style.setProperty(key, value);
+  if (settings.appearance.glass > 0) root.setAttribute('data-ot-glass-on', '');
+  else root.removeAttribute('data-ot-glass-on');
 }
 
 /* -------------------------------------------------------------- auto import */
@@ -604,4 +622,36 @@ export function useMatchHistory(league: LeagueState, wanted: boolean) {
   }, [wanted, connected, inGame]);
 
   return { ...historyState, reload: loadHistory };
+}
+
+/** Rank / mastery / recent form for everyone in a live champ-select session (LCU). */
+export function useScouting(live: boolean): { players: ScoutingPlayer[]; loading: boolean } {
+  const [players, setPlayers] = useState<ScoutingPlayer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const active = live && !!window.electronAPI?.getScouting;
+
+  useEffect(() => {
+    if (!active) return;
+    const api = window.electronAPI!;
+    let cancelled = false;
+    const pull = (): void => {
+      void api.getScouting!().then((res) => {
+        if (cancelled) return;
+        if (res?.success && Array.isArray(res.players)) setPlayers(res.players);
+        setLoading(false);
+      });
+    };
+    queueMicrotask(() => {
+      if (!cancelled) setLoading(true);
+    });
+    pull();
+    const id = window.setInterval(pull, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [active]);
+
+  if (!active) return { players: [], loading: false };
+  return { players, loading };
 }

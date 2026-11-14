@@ -36,6 +36,19 @@ export interface ChampionStats extends Record_ {
   mainRole: string | null;
 }
 
+export type PersonalTier = 'S' | 'A' | 'B' | 'C' | 'D' | '—';
+
+/** Tier from your own history only — Wilson CI mid, minimum sample guard. */
+export function personalTier(row: ChampionStats, minGames = 5): PersonalTier {
+  if (row.games < minGames) return '—';
+  const mid = (row.low + row.high) / 2;
+  if (row.low > 0.55) return 'S';
+  if (mid >= 0.55) return 'A';
+  if (mid >= 0.5) return 'B';
+  if (row.high < 0.45) return 'D';
+  return 'C';
+}
+
 /** Wilson score interval, z = 1.96. */
 export function wilson(wins: number, games: number, z = 1.96): { low: number; high: number } {
   if (games <= 0) return { low: 0, high: 1 };

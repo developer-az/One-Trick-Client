@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('lcu-status', listener);
     },
     getChampSelect: () => ipcRenderer.invoke('champ-select-get'),
+    getScouting: () => ipcRenderer.invoke('scouting-get'),
     onChampSelect: (callback: (session: unknown) => void) => {
         const listener = (_event: Electron.IpcRendererEvent, session: unknown) => callback(session);
         ipcRenderer.on('champ-select', listener);
