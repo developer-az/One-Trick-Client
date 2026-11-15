@@ -32,7 +32,13 @@ const EVENTS = {
 } as const;
 
 const DISCOVERY_INTERVAL_MS = 3000;
+/** Lockfile probe cadence while idle (no phase seen in the window below). */
+const IDLE_DISCOVERY_INTERVAL_MS = 5000;
+/** Discovery slows to the idle interval once no phase has been seen this long. */
+const IDLE_PHASE_WINDOW_MS = 60_000;
 const RECONNECT_DELAY_MS = 2000;
+/** Champ-select hydrate only runs in these phases; everywhere else the REST call is skipped. */
+const CHAMP_SELECT_HYDRATE_PHASES = new Set(['ChampSelect', 'Lobby']);
 /** Missing lockfile this many probes in a row before an in-game phase is forgotten. */
 const LOCKFILE_MISSES_BEFORE_CLEAR = 3;
 
@@ -63,6 +69,8 @@ class LcuSocket extends EventEmitter {
     private summonerName: string | null = null;
     private connectedAt: number | null = null;
     private lockfileMisses = 0;
+    /** Date.now() when a non-null phase was last seen; drives the idle probe rate. */
+    private lastPhaseSeenAt = 0;
 
     override emit<K extends keyof LcuEvents>(event: K, ...args: LcuEvents[K]): boolean {
         return super.emit(event, ...args);
@@ -125,6 +133,7 @@ class LcuSocket extends EventEmitter {
         if (next === this.phaseValue) return;
         console.info(`[lcu] phase ${next ?? '(none)'}`);
         this.phaseValue = next;
+        if (next) this.lastPhaseSeenAt = Date.now();
         this.emit('phase', next);
     }
 
@@ -133,12 +142,19 @@ class LcuSocket extends EventEmitter {
         this.emit('champSelect', next);
     }
 
-    private scheduleDiscovery(delay = DISCOVERY_INTERVAL_MS): void {
+    /** 3 s while the client has shown a phase recently, 5 s once it has been idle. */
+    private discoveryDelayMs(): number {
+        return Date.now() - this.lastPhaseSeenAt > IDLE_PHASE_WINDOW_MS
+            ? IDLE_DISCOVERY_INTERVAL_MS
+            : DISCOVERY_INTERVAL_MS;
+    }
+
+    private scheduleDiscovery(delay?: number): void {
         if (!this.running || this.discoveryTimer) return;
         this.discoveryTimer = setTimeout(() => {
             this.discoveryTimer = null;
             void this.discover();
-        }, delay);
+        }, delay ?? this.discoveryDelayMs());
     }
 
     private async discover(): Promise<void> {
@@ -226,17 +242,24 @@ class LcuSocket extends EventEmitter {
 
     /** Events only fire on change; read current values once after connecting. */
     private async hydrate(): Promise<void> {
+        let phase: string | null = null;
         try {
-            const phase = await makeLCURequest('GET', '/lol-gameflow/v1/gameflow-phase');
-            this.setPhase(typeof phase === 'string' ? phase : null);
+            const phaseRaw = await makeLCURequest('GET', '/lol-gameflow/v1/gameflow-phase');
+            phase = typeof phaseRaw === 'string' ? phaseRaw : null;
+            this.setPhase(phase);
         } catch {
             // Client still booting; the phase event will arrive later.
         }
-        try {
-            const session = await makeLCURequest('GET', '/lol-champ-select/v1/session');
-            if (session) this.setChampSelect(session);
-        } catch {
-            // Not in champ select.
+        // A champ-select session only exists while a pick session is running;
+        // skip the REST hydrate everywhere else (it would only 404, and the
+        // WAMP subscription delivers real changes as they happen).
+        if (phase !== null && CHAMP_SELECT_HYDRATE_PHASES.has(phase)) {
+            try {
+                const session = await makeLCURequest('GET', '/lol-champ-select/v1/session');
+                if (session) this.setChampSelect(session);
+            } catch {
+                // Not in champ select.
+            }
         }
         try {
             const summoner = (await makeLCURequest('GET', '/lol-summoner/v1/current-summoner')) as {

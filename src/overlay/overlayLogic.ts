@@ -15,6 +15,12 @@ import { activeThreatsByName } from '../logic/counters';
 import { inferSituation, type ProfileSituation } from '../logic/situation';
 import { buildAramInGameCues, getAramGankStatus, getAramWardStatus, shouldUseAramOverlay } from '../logic/aramOverlay';
 import { isAramOrMayhem } from '../logic/mayhem/mode';
+import {
+  planBuyOrder,
+  planNextPurchase,
+  type BuyOrderPlan,
+  type PriceLookup,
+} from '../logic/purchasePlan';
 
 export interface OverlayEnemy {
   championName: string;
@@ -22,6 +28,7 @@ export interface OverlayEnemy {
   position?: string;
   isDead?: boolean;
   items?: string[];
+  respawnTimer?: number;
   scores?: {
     assists: number;
     creepScore: number;
@@ -33,6 +40,57 @@ export interface OverlayEnemy {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
   };
+}
+
+export interface EnemyRespawnRow {
+  championName: string;
+  position?: string;
+  remainingSec: number;
+}
+
+/**
+ * Countdown rows for dead enemies, derived locally from the payload clock.
+ * Only dead enemies with a live respawn timer are returned; elapsed wall time
+ * since the payload was built is subtracted so the list keeps ticking without
+ * new IPC sends. Never throws on malformed rows.
+ */
+export function enemyRespawns(
+  enemies: OverlayEnemy[] | undefined,
+  payloadTimestampMs: number | undefined,
+  nowMs: number
+): EnemyRespawnRow[] {
+  const list = Array.isArray(enemies) ? enemies : [];
+  const timestampValid =
+    typeof payloadTimestampMs === 'number' && Number.isFinite(payloadTimestampMs);
+  const elapsedSec = timestampValid
+    ? Math.max(0, nowMs - (payloadTimestampMs as number)) / 1000
+    : 0;
+  const rows: EnemyRespawnRow[] = [];
+  for (const enemy of list) {
+    if (!enemy || enemy.isDead !== true) continue;
+    const timer = enemy.respawnTimer;
+    if (typeof timer !== 'number' || !Number.isFinite(timer) || timer <= 0) continue;
+    const remaining = Math.ceil(timer - elapsedSec);
+    if (remaining <= 0) continue;
+    rows.push({
+      championName: typeof enemy.championName === 'string' ? enemy.championName : '',
+      position: enemy.position,
+      remainingSec: remaining,
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.remainingSec !== b.remainingSec) return a.remainingSec - b.remainingSec;
+    return a.championName.localeCompare(b.championName);
+  });
+  return rows.slice(0, 5);
+}
+
+/** "0:07" / "0:42" / "1:05"; zero or negative prints "0:00". */
+export function formatRespawn(sec: number): string {
+  const safe = Number.isFinite(sec) ? Math.max(0, Math.floor(sec)) : 0;
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export interface OverlayBotSummoner {
@@ -57,7 +115,7 @@ export interface OverlayLocalPlayer {
   items: Array<{ itemID: number; displayName: string; count: number; slot: number }>;
   scores?: OverlayEnemy['scores'];
   position?: string;
-  currentGold: number;
+  currentGold: number | null;
   summonerSpells?: {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
@@ -110,6 +168,141 @@ export interface OverlayCue {
 }
 
 export type BuildProgressSnapshot = ReturnType<typeof trackBuildProgress>;
+
+export interface BuyRailLine {
+  action: 'buy-full' | 'buy-component' | 'save' | 'no-slot';
+  buyId: string | null;
+  text: string;
+  title: string;
+}
+
+function formatRailGold(value: number): string {
+  return `${value.toLocaleString('en-US')}g`;
+}
+
+/** One-line "what to buy now" for the HUD buy rail, or null when there is nothing to say. */
+export function buyRailLine(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailLine | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  // Live gold is fractional (e.g. 566.546). Plan with whole gold so the rail
+  // never prints decimals.
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown') return null;
+
+  const buyId = plan.buy?.id ?? null;
+  const cost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  let text: string;
+  switch (plan.action) {
+    case 'buy-full':
+      text = `Buy now · ${formatRailGold(cost)}`;
+      break;
+    case 'buy-component':
+      text = `Part · ${formatRailGold(cost)}`;
+      break;
+    case 'save':
+      text = `Need ${formatRailGold(plan.needGold ?? 0)}`;
+      break;
+    case 'no-slot':
+      text = 'No free slot';
+      break;
+    default:
+      return null;
+  }
+
+  return { action: plan.action, buyId, text, title: plan.cue };
+}
+
+export interface BuyRailDetail {
+  name: string;
+  itemId: string;
+  cost: number;
+  goldShort: number | null;
+  kind: 'buy-full' | 'buy-component' | 'save';
+  partOf: string | null;
+}
+
+/**
+ * Structured companion to buyRailLine: same guards and planning inputs,
+ * exposing the item to buy now, its price and how much gold is still missing.
+ * Returns null wherever buyRailLine returns null or has no purchasable item.
+ */
+export function buyRailDetail(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailDetail | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown' || plan.action === 'no-slot') return null;
+
+  const rawCost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  const cost = Math.round(rawCost);
+  const goldShort = Math.max(0, cost - wholeGold);
+
+  return {
+    name: plan.buy?.name ?? plan.targetName,
+    itemId: plan.buy?.id ?? plan.targetId,
+    cost,
+    goldShort,
+    kind: plan.action,
+    partOf: plan.action === 'buy-component' ? plan.targetName : null,
+  };
+}
+
+/**
+ * The ordered buy plan for one live state: one BUY NEXT + the numbered queue.
+ * The sell-boots cue and the rail decision share one verdict: when
+ * supportBootSlotAdvice says "sell", the plan is re-run with the boots' slot
+ * freed, so the rail shows the actionable purchase — never a contradictory
+ * "no free slot" next to a "sell boots" cue. Null only when the build or a
+ * player read is missing (gold unknown keeps the plan itself honest).
+ */
+export function buyOrderPlanForState(
+  state: OverlayState,
+  build: OverlayCueContext['build'],
+  prices: PriceLookup | null
+): BuyOrderPlan | null {
+  if (!build) return null;
+  const player = state.localPlayer;
+  if (!player || !Array.isArray(player.items)) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const progress = trackBuildProgress(player.items, build);
+  const behind = situationFromState(state).state === 'behind';
+  const advice = supportBootSlotAdvice(player.items, progress, state.gameTime ?? 0, { behind });
+  return planBuyOrder({
+    build,
+    inventory: player.items,
+    currentGold: Math.floor(currentGold),
+    prices,
+    freeSlot: advice?.action === 'sell',
+  });
+}
 
 export interface OverlayCueContext {
   analysis?: MatchupAnalysis | null;
@@ -266,9 +459,14 @@ export function isCoachCueId(id: string): boolean {
   return COACH_CUE_ID.test(id);
 }
 
-function compactCueLabel(label: string): string {
+export function compactCueLabel(label: string): string {
   const t = label.replace(/\s+/g, ' ').trim();
-  return t.length <= 18 ? t : `${t.slice(0, 16).trimEnd()}`;
+  if (t.length <= 18) return t;
+  const space = t.lastIndexOf(' ', 17);
+  if (space > 0) {
+    return t.slice(0, space).replace(/[\s.,;:!?-]+$/, '');
+  }
+  return `${t.slice(0, 17)}\u2026`;
 }
 
 function actionCue(
@@ -703,6 +901,31 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   }
 
   return cues;
+}
+
+/** 1 Hz overlay clock gate — never tick while the HUD page is hidden. */
+export function shouldRunOverlayClock(input: {
+  inGame: boolean;
+  gameTime: number | null | undefined;
+  locked: boolean;
+  moduleIds: readonly string[];
+  pageVisible: boolean;
+}): boolean {
+  return (
+    input.pageVisible &&
+    input.inGame &&
+    (input.gameTime ?? 0) > 0 &&
+    (!input.locked || input.moduleIds.includes('sums'))
+  );
+}
+
+/** Mayhem dismiss-window tick gate — never tick while the HUD page is hidden. */
+export function shouldRunMayhemDismissTick(input: {
+  inMayhem: boolean;
+  dismissedAt: number | null | undefined;
+  pageVisible: boolean;
+}): boolean {
+  return input.pageVisible && input.inMayhem && input.dismissedAt != null;
 }
 
 export function formatGameTime(seconds: number): string {

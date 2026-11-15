@@ -1,18 +1,23 @@
 import { makeLCURequest } from './lcu-connector';
 import { lcuSocket } from './lcu-socket';
-import { findLocalPlayer, type LiveClientAllGameData } from './live-client';
+import { findLocalPlayer, type LiveClientAllGameData, type LiveClientPlayer } from './live-client';
 import {
     getStateServiceStatus,
     readLiveBoard,
     readLiveClock,
     resetStateService,
+    clearStateBoard,
     setStateServiceEngaged,
+    setStateServiceHudHidden,
     startStateService,
     stopStateService,
     getGameState,
     getObjectiveTimers,
     getRecentGameEvents,
+    getLatencySummary,
+    recordLatency,
 } from './state-service';
+import type { LatencySummary } from '../src/logic/latencyStats';
 import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
 import { setClipperActive, queueClip, syncAutoClip } from './clipper';
 
@@ -31,12 +36,15 @@ import {
     setOverlayUserHidden,
     createOverlayWindow,
     destroyOverlay,
+    onOverlayWindowCreated,
     getOverlayWindow,
     syncScalesFromLeague,
     keepOverlayOnTop,
     healOverlayWindows,
     setOverlayMatchActive,
 } from './overlay-window';
+import { overlayLog } from './overlay-log';
+import { readLeagueHudScales } from './league-settings';
 import {
     ingestChampSelectTeam,
     ingestLiveEvents,
@@ -123,6 +131,8 @@ let lastChampSelectEnemies: CachedEnemy[] = [];
 let inGame = false;
 let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOverlayFingerprint = '';
+let lastSentOverlayPayload: unknown = null;
+let overlayWindowCreatedUnsubscribe: (() => void) | null = null;
 let currentPollMs = POLL_INGAME_MS;
 let liveReadsTotal = 0;
 /** Last time allgamedata or gamestats proved the game process is up. */
@@ -199,12 +209,14 @@ export function getMonitorStats(): {
     livePollMs: number | null;
     liveReads: number;
     lastEndReason: string | null;
+    latency: Record<string, LatencySummary>;
 } {
     return {
         inGame,
         livePollMs: liveTimer ? currentPollMs : null,
         liveReads: liveReadsTotal,
         lastEndReason: lastMatchEndReason,
+        latency: getLatencySummary(),
     };
 }
 
@@ -253,7 +265,7 @@ function ingestChampSelectSession(session: unknown): void {
         const fp = `pre:${summonerFingerprint()}`;
         if (fp !== lastOverlayFingerprint) {
             lastOverlayFingerprint = fp;
-            sendOverlayUpdate({
+            sendFullOverlayUpdate({
                 inGame: false,
                 enemyBotSummoners: summons,
                 cachedChampSelectEnemies: lastChampSelectEnemies,
@@ -291,8 +303,72 @@ function profileHintFromLive(championName: string | undefined, position?: string
     return `generic:${championId}:${role}`;
 }
 
+/** Display-ready `enemies` row as it appears on the HUD payload. */
+type PayloadEnemy = {
+    championName: string | undefined;
+    level: number | undefined;
+    position: string | undefined;
+    isDead: boolean | undefined;
+    items: string[];
+    scores: LiveClientPlayer['scores'];
+    summonerSpells: LiveClientPlayer['summonerSpells'];
+    respawnTimer: number;
+};
+
+/** Cheap signature of one enemy player — covers every field the HUD enemy row reads. */
+function enemyPlayerSignature(p: LiveClientPlayer): string {
+    const respawn =
+        typeof p.respawnTimer === 'number' && Number.isFinite(p.respawnTimer) && p.respawnTimer > 0
+            ? Math.ceil(p.respawnTimer)
+            : 0;
+    const scores = p.scores
+        ? `${p.scores.kills ?? 0}:${p.scores.deaths ?? 0}:${p.scores.assists ?? 0}:${p.scores.creepScore ?? 0}:${p.scores.wardScore ?? 0}`
+        : '0:0:0:0:0';
+    const spells = p.summonerSpells
+        ? `${p.summonerSpells.summonerSpellOne?.displayName ?? ''}|${p.summonerSpells.summonerSpellTwo?.displayName ?? ''}`
+        : '';
+    return [
+        p.championName || '',
+        p.level ?? 0,
+        p.position || '',
+        p.isDead ? 1 : 0,
+        (p.items || []).map((i) => `${i.itemID ?? ''}:${i.displayName ?? ''}:${i.count ?? 1}`).join(','),
+        scores,
+        spells,
+        respawn,
+    ].join('~');
+}
+
+/**
+ * Reuse the previous `enemies` array when the enemy players did not change.
+ * The mapping is pure, so the cached array is exactly what a fresh map would
+ * produce — title (and memory churn) is what changes, not behavior.
+ */
+function mapEnemies(enemyPlayers: LiveClientPlayer[]): PayloadEnemy[] {
+    const signature = enemyPlayers.map(enemyPlayerSignature).join('|');
+    if (lastMappedEnemies && lastEnemySignature === signature) return lastMappedEnemies;
+    const enemies = enemyPlayers.map((p) => ({
+        championName: p.championName,
+        level: p.level,
+        position: p.position,
+        isDead: p.isDead,
+        items: p.items?.map((i) => i.displayName) || [],
+        scores: p.scores,
+        summonerSpells: p.summonerSpells,
+        respawnTimer:
+            typeof p.respawnTimer === 'number' && Number.isFinite(p.respawnTimer) && p.respawnTimer > 0
+                ? Math.ceil(p.respawnTimer)
+                : 0,
+    }));
+    lastEnemySignature = signature;
+    lastMappedEnemies = enemies;
+    return enemies;
+}
+
 function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: string | null) {
     const localPlayer = live ? findLocalPlayer(live) : null;
+    const liveGold = live?.activePlayer?.currentGold;
+    const currentGold = typeof liveGold === 'number' && Number.isFinite(liveGold) ? liveGold : null;
     const localName = (localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
     const isPyke = localPlayer ? localName === 'pyke' : true;
     const isYone = localPlayer ? localName === 'yone' : false;
@@ -309,17 +385,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
 
     const enemyPlayers =
         live?.allPlayers?.filter((p) => localPlayer && p.team !== localPlayer.team) || [];
-
-    const enemies = enemyPlayers.map((p) => ({
-        championName: p.championName,
-        level: p.level,
-        position: p.position,
-        isDead: p.isDead,
-        items: p.items?.map((i) => i.displayName) || [],
-        scores: p.scores,
-        summonerSpells: p.summonerSpells,
-    }));
-
+    const enemies = mapEnemies(enemyPlayers);
     const aramMatch = isAramOrMayhem(live?.gameData?.gameMode, live?.gameData?.mapName);
     if (isMayhemGame(live?.gameData?.gameMode, live?.gameData?.mapName) && live) {
         syncMayhemPickPhase(live);
@@ -387,7 +453,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
                   items: localPlayer.items || [],
                   scores: localPlayer.scores,
                   position: localPlayer.position,
-                  currentGold: live?.activePlayer?.currentGold ?? 0,
+                  currentGold,
                   summonerSpells: localPlayer.summonerSpells,
               }
             : null,
@@ -419,15 +485,17 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
 function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): string {
     const lp = payload.localPlayer;
     const itemKey = (lp?.items || []).map((i) => `${i.itemID}:${i.count}`).join(',');
-    const goldBucket = Math.floor((lp?.currentGold ?? 0) / 50);
+    // 150g + 30s buckets: coarser than the displayed values, so a handful of
+    // ticks with only gold/time drift do not force an IPC + React reconcile.
+    const goldBucket = Math.floor((lp?.currentGold ?? 0) / 150);
     const wardScore = Math.floor(lp?.scores?.wardScore ?? 0);
     // Include CS + items so jungle pathing / threat heuristics actually update.
-    const itemBucket = Math.floor((payload.gameTime || 0) / 12);
+    const itemBucket = Math.floor((payload.gameTime || 0) / 30);
     const enemyKey = (payload.enemies || [])
         .map((e) => {
             const cs = e.scores?.creepScore ?? 0;
             const itemCount = (e.items || []).filter((id) => id && id !== '0').length;
-            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}`;
+            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}:${Math.ceil((e.respawnTimer ?? 0) / 10)}`;
         })
         .join('|');
     // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
@@ -457,6 +525,20 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
 }
 
 let mayhemOfferIds: string[] = [];
+/**
+ * Memoized payload `enemies` list: built once per enemy-list signature so a
+ * tick whose enemies did not change reuses the previous array instead of
+ * rebuilding it (and the objects inside it) every poll.
+ */
+let lastEnemySignature = '';
+let lastMappedEnemies: PayloadEnemy[] | null = null;
+/** Last time tickPlayMoments / tickCoachCues / clip planning actually ran. */
+let lastPlayMomentsAt = 0;
+/** Cue ids+labels the HUD last received from a warm (non-fingerprint) push. */
+let lastSentMomentCueContent = '';
+/** Moment-engine runs ride payload sends; this floor also keeps a quiet match warm. */
+const PLAY_MOMENTS_MIN_INTERVAL_MS = 2000;
+
 let mayhemPollTimer: ReturnType<typeof setTimeout> | null = null;
 let mayhemBurstUntilMs = 0;
 let mayhemLastLevel = 0;
@@ -700,7 +782,7 @@ function pushMayhemOverlayPatch(): void {
     if (fp === lastOverlayFingerprint) return;
     lastGoodPayload = payload;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(payload);
+    sendFullOverlayUpdate(payload);
 }
 
 /** Dashboard owned/roll edits — push merged offers without waiting for the next live poll. */
@@ -762,12 +844,17 @@ export function getMayhemLiveOfferIds(): string[] {
 function resetMatchCaches(): void {
     lastChampSelectEnemies = [];
     lastOverlayFingerprint = '';
+    lastSentOverlayPayload = null;
     lastGoodPayload = null;
     lastKeepOnTopAt = 0;
     lastLiveProofAt = 0;
     trustedGameTime = 0;
     playMomentSnapshot = null;
     lastPlayOverlayState = null;
+    lastEnemySignature = '';
+    lastMappedEnemies = null;
+    lastPlayMomentsAt = 0;
+    lastSentMomentCueContent = '';
     mayhemOfferIds = [];
     mayhemPicksAtWindowOpen = 0;
     mayhemPickSessionActive = false;
@@ -788,6 +875,19 @@ function resetMatchCaches(): void {
     resetCoachCooldowns();
     clipsQueued = 0;
     lastClipQueuedAt = 0;
+}
+
+/**
+ * Cue content fingerprint for the warm-push gate — every field the HUD renders
+ * (id, label, detail, urgency), plus the empty state: when no cues remain,
+ * withPlayMoments() returns the plain payload, so this yields '' and the send
+ * decision below treats cue retirement as a real change.
+ */
+function momentCueContent(payload: unknown): string {
+    const cues =
+        (payload as { momentCues?: Array<{ id: string; label: string; detail: string; urgency: string }> })
+            .momentCues || [];
+    return cues.map((cue) => `${cue.id}:${cue.label}:${cue.detail}:${cue.urgency}`).join('|');
 }
 
 function selfHpFromStats(stats: { currentHealth?: number; maxHealth?: number } | null | undefined): number | null {
@@ -919,7 +1019,18 @@ function holdLastBoard(overlayHidden: boolean, gameTime?: number): void {
     const fp = overlayFingerprint(advanced);
     if (fp === lastOverlayFingerprint) return;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(advanced);
+    sendFullOverlayUpdate(advanced);
+}
+
+function sendFullOverlayUpdate(payload: unknown): void {
+    lastSentOverlayPayload = payload;
+    sendOverlayUpdate(payload);
+}
+
+function handleOverlayWindowCreated(): void {
+    if (!inGame || isOverlayUserHidden() || !lastSentOverlayPayload) return;
+    lastOverlayFingerprint = '';
+    sendOverlayUpdate(lastSentOverlayPayload);
 }
 
 function ensureOverlayShown(): void {
@@ -930,6 +1041,9 @@ function ensureOverlayShown(): void {
     }
     healOverlayWindows();
     maybeKeepOverlayOnTop();
+    // The single overlay window is never raised on a loop, rebuilt or repaired
+    // from here (Step 2 remake): keepOverlayOnTop only re-asserts a lost
+    // topmost flag, and the health line in overlay.log is the diagnostic.
 }
 
 function maybeKeepOverlayOnTop(): void {
@@ -942,8 +1056,16 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(): void {
     console.info('[match] started');
     inGame = true;
+    let windowMode: string | null = null;
+    try {
+        windowMode = readLeagueHudScales()?.windowMode ?? null;
+    } catch {
+        windowMode = null;
+    }
+    overlayLog('match-start', { windowMode });
     lastMatchEndReason = null;
     playMomentSnapshot = null;
+    lastSentOverlayPayload = null;
     // New match: drop the State Service's event cursor with it. Live Client
     // EventIDs restart at 0 every game, so a stale cursor would swallow the
     // first events of this one.
@@ -985,7 +1107,12 @@ function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
 function endGameSession(): void {
     if (!inGame) return;
     console.info('[match] ended', lastMatchEndReason || '(manual)');
+    overlayLog('match-end', { reason: lastMatchEndReason || 'manual' });
     inGame = false;
+    // The board cached from the finished game would let a late live tick (or a
+    // poll still in flight) restart the whole match lifecycle via beginMatch
+    // after the overlay was taken down. Void it: readLiveBoard() is null again.
+    clearStateBoard();
     setOverlayMatchActive(false);
     resetMatchCaches();
     // Ring buffer pauses with the match; captured segments stay available.
@@ -997,7 +1124,7 @@ function endGameSession(): void {
         destroyOverlayTimer = null;
         if (!inGame) destroyOverlay();
     }, 12000);
-    sendOverlayUpdate({
+    sendFullOverlayUpdate({
         inGame: false,
         enemies: [],
         allies: [],
@@ -1024,6 +1151,9 @@ function liveCadence(): number | null {
 
 function scheduleLive(): void {
     if (!monitorStarted) return;
+    // Keep the State Service's slower hidden-HUD sample rate in lockstep with
+    // the overlay's visibility and the user's overlay setting.
+    setStateServiceHudHidden(isOverlayUserHidden() || !getAppSettings().overlayEnabled);
     const cadence = liveCadence();
     if (cadence === null) {
         if (liveTimer) clearTimeout(liveTimer);
@@ -1048,6 +1178,7 @@ let tickInFlight = false;
 async function liveTick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
+    const hudBuildStart = performance.now();
     try {
         const phase = lcuSocket.phase;
         // Board comes from the State Service's 400 ms sample loop — no network
@@ -1082,9 +1213,34 @@ async function liveTick(): Promise<void> {
                 return;
             }
             const fp = overlayFingerprint(payload);
-            if (fp !== lastOverlayFingerprint) {
-                lastOverlayFingerprint = fp;
-                sendOverlayUpdate(withPlayMoments(payload));
+            const changed = fp !== lastOverlayFingerprint;
+            const momentsDue = Date.now() - lastPlayMomentsAt >= PLAY_MOMENTS_MIN_INTERVAL_MS;
+            if (changed || momentsDue) {
+                // tickPlayMoments / tickCoachCues / clip planning are the
+                // expensive side of a tick: run them when a payload is going
+                // out anyway, or at the 2s floor so a quiet match (no stat
+                // changes) still ages cooldowns and hears coach tips.
+                lastPlayMomentsAt = Date.now();
+                const enriched = withPlayMoments(payload);
+                if (changed) {
+                    lastOverlayFingerprint = fp;
+                    lastSentMomentCueContent = momentCueContent(enriched);
+                    sendFullOverlayUpdate(enriched);
+                } else {
+                    // No stat changed, but the moment engine may have produced
+                    // live cues — or retired the last one (when the last cue
+                    // expires withPlayMoments returns the plain payload, so
+                    // the empty state is exactly the "clear the HUD rail"
+                    // signal). Comparing the cue content — including that
+                    // empty state — decides the send: a sticky, unchanged cue
+                    // must not force a resend every 2 s.
+                    const content = momentCueContent(enriched);
+                    if (content !== lastSentMomentCueContent) {
+                        lastSentMomentCueContent = content;
+                        lastOverlayFingerprint = overlayFingerprint(enriched);
+                        sendFullOverlayUpdate(enriched);
+                    }
+                }
             }
             return;
         }
@@ -1116,6 +1272,7 @@ async function liveTick(): Promise<void> {
         if (!overlayHidden) ensureOverlayShown();
         holdLastBoard(overlayHidden);
     } finally {
+        recordLatency('hud.build', performance.now() - hudBuildStart);
         tickInFlight = false;
     }
 }
@@ -1139,7 +1296,7 @@ export function pushSummonerUpdate(): void {
         void liveTick();
         return;
     }
-    sendOverlayUpdate({
+    sendFullOverlayUpdate({
         inGame: false,
         enemyBotSummoners: serializeSummoners(),
         timestamp: Date.now(),
@@ -1165,6 +1322,7 @@ export function startGameMonitor(): void {
     lcuSocket.on('state', onStateChange);
     lcuSocket.on('champSelect', onChampSelect);
     lcuSocket.start();
+    overlayWindowCreatedUnsubscribe = onOverlayWindowCreated(handleOverlayWindowCreated);
     // Catch a match that is already running when the app opens.
     void liveTick().finally(scheduleLive);
 }
@@ -1175,6 +1333,10 @@ export function stopGameMonitor(): void {
     liveTimer = null;
     if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
     destroyOverlayTimer = null;
+    if (overlayWindowCreatedUnsubscribe) {
+        overlayWindowCreatedUnsubscribe();
+        overlayWindowCreatedUnsubscribe = null;
+    }
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();
@@ -1187,4 +1349,11 @@ export function stopGameMonitor(): void {
 /** Re-export for main-process IPC handlers that need a one-off LCU read. */
 export { makeLCURequest };
 
-export { buildOverlayPayload, overlayFingerprint, withPlayMoments, resetMatchCaches, liveTick };
+export {
+    buildOverlayPayload,
+    overlayFingerprint,
+    withPlayMoments,
+    momentCueContent,
+    resetMatchCaches,
+    liveTick,
+};

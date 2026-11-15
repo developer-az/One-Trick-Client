@@ -10,6 +10,7 @@ import {
 } from '../src/logic/mayhem/offerStability';
 import { runMayhemOcrOnImageFile } from '../src/logic/mayhem/ocrRunner';
 import type { MayhemAugment } from '../src/logic/mayhem/types';
+import { recordLatency } from './state-service';
 
 function ocrScriptPath(): string {
   const nextToBundle = path.join(__dirname, 'scripts', 'mayhem-ocr.ps1');
@@ -160,6 +161,7 @@ export async function detectMayhemOfferIds(
   if (ocrInFlight) return lastOfferIds;
   ocrInFlight = true;
   lastOcrAt = now;
+  const ocrStart = performance.now();
   try {
     const text = await readScreenText();
     lastOcrSnippet = text.slice(0, 400);
@@ -173,6 +175,7 @@ export async function detectMayhemOfferIds(
     console.warn('[mayhem-ocr]', error);
     return lastOfferIds;
   } finally {
+    recordLatency('ocr.mayhem', performance.now() - ocrStart);
     ocrInFlight = false;
   }
 }

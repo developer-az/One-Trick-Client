@@ -1,9 +1,25 @@
-﻿import React, { useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import type { Champion } from '../logic/pykeLogic';
 import { IconDraft, IconGauge, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats, IconCheck } from './icons';
 import { ChromeMark } from '../overlay/ChromeMark';
-import { isDesktop, profileIdFor, ROLES, useAppSettings, useAutoImport, useCatalog, useMatchHistory, useDraft, useLeague, useProfile, useToasts } from './hooks';
+import {
+  isDesktop,
+  profileIdFor,
+  ROLES,
+  useAppSettings,
+  useAutoImport,
+  useCatalog,
+  useMatchHistory,
+  useDraft,
+  useLeague,
+  useProfile,
+  useToasts,
+  applyAppearance,
+  APPEARANCE_THEME_OPTIONS,
+  APPEARANCE_ACCENT_OPTIONS,
+  APPEARANCE_DENSITY_OPTIONS,
+} from './hooks';
 import { leagueStatus } from './status';
 import { Pill, Toasts } from './ui';
 import { HomeView } from './views/HomeView';
@@ -14,6 +30,8 @@ import { PerformanceView } from './views/PerformanceView';
 import { ReviewView } from './views/ReviewView';
 import { StatsView } from './views/StatsView';
 import { MayhemView } from './views/MayhemView';
+import { PixelPet } from './PixelPet';
+import { PET_DEFAULTS, PET_SPECIES, PET_COLORS, PET_SPECIES_LABELS, COLOR_HEX } from './pixelPetLogic';
 
 export type ViewId = 'home' | 'draft' | 'loadout' | 'mayhem' | 'stats' | 'review' | 'overlay' | 'performance';
 
@@ -94,8 +112,31 @@ export const App: React.FC = () => {
     }
   }, [enemies, allyAdc, allyPartner, profile]);
 
-  const { settings } = useAppSettings();
+  const { settings, update } = useAppSettings();
   const history = useMatchHistory(league, view === 'stats' || draft.live);
+
+  // Apply dashboard appearance (theme/accent/density/radius/glass/font scale)
+  // straight to the app root so token.css / theme.css react immediately.
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  useEffect(() => {
+    applyAppearance(settings);
+  }, [settings]);
+
+  const appearance = settings?.appearance;
+  const ap: AppearanceSettings = appearance ?? {
+    theme: 'gothic',
+    accent: 'chrome',
+    density: 'comfortable',
+    radius: 6,
+    glass: 0,
+    fontScale: 1,
+  };
+  const setAppearance = (patch: Partial<AppearanceSettings>) =>
+    update({ appearance: patch as AppearanceSettings });
+
+  // Dashboard pet: persisted species + color, shown only while idle/queue/loading.
+  const pet = settings?.pet ?? PET_DEFAULTS;
+  const setPet = (patch: Partial<PetSettings>) => update({ pet: { ...pet, ...patch } });
   useAutoImport({
     draft,
     profile,
@@ -125,6 +166,23 @@ export const App: React.FC = () => {
             {status.short}
           </Pill>
           {catalog.patch ? <span className="text-xs ot-faint hidden md:inline">Patch {catalog.patch}</span> : null}
+          <button
+            type="button"
+            className="ot-btn ot-btn-sm ot-btn-ghost"
+            onClick={() => setAppearanceOpen((o) => !o)}
+            aria-haspopup="dialog"
+            aria-expanded={appearanceOpen}
+            aria-label="Appearance"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="2.5" y="2.5" width="19" height="19" rx="4" stroke="currentColor" strokeWidth="1.7" />
+              <circle cx="8" cy="9" r="2" fill="currentColor" />
+              <circle cx="16" cy="9" r="2" fill="currentColor" />
+              <circle cx="8" cy="16" r="2" fill="currentColor" />
+              <circle cx="16" cy="16" r="2" fill="currentColor" />
+            </svg>
+            Appearance
+          </button>
         </div>
       </header>
 
@@ -208,9 +266,212 @@ export const App: React.FC = () => {
         {view === 'performance' ? <PerformanceView /> : null}
       </main>
 
+      <PixelPet stage={status.stage} preference={pet} />
+
       <Toasts toasts={toasts} onDismiss={dismiss} />
+
+      {appearanceOpen ? <div className="ot-appearance-scrim" onClick={() => setAppearanceOpen(false)} /> : null}
+      <div className={`ot-appearance-drawer ${appearanceOpen ? 'is-open' : ''}`} role="dialog" aria-modal="true" aria-label="Appearance">
+        <AppearanceControls ap={ap} setAppearance={setAppearance} pet={pet} setPet={setPet} onClose={() => setAppearanceOpen(false)} />
+      </div>
     </div>
   );
 };
+
+const ACCENT_SWATCH: Record<AppearanceAccent, string> = {
+  chrome: '#d6dae0',
+  gold: '#c8a24e',
+  blood: '#c0392b',
+  teal: '#35c7b0',
+  royal: '#5f7fd6',
+};
+
+type AppearanceControlsProps = {
+  ap: AppearanceSettings;
+  setAppearance: (patch: Partial<AppearanceSettings>) => void;
+  pet: PetSettings;
+  setPet: (patch: Partial<PetSettings>) => void;
+  onClose: () => void;
+};
+
+function AppearanceControls({ ap, setAppearance, pet, setPet, onClose }: AppearanceControlsProps) {
+  const currentTheme = APPEARANCE_THEME_OPTIONS.find((t) => t.id === ap.theme);
+  const currentDensity = APPEARANCE_DENSITY_OPTIONS.find((d) => d.id === ap.density);
+  const glassBlur = Math.round((ap.glass / 100) * 8);
+  return (
+    <div className="p-4 h-full flex flex-col">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <div className="ot-card-title">Dashboard appearance</div>
+          <p className="mt-1 text-sm ot-muted leading-relaxed">
+            Theme, palette, density, type scale and your dashboard pet for the app window. Separate from the in-game
+            overlay.
+          </p>
+        </div>
+        <button type="button" className="ot-btn ot-btn-sm ot-btn-ghost" onClick={onClose} aria-label="Close appearance">
+          Close
+        </button>
+      </div>
+
+      <div className="ot-appearance-sample-wrap mb-4">
+        <div
+          className="ot-appearance-sample"
+          style={{ borderRadius: ap.radius, backdropFilter: glassBlur > 0 ? `blur(${glassBlur}px)` : 'none' }}
+        >
+          <span className="ot-appearance-sample-swatch" style={{ background: ACCENT_SWATCH[ap.accent] }} />
+          <div className="min-w-0">
+            <div className="ot-appearance-sample-title">Match ahead</div>
+            <div className="ot-appearance-sample-sub">
+              {currentTheme?.label} · {ap.radius}px radius · glass {ap.glass}% · {(ap.fontScale * 100).toFixed(0)}% type
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-y-auto min-h-0 space-y-4 pr-1">
+        <div className="ot-appearance-field">
+          <div className="ot-appearance-label">Theme</div>
+          <div className="ot-segment" role="radiogroup" aria-label="Theme">
+            {APPEARANCE_THEME_OPTIONS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="radio"
+                aria-checked={ap.theme === t.id}
+                title={t.blurb}
+                className={ap.theme === t.id ? 'is-active' : ''}
+                onClick={() => setAppearance({ theme: t.id })}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {currentTheme ? <div className="ot-appearance-hint">{currentTheme.blurb}</div> : null}
+        </div>
+
+        <div className="ot-appearance-field">
+          <div className="ot-appearance-label">Accent palette</div>
+          <div className="flex items-center gap-2">
+            {APPEARANCE_ACCENT_OPTIONS.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className={`ot-appearance-swatch ${ap.accent === a.id ? 'is-active' : ''}`}
+                aria-label={a.label}
+                aria-pressed={ap.accent === a.id}
+                title={a.label}
+                onClick={() => setAppearance({ accent: a.id })}
+                style={{ background: ACCENT_SWATCH[a.id] }}
+              />
+            ))}
+          </div>
+          <div className="ot-appearance-hint">Primary “yours” signal color across the dashboard.</div>
+        </div>
+
+        <div className="ot-appearance-field">
+          <div className="ot-appearance-label">Pet companion</div>
+          <p className="ot-appearance-hint mb-2">
+            A pixel pet for the dashboard corner. It idles, wanders and naps while you wait in queue or load in — it
+            never appears over the game.
+          </p>
+          <div className="ot-segment" role="radiogroup" aria-label="Pet species">
+            {PET_SPECIES.map((s) => (
+              <button
+                key={s}
+                type="button"
+                role="radio"
+                aria-checked={pet.species === s}
+                title={PET_SPECIES_LABELS[s]}
+                className={pet.species === s ? 'is-active' : ''}
+                onClick={() => setPet({ species: s })}
+              >
+                {PET_SPECIES_LABELS[s]}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            {PET_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`ot-appearance-swatch ${pet.color === c ? 'is-active' : ''}`}
+                aria-label={c}
+                aria-pressed={pet.color === c}
+                title={c}
+                onClick={() => setPet({ color: c })}
+                style={{ background: COLOR_HEX[c] }}
+              />
+            ))}
+          </div>
+          <PixelPet stage="idle" preference={pet} mode="static" />
+        </div>
+
+        <div className="ot-appearance-field">
+          <div className="ot-appearance-label">Density</div>
+          <div className="ot-segment" role="radiogroup" aria-label="Density">
+            {APPEARANCE_DENSITY_OPTIONS.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                role="radio"
+                aria-checked={ap.density === d.id}
+                title={d.hint}
+                className={ap.density === d.id ? 'is-active' : ''}
+                onClick={() => setAppearance({ density: d.id })}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+          {currentDensity ? <div className="ot-appearance-hint">{currentDensity.hint}</div> : null}
+        </div>
+
+        <label className="ot-appearance-field ot-appearance-slider">
+          <span className="ot-appearance-label">Corner radius </span>
+          <span className="ot-appearance-value">{ap.radius}px</span>
+          <input
+            type="range"
+            className="ot-range"
+            min={0}
+            max={24}
+            step={2}
+            value={ap.radius}
+            onChange={(e) => setAppearance({ radius: Number(e.target.value) })}
+          />
+        </label>
+
+        <label className="ot-appearance-field ot-appearance-slider">
+          <span className="ot-appearance-label">Glass level </span>
+          <span className="ot-appearance-value">{ap.glass}%</span>
+          <input
+            type="range"
+            className="ot-range"
+            min={0}
+            max={100}
+            step={5}
+            value={ap.glass}
+            onChange={(e) => setAppearance({ glass: Number(e.target.value) })}
+          />
+          <span className="ot-appearance-hint">Frosted blur behind cards. 0 keeps surfaces opaque for performance.</span>
+        </label>
+
+        <label className="ot-appearance-field ot-appearance-slider">
+          <span className="ot-appearance-label">Font scale </span>
+          <span className="ot-appearance-value">{(ap.fontScale * 100).toFixed(0)}%</span>
+          <input
+            type="range"
+            className="ot-range"
+            min={85}
+            max={120}
+            step={5}
+            value={Math.round(ap.fontScale * 100)}
+            onChange={(e) => setAppearance({ fontScale: Number(e.target.value) / 100 })}
+          />
+          <span className="ot-appearance-hint">Scales the app’s base type (rem-based). Tighter text at large panels.</span>
+        </label>
+      </div>
+    </div>
+  );
+}
 
 export default App;

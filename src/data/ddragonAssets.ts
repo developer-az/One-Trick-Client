@@ -62,6 +62,28 @@ export async function warmDdragonVersion(): Promise<string> {
   return cachedVersion;
 }
 
+/**
+ * Schedule the DDragon version refresh off the first-paint path: it runs on
+ * requestIdleCallback (capped) or after `delayMs` of setTimeout, at most once.
+ * Icon URLs keep working on the pinned recent list until it lands.
+ */
+export function warmDdragonVersionDeferred(delayMs = 20_000): void {
+  let ran = false;
+  const run = (): void => {
+    if (ran) return;
+    ran = true;
+    void warmDdragonVersion().catch(() => {
+      /* keep pinned recent list */
+    });
+  };
+  const ric = typeof window !== 'undefined' ? window.requestIdleCallback : undefined;
+  if (typeof ric === 'function') {
+    ric(run, { timeout: delayMs });
+  } else {
+    setTimeout(run, delayMs);
+  }
+}
+
 /** Square portrait (120×120) — profile switcher, selected champs. */
 export function championSquareUrl(championId: string, version = cachedVersion): string {
   return `https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${championId}.png`;

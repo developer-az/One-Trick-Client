@@ -416,7 +416,17 @@ export function useAppSettings() {
   }, []);
 
   const update = useCallback((patch: Partial<AppSettings>) => {
-    if (settingsCache) settingsCache = { ...settingsCache, ...patch };
+    // Optimistic: deep-merge `appearance` so a single-field patch (e.g. only
+    // `theme`) doesn't momentarily drop the other appearance choices. The IPC
+    // mirror (updateAppSettings) does the same and returns the full settings.
+    if (settingsCache) {
+      const patchObj = patch as Record<string, unknown>;
+      const nextAppearance =
+        patchObj.appearance && typeof patchObj.appearance === 'object'
+          ? { ...settingsCache.appearance, ...(patchObj.appearance as Partial<AppearanceSettings>) }
+          : settingsCache.appearance;
+      settingsCache = { ...settingsCache, ...patch, appearance: nextAppearance };
+    }
     emitSettings();
     void window.electronAPI?.setAppSettings?.(patch).then((res) => {
       settingsCache = res.settings;
@@ -426,6 +436,63 @@ export function useAppSettings() {
   }, []);
 
   return { settings: settingsCache, update, restartRequired: restartPending };
+}
+
+/* -------------------------------------------------------------- appearance */
+
+/** Human-readable options for the dashboard appearance controls. */
+export const APPEARANCE_THEME_OPTIONS: Array<{ id: AppearanceTheme; label: string; blurb: string }> = [
+  { id: 'gothic', label: 'Gothic', blurb: 'Default ink-black chrome' },
+  { id: 'ember', label: 'Ember', blurb: 'Warm charcoal with low ember glare' },
+  { id: 'azure', label: 'Azure', blurb: 'Cool slate-blue night' },
+  { id: 'phantom', label: 'Phantom', blurb: 'Deep gunmetal violet' },
+  { id: 'ivory', label: 'Ivory', blurb: 'Light parchment reading mode' },
+];
+
+export const APPEARANCE_ACCENT_OPTIONS: Array<{ id: AppearanceAccent; label: string }> = [
+  { id: 'chrome', label: 'Chrome' },
+  { id: 'gold', label: 'Gold' },
+  { id: 'blood', label: 'Blood' },
+  { id: 'teal', label: 'Teal' },
+  { id: 'royal', label: 'Royal' },
+];
+
+export const APPEARANCE_DENSITY_OPTIONS: Array<{ id: AppearanceDensity; label: string; hint: string }> = [
+  { id: 'compact', label: 'Compact', hint: 'Tighter rows and cards' },
+  { id: 'comfortable', label: 'Comfortable', hint: 'Default rhythm' },
+  { id: 'spacious', label: 'Spacious', hint: 'Roomier cards and headers' },
+];
+
+/**
+ * Map an appearance choice onto root attributes + CSS custom properties. This
+ * mirrors the authoritative `appearanceToCss` in electron/app-settings.ts (the
+ * naming/enum contract is exercised by verify_appearance_settings.ts).
+ */
+export function appearanceCssMap(app: AppearanceSettings): {
+  attributes: Record<string, string>;
+  vars: Record<string, string>;
+} {
+  return {
+    attributes: {
+      'data-ot-theme': app.theme,
+      'data-ot-accent': app.accent,
+      'data-ot-density': app.density,
+    },
+    vars: {
+      '--ot-radius-set': `${app.radius}px`,
+      '--ot-glass': `${app.glass}`,
+      '--ot-font-scale': `${app.fontScale}`,
+    },
+  };
+}
+
+/** Apply appearance to the app root so token.css/theme.css react immediately. */
+export function applyAppearance(settings: AppSettings | null): void {
+  if (!settings || !settings.appearance || typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const css = appearanceCssMap(settings.appearance);
+  for (const [key, value] of Object.entries(css.attributes)) root.setAttribute(key, value);
+  for (const [key, value] of Object.entries(css.vars)) root.style.setProperty(key, value);
 }
 
 /* -------------------------------------------------------------- auto import */

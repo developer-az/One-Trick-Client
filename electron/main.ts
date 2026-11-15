@@ -9,6 +9,7 @@ import {
     Menu,
     Tray,
     nativeImage,
+    dialog,
     type NativeImage,
 } from 'electron';
 import fs from 'fs';
@@ -71,6 +72,7 @@ import {
     broadcastOverlayMeta,
     overlaySlotFor,
     setOverlayHold,
+    noteOverlayHeartbeat,
     refreshOverlayVisibility,
     refreshOverlayCaptureProtection,
     holdToShowActive,
@@ -90,9 +92,35 @@ import { startFlashKeyHook, stopFlashKeyHook, getKeyHookStatus } from './global-
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
+import { overlayLog } from './overlay-log';
+import { isWinAlive, safeCall, installCrashNet } from './safe-window';
+import { readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
+
+// Last-chance uncaughtException/unhandledRejection handlers: the known
+// post-match "Object has been destroyed" race is logged and absorbed, any
+// other error is logged loudly — nothing exits the process silently.
+// Installed before anything else can throw.
+installCrashNet((message) => {
+    try {
+        overlayLog('uncaught-exception', { message });
+    } catch {
+        console.error(message);
+    }
+});
+
+// Read our own package.json once at startup so a test build can identify itself.
+let testBuildLabel: string | null = null;
+try {
+    const packageJson = JSON.parse(
+        fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as unknown;
+    testBuildLabel = readTestBuildLabel(packageJson);
+} catch {
+    testBuildLabel = null;
+}
 
 let win: BrowserWindow | null;
 let tray: Tray | null = null;
@@ -112,7 +140,18 @@ if (!gpuAccelerationAtLaunch()) {
 /** Single instance: a second launch focuses the first instead of doubling every hook and timer. */
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
+    if (testBuildLabel) {
+        const message = secondInstanceMessage(testBuildLabel);
+        dialog.showErrorBox(message.title, message.body);
+    }
     app.quit();
+} else {
+    overlayLog('app-start', {
+        version: app.getVersion(),
+        label: testBuildLabel,
+        packaged: app.isPackaged,
+        exe: process.execPath,
+    });
 }
 app.on('second-instance', () => {
     showDashboard();
@@ -127,6 +166,11 @@ function showDashboard(): void {
 
 function sendToDashboard(channel: string, payload: unknown): void {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/** Never crash the process because a window died mid-teardown. */
+function reportWindowError(error: unknown): void {
+    console.warn('[main] window call failed', error);
 }
 
 function createTray(): void {
@@ -204,6 +248,15 @@ function createWindow() {
             height: 40
         }
     });
+
+    if (testBuildLabel) {
+        const title = windowTitleFor(testBuildLabel);
+        win.setTitle(title);
+        win.on('page-title-updated', (event) => {
+            event.preventDefault();
+            win?.setTitle(title);
+        });
+    }
 
     win.on('close', (event) => {
         if (!quittingApp) {
@@ -358,20 +411,35 @@ function registerFlashHotkeys(): void {
     }, 500);
 }
 
+function formatLatencyForDebug(latency: ReturnType<typeof getMonitorStats>['latency']): string {
+    const names = ['http.eventdata', 'poll', 'hud.build', 'ocr.mayhem'];
+    const parts = names
+        .map((name) => {
+            const stat = latency[name];
+            return stat ? `${name}=${stat.p50}/${stat.p95}` : null;
+        })
+        .filter((part): part is string => !!part);
+    return parts.length ? ` lat ${parts.join(' ')}` : '';
+}
+
 function registerOverlayHotkeys() {
     // Avoid Ctrl+Shift+I — Electron/Chromium reserves it for DevTools
     // Ctrl+Shift combos still use globalShortcut (rarely conflict with League).
     const hideOk = globalShortcut.register('CommandOrControl+Shift+H', () => {
         const visible = toggleOverlayVisibility();
         refreshLiveCadence();
-        win?.webContents.send('overlay-visibility-changed', { visible });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+        }
     });
 
     const clickOk = globalShortcut.register('CommandOrControl+Shift+U', () => {
         // Unlock = compact movable panel; Lock = fullscreen click-through.
         // (HUD align is a separate mode — do not cover the whole screen here.)
         const clickThrough = toggleClickThrough();
-        win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+        }
         broadcastOverlayMeta();
     });
 
@@ -500,11 +568,29 @@ app.whenReady().then(() => {
         setOverlaySlotContent(event.sender.id, !!hasContent);
     });
 
+    ipcMain.on('overlay-heartbeat', (event, beat: { frames?: unknown; pageVisible?: unknown } | null) => {
+        noteOverlayHeartbeat(event.sender.id, {
+            frames: beat?.frames === true,
+            pageVisible: beat?.pageVisible === true,
+        });
+    });
+
+    // A lost GPU or utility process can leave a shown window undrawn. Record it
+    // next to the overlay lifecycle so a vanished HUD can be matched to it.
+    app.on('child-process-gone', (_event, details) => {
+        overlayLog('child-process-gone', {
+            type: details.type,
+            reason: details.reason,
+            exitCode: details.exitCode,
+            name: details.name ?? null,
+        });
+    });
+
     if (process.env.ONETRICK_DEBUG) {
         setInterval(() => {
             const o = getOverlayWindowStats();
             const m = getMonitorStats();
-            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}`);
+            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}${formatLatencyForDebug(m.latency)}`);
         }, 5000);
     }
 
@@ -532,6 +618,7 @@ app.whenReady().then(() => {
             livePollMs: monitor.livePollMs,
             liveReads: monitor.liveReads,
             lastEndReason: monitor.lastEndReason,
+            latency: monitor.latency,
             environment: await overlayEnvironment(),
         };
     });
@@ -737,7 +824,9 @@ app.whenReady().then(() => {
         try {
             const visible = toggleOverlayVisibility();
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+            }
             return { success: true, visible };
         } catch (error) {
             console.error('[overlay] Failed to toggle visibility:', error);
@@ -752,7 +841,9 @@ app.whenReady().then(() => {
                 showOverlay();
             }
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() }), reportWindowError);
+            }
             return { success: true, visible: !isOverlayUserHidden() };
         } catch (error) {
             console.error('[overlay] Failed to set visibility:', error);
@@ -763,7 +854,9 @@ app.whenReady().then(() => {
     ipcMain.handle('overlay-toggle-clickthrough', async () => {
         try {
             const clickThrough = toggleClickThrough();
-            win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+            }
             return { success: true, clickThrough };
         } catch (error) {
             console.error('[overlay] Failed to change interaction mode:', error);
@@ -928,20 +1021,23 @@ app.whenReady().then(() => {
 
     // Window Controls
     ipcMain.handle('window-minimize', () => {
-        if (win) win.minimize();
+        if (isWinAlive(win)) safeCall(() => win?.minimize(), reportWindowError);
     });
 
     ipcMain.handle('window-maximize', () => {
-        if (win) {
-            if (win.isMaximized()) {
-                win.unmaximize();
-            } else {
-                win.maximize();
+        if (!isWinAlive(win)) return;
+        safeCall(() => {
+            if (win) {
+                if (win.isMaximized()) {
+                    win.unmaximize();
+                } else {
+                    win.maximize();
+                }
             }
-        }
+        }, reportWindowError);
     });
 
     ipcMain.handle('window-close', () => {
-        if (win) win.close();
+        if (isWinAlive(win)) safeCall(() => win?.close(), reportWindowError);
     });
 });

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { getRuneIconUrl, getRuneMeta, getStyleMeta } from '../../data/runeService';
 import type { Build, DominanceMetrics, Item as BuildItem, MatchupAnalysis, RunePage } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
+import { resolveBuildOrder } from '../../logic/purchasePlan';
 import type { ViewId } from '../App';
 import { sendLoadout } from '../exporter';
 import { IconArrowRight, IconLoadout, IconUpload } from '../icons';
@@ -45,7 +46,7 @@ export const LoadoutView: React.FC<{
             }
           />
         </Card>
-        <div className="mt-5 max-w-xl">
+        <div className="mt-4 max-w-xl">
           <AutoImportCard />
         </div>
       </div>
@@ -85,27 +86,20 @@ export const LoadoutView: React.FC<{
         </div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-5">
-        <div className="lg:col-span-2 space-y-5">
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-2 space-y-4">
           <Card>
             <RunePanel runes={runes} />
           </Card>
           <AutoImportCard />
         </div>
 
-        <div className="lg:col-span-3 space-y-5">
+        <div className="lg:col-span-3 space-y-4">
           <Card>
             <CardHeader title="Build order" />
-            <div className="flex flex-wrap items-center gap-2">
-              {build.buildPath.map((item, i) => (
-                <React.Fragment key={`${item.id}-${i}`}>
-                  {i > 0 ? <IconArrowRight className="ot-step-arrow" /> : null}
-                  <Item id={item.id} name={item.name} size={44} title={itemTitle(item)} />
-                </React.Fragment>
-              ))}
-            </div>
+            <OrderedBuildPath build={build} />
             <div className="ot-divider my-4" />
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <ItemGroup title="Start" items={build.starter} />
               <ItemGroup title="Boots" items={[build.boots]} />
               {profile.role === 'Support' ? (
@@ -148,9 +142,32 @@ export const LoadoutView: React.FC<{
   );
 };
 
-function itemTitle(item: BuildItem): string {
+function itemTitle(item: { id: string; name: string; reason?: string }): string {
   return item.reason ? `${item.name}: ${item.reason}` : item.name;
 }
+
+/**
+ * The one ordered buy queue (first core → base Boots → mid boots → remaining
+ * core → situational), numbered exactly like the in-game HUD queue.
+ */
+const OrderedBuildPath: React.FC<{ build: Build }> = ({ build }) => {
+  const steps = useMemo(() => resolveBuildOrder(build, null), [build]);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {steps.map((step, i) => (
+        <React.Fragment key={`${step.id}-${i}`}>
+          {i > 0 ? <IconArrowRight className="ot-step-arrow" /> : null}
+          <span className="relative inline-flex" data-build-step={step.rank} title={itemTitle(step)}>
+            <Item id={step.id} name={step.name} size={44} title={itemTitle(step)} />
+            <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-amber-200/50 bg-black/80 px-1 text-[11px] font-bold leading-none text-amber-100">
+              {step.rank}
+            </span>
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+};
 
 const ItemGroup: React.FC<{ title: string; items: BuildItem[] }> = ({ title, items }) => (
   <div>

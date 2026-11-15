@@ -25,6 +25,21 @@ export interface CatalogChampion {
   damageType: 'Physical' | 'Magic' | 'Mixed';
 }
 
+export interface CatalogItemStats {
+  ad?: number;
+  ap?: number;
+  hp?: number;
+  mana?: number;
+  armor?: number;
+  mr?: number;
+  as?: number;
+  crit?: number;
+  ms?: number;
+  msPct?: number;
+  lifesteal?: number;
+  hpRegen?: number;
+}
+
 export interface CatalogItem {
   id: string;
   name: string;
@@ -34,6 +49,8 @@ export interface CatalogItem {
   from: string[];
   into: string[];
   maps: Record<string, boolean>;
+  stats: CatalogItemStats;
+  antiHeal: boolean;
 }
 
 export interface CatalogRune {

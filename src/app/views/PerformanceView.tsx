@@ -165,13 +165,13 @@ export const PerformanceView: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-3 mb-5">
+      <div className="grid gap-4 sm:grid-cols-3 mb-4">
         <Stat label="CPU" value={stats ? `${stats.totalCpu.toFixed(1)}%` : '–'} hint="All One Trick processes" />
         <Stat label="Memory" value={stats ? `${stats.totalMemoryMb} MB` : '–'} hint="All One Trick processes" />
         <Stat label="Game reads" value={stats ? String(stats.liveReads) : '–'} hint="Live Client requests this session" />
       </div>
 
-      <Card className="mb-5">
+      <Card className="mb-4">
         <CardHeader
           title="Clips"
           sub="Turn Auto-clip on before the next game. A kill, a death, or a Great play saves a video here."
@@ -210,12 +210,12 @@ export const PerformanceView: React.FC = () => {
         )}
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="Right now" />
           <dl>
             {rows.map((r) => (
-              <div key={r.label} className="flex items-center justify-between gap-4 py-2.5 border-b border-[color:var(--ot-border)] last:border-0">
+              <div key={r.label} className="flex items-center justify-between gap-4 py-2 border-b border-[color:var(--ot-border)] last:border-0">
                 <dt className="ot-muted">{r.label}</dt>
                 <dd>
                   <Pill tone={r.tone}>{r.value}</Pill>
@@ -325,20 +325,20 @@ export const PerformanceView: React.FC = () => {
 
         <Card className="lg:col-span-2">
           <CardHeader title="Processes" />
-          <table className="w-full text-sm">
+          <table className="ot-table w-full text-sm">
             <thead>
               <tr className="text-left ot-faint text-xs uppercase tracking-wide">
-                <th className="py-1.5 font-semibold">Process</th>
-                <th className="py-1.5 font-semibold text-right">CPU</th>
-                <th className="py-1.5 font-semibold text-right">Memory</th>
+                <th className="font-semibold">Process</th>
+                <th className="font-semibold text-right">CPU</th>
+                <th className="font-semibold text-right">Memory</th>
               </tr>
             </thead>
             <tbody className="ot-num">
               {processes.map((p, i) => (
                 <tr key={`${p.type}-${i}`} className="border-t border-[color:var(--ot-border)]">
-                  <td className="py-2">{p.name}</td>
-                  <td className="py-2 text-right">{p.cpu.toFixed(1)}%</td>
-                  <td className="py-2 text-right">{p.memoryMb} MB</td>
+                  <td>{p.name}</td>
+                  <td className="text-right">{p.cpu.toFixed(1)}%</td>
+                  <td className="text-right">{p.memoryMb} MB</td>
                 </tr>
               ))}
             </tbody>

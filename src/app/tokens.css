@@ -47,10 +47,35 @@
   --ot-amber: #f2b350; /* caution / short window */
   --ot-amber-soft: rgba(242, 179, 80, 0.12);
 
-  /* Shape */
-  --ot-radius: 6px;
-  --ot-radius-sm: 5px;
-  --ot-radius-lg: 10px;
+  /* Density — one spacing scale for the whole app.
+   *
+   * 4px base with 2px half-steps for chrome (2 4 6 8 10 12 14 16 20 24 28 32
+   * 48). Cards, controls, tables, and page headers all read from the roles
+   * below, so every screen shares one dense rhythm instead of the old mixed
+   * values (page 28px 32px 48px, cards 18px 20px, card gaps 20–24px — each
+   * landed one step tighter here). Component stylesheets consume these and
+   * never redefine them. */
+  --ot-space-page: 20px 24px 32px; /* .ot-page frame: top / sides / bottom */
+  --ot-space-header: 16px;         /* page header → first card */
+  --ot-space-card: 14px 16px;      /* .ot-card-pad */
+  --ot-space-stack: 16px;          /* card → card, grid gutters, section rules */
+  --ot-space-row: 8px 10px;        /* list and settings rows */
+  --ot-space-table: 6px 8px;       /* dense table cells */
+  --ot-space-control: 8px;         /* control clusters */
+
+  /* Shape. --ot-radius-set is the single owned value set by the Appearance
+     control (0–24px via the app root); --ot-radius* derive from it so radius
+     changes scale cards, inputs and menus together. */
+  --ot-radius-set: 6px;
+  --ot-radius: var(--ot-radius-set);
+  --ot-radius-sm: max(4px, calc(var(--ot-radius-set) - 2px));
+  --ot-radius-lg: calc(var(--ot-radius-set) + 6px);
+
+  /* Dashboard Appearance drivers (set on the app root by the Appearance
+     control; defaults here keep an unmodified app rendering the same as
+     before). Given + data-ot-* attributes in theme.css. */
+  --ot-glass: 0;
+  --ot-font-scale: 1;
 
   /* Type */
   --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
@@ -59,4 +84,27 @@
 
   /* Overlay readability: text scale independent of HUD scale. */
   --ov-text-scale: 1;
+}
+
+/* Density — the three spacing rhythms. `comfortable` restates the defaults
+   above verbatim so switching density is a plain attribute flip. */
+:root[data-ot-density='compact'],
+[data-ot-density='compact'] {
+  --ot-space-page: 12px 16px 20px;
+  --ot-space-header: 12px;
+  --ot-space-card: 10px 12px;
+  --ot-space-stack: 12px;
+  --ot-space-row: 5px 8px;
+  --ot-space-table: 4px 6px;
+  --ot-space-control: 6px;
+}
+:root[data-ot-density='spacious'],
+[data-ot-density='spacious'] {
+  --ot-space-page: 28px 32px 40px;
+  --ot-space-header: 20px;
+  --ot-space-card: 18px 22px;
+  --ot-space-stack: 22px;
+  --ot-space-row: 12px 14px;
+  --ot-space-table: 8px 12px;
+  --ot-space-control: 10px;
 }
