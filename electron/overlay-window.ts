@@ -956,10 +956,13 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
     osrWin = win;
     pageHasContent = false;
     overlayLog('created', { kind: 'main', backend: 'native' });
+    // webContents is torn down with the window; capture its id before the
+    // closed callback can read it after teardown.
+    const wcId = win.webContents.id;
     win.on('closed', () => {
-        forgetSlot(win.webContents.id);
+        forgetSlot(wcId);
         if (osrWin === win) osrWin = null;
-        if (nativeSurface && nativeSurface.webContentsId === win.webContents.id) nativeSurface = null;
+        if (nativeSurface && nativeSurface.webContentsId === wcId) nativeSurface = null;
     });
     void attachNativeSurface(
         win,
