@@ -918,7 +918,7 @@ function installNativeWatchers(): void {
 
 /** Dispose a surface whose attach finished after its window was superseded. */
 function discardStaleNativeSurface(handle: NativeSurfaceHandle): void {
-    handle.destroy();
+    destroyNativeSurface(handle);
 }
 
 function handleNativeFallback(reason: string): void {
@@ -928,10 +928,10 @@ function handleNativeFallback(reason: string): void {
     backend = 'electron';
     fallbackCount += 1;
     if (nativeSurface) {
-        nativeSurface.destroy();
+        destroyNativeSurface(nativeSurface);
         nativeSurface = null;
     } else if (osrWin && !osrWin.isDestroyed()) {
-        osrWin.destroy();
+        destroyOsrWindow();
     }
     osrWin = null;
     electronSurfaceActive = false;
@@ -1199,19 +1199,31 @@ export function destroyOverlay(): void {
     shownSince = null;
     if (isNativeLocked() || nativeSurface || osrWin) {
         if (nativeSurface) {
-            nativeSurface.destroy();
+            destroyNativeSurface(nativeSurface);
             nativeSurface = null;
         }
         if (osrWin && !osrWin.isDestroyed()) {
-            osrWin.destroy();
+            destroyOsrWindow();
         }
         osrWin = null;
         electronSurfaceActive = false;
     }
     if (overlayWin && !overlayWin.isDestroyed()) {
-        overlayWin.destroy();
+        destroyElectronWindow();
     }
     overlayWin = null;
+}
+
+function destroyNativeSurface(handle: NativeSurfaceHandle): void {
+    handle.destroy();
+}
+
+function destroyOsrWindow(): void {
+    if (osrWin && !osrWin.isDestroyed()) osrWin.destroy();
+}
+
+function destroyElectronWindow(): void {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.destroy();
 }
 
 /**
