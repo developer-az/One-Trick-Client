@@ -155,8 +155,6 @@ const DEFAULT_GANK_ANCHOR = { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 
 const DEFAULT_VISION_ANCHOR = { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
 const DEFAULT_ACTION_ANCHOR = { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' as const };
 const DEFAULT_BUY_ANCHOR = { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' as const };
-/** Objectives stack in the vision column, clear of the vision panel above it. */
-const OBJECTIVE_STACK_OFFSET = 0.06;
 
 const GankRailPanel = React.memo(function GankRailPanel({
   status,
@@ -178,19 +176,15 @@ const GankRailPanel = React.memo(function GankRailPanel({
 
 const VisionRailPanel = React.memo(function VisionRailPanel({
   status,
-  style,
 }: {
   status: WardStatus | null;
-  style: React.CSSProperties;
 }) {
   return (
-    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
-      <OverlayChromePanel>
-        <div className="relative z-10 px-2 py-1.5">
-          <WardIndicator status={status} compact />
-        </div>
-      </OverlayChromePanel>
-    </div>
+    <OverlayChromePanel>
+      <div className="relative z-10 px-2 py-1.5">
+        <WardIndicator status={status} compact />
+      </div>
+    </OverlayChromePanel>
   );
 });
 
@@ -1184,13 +1178,34 @@ export const OverlayApp: React.FC = () => {
   const actionAnchor = useMemo(() => layoutElement(hudLayout, 'action') || DEFAULT_ACTION_ANCHOR, [hudLayout]);
   const buyAnchor = useMemo(() => layoutElement(hudLayout, 'buy') || DEFAULT_BUY_ANCHOR, [hudLayout]);
   const gankStyle = useMemo(() => ({ ...layoutStyle(gankAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [gankAnchor, paintGeo]);
-  const visionStyle = useMemo(() => ({ ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [visionAnchor, paintGeo]);
-  const objectivesStyle = useMemo(() => {
-    const anchor = {
-      ...visionAnchor,
-      y: Math.min(0.94, visionAnchor.y + OBJECTIVE_STACK_OFFSET),
+  const visionStackStyle = useMemo<React.CSSProperties>(() => {
+    const base = { ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE };
+    const stack: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      minWidth: 0,
     };
-    return { ...layoutStyle(anchor, paintGeo), ...RAIL_PANEL_SIZE };
+    if (visionAnchor.y < 0.5) return { ...base, ...stack };
+    // Bottom-half anchors grow upward from their bottom edge, so the expanded
+    // vision/objectives stack can never run off the bottom of the game view.
+    const anchorTop = paintGeo.offsetY + visionAnchor.y * paintGeo.gameViewH;
+    const originX = base.transformOrigin.includes('right')
+      ? 'right'
+      : base.transformOrigin.includes('left')
+        ? 'left'
+        : 'center';
+    return {
+      position: 'absolute',
+      ...(typeof base.right === 'number' ? { right: base.right } : { left: base.left }),
+      top: 'auto',
+      bottom: Math.max(0, paintGeo.vh - anchorTop),
+      transform: base.transform,
+      transformOrigin: `bottom ${originX}`,
+      opacity: base.opacity,
+      ...RAIL_PANEL_SIZE,
+      ...stack,
+    };
   }, [visionAnchor, paintGeo]);
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
@@ -1334,20 +1349,22 @@ export const OverlayApp: React.FC = () => {
             <GankRailPanel status={gankStatus} style={gankStyle} />
           )}
 
-          {showVision && slotHasModule('vision') && (
-            <VisionRailPanel status={wardStatus} style={visionStyle} />
-          )}
-
-          {showObjectives && slotHasModule('vision') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right" style={objectivesStyle}>
-            <OverlayChromePanel>
-              <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
-                {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
-                {objectiveTimers?.baron ? <div>Baron {objectiveTimers.baron.inSec}s</div> : null}
-                {objectiveTimers?.herald ? <div>Herald {objectiveTimers.herald.inSec}s</div> : null}
-              </div>
-            </OverlayChromePanel>
-          </div>
+          {(showVision || showObjectives) && slotHasModule('vision') && (
+            <div
+              className="hud-overlay-scale hud-overlay-scale--right flex flex-col gap-1.5 min-w-0"
+              style={visionStackStyle}
+            >
+              {showVision && <VisionRailPanel status={wardStatus} />}
+              {showObjectives && (
+                <OverlayChromePanel>
+                  <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
+                    {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
+                    {objectiveTimers?.baron ? <div>Baron {objectiveTimers.baron.inSec}s</div> : null}
+                    {objectiveTimers?.herald ? <div>Herald {objectiveTimers.herald.inSec}s</div> : null}
+                  </div>
+                </OverlayChromePanel>
+              )}
+            </div>
           )}
 
           {showAction && slotHasModule('action') && (
