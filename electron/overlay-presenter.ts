@@ -81,6 +81,14 @@ export interface NativeSurfaceOptions {
     onFallback: (reason: string) => void;
 }
 
+/** A paint kept as its raw OSR image until it actually has to be shipped. */
+interface PaintFrame {
+    image: Electron.NativeImage | null;
+    bytes: Buffer | null;
+    width: number;
+    height: number;
+}
+
 export interface NativeSurfaceStats {
     alive: boolean;
     shown: boolean;
@@ -196,8 +204,11 @@ class NativeSurface implements NativeSurfaceHandle {
     private lastFrameAt: number | null = null;
     private queuedBytes = 0;
     private needsFullFrame = false;
-    /** Latest complete paint (Electron 39 OSR always ships a full bitmap). */
-    private lastFrame: { bytes: Buffer; width: number; height: number } | null = null;
+    /**
+     * Latest paint (Electron 39 OSR always ships a full bitmap): held as the
+     * raw NativeImage and converted only when a frame is actually shipped.
+     */
+    private lastFrame: PaintFrame | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;    /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
     private lastPongAt = 0;
     private lastReloadAt = 0;
@@ -477,27 +488,47 @@ class NativeSurface implements NativeSurfaceHandle {
         }
     }
 
+    /**
+     * Retain a paint as its raw image, reading only its (cheap) size. A paint
+     * can land just as the offscreen window is destroyed; touching a dead
+     * NativeImage throws "Object has been destroyed".
+     */
+    private retainFrame(image: Electron.NativeImage): PaintFrame | null {
+        const size = safeCall(() => image.getSize(), (error) => {
+            console.warn('[presenter] paint getSize failed', error);
+        });
+        if (!size) return null;
+        return { image, bytes: null, width: size.width, height: size.height };
+    }
+
+    /** Convert a retained frame exactly once, when it is actually shipped. */
+    private frameBytes(frame: PaintFrame): Buffer | null {
+        if (frame.bytes) return frame.bytes;
+        const image = frame.image;
+        if (!image) return null;
+        const bytes = safeCall(() => image.toBitmap(), (error) => {
+            console.warn('[presenter] paint toBitmap failed', error);
+        });
+        if (!bytes) return null;
+        if (bytes.length !== frame.width * frame.height * 4) return null;
+        frame.bytes = bytes;
+        frame.image = null;
+        return bytes;
+    }
+
     private forwardPaint(
         dirtyRect: { x: number; y: number; width: number; height: number },
         image: Electron.NativeImage
     ): void {
-        // A paint can land just as the offscreen window is destroyed; reading
-        // the bitmap off a dead NativeImage throws "Object has been destroyed".
-        const size = safeCall(() => image.getSize(), (error) => {
-            console.warn('[presenter] paint getSize failed', error);
-        });
-        const bytes = safeCall(() => image.toBitmap(), (error) => {
-            console.warn('[presenter] paint toBitmap failed', error);
-        });
-        if (!size || !bytes) return;
-        // The paint bitmap is the complete frame, so keep it even when this
-        // paint is dropped (presenter down, queue full, or throttled): respawn/
-        // resize and the throttle flush can then re-send it without waiting
-        // for the next dirty rect.
-        if (bytes.length === size.width * size.height * 4) {
-            this.lastFrame = { bytes, width: size.width, height: size.height };
-        }
-        if (this.destroyed || !this.isLive()) {
+        // Retain the latest paint cheaply (size only). The full bitmap copy is
+        // deferred to frameBytes(), so every dropped paint below — presenter
+        // down, queue full, or throttled/coalesced — avoids the ~8 MB
+        // toBitmap cost. Resend-last-frame still has the latest frame.
+        const retained = this.retainFrame(image);
+        if (retained) this.lastFrame = retained;
+        // An unusable image cannot advance the frame; drop it instead of
+        // re-shipping a stale crop. Same for a dead/presenter-less surface.
+        if (!retained || this.destroyed || !this.isLive()) {
             this.framesDropped++;
             return;
         }
@@ -516,6 +547,8 @@ class NativeSurface implements NativeSurfaceHandle {
         const shipped = this.paintThrottle.accept(dirtyRect);
         this.schedulePaintFlush();
         if (!shipped) {
+            // Coalesced: the throttle keeps the dirty-rect union and lastFrame
+            // keeps the latest image; flushHeldPaint converts it once.
             this.framesDropped++;
             return;
         }
@@ -527,9 +560,14 @@ class NativeSurface implements NativeSurfaceHandle {
             this.framesDropped++;
             return;
         }
+        const bytes = this.frameBytes(this.lastFrame);
+        if (!bytes) {
+            this.framesDropped++;
+            return;
+        }
         // The dirty rect is already in physical pixels of this bitmap; ship
         // exactly that sub-rectangle so the presenter pastes it at (x, y).
-        const cropped = cropDirtyRect(this.lastFrame.bytes, this.lastFrame.width, this.lastFrame.height, dirtyRect);
+        const cropped = cropDirtyRect(bytes, this.lastFrame.width, this.lastFrame.height, dirtyRect);
         if (!cropped) {
             // Corrupt bitmap or empty rect — never send a broken frame.
             this.framesDropped++;
@@ -584,8 +622,10 @@ class NativeSurface implements NativeSurfaceHandle {
         // The OSR image can be a pixel larger than the presenter surface (DPI
         // rounding); the presenter clips, so no size-equality guard here.
         if (this.queuedBytes > MAX_QUEUED_BYTES) return;
+        const bytes = this.frameBytes(this.lastFrame);
+        if (!bytes) return;
         const header = encodeU32s([0, 0, this.lastFrame.width, this.lastFrame.height]);
-        if (!this.send(MSG_FRAME, Buffer.concat([header, this.lastFrame.bytes]))) return;
+        if (!this.send(MSG_FRAME, Buffer.concat([header, bytes]))) return;
         this.frames++;
         this.lastFrameAt = Date.now();
     }
