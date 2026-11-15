@@ -1,16 +1,17 @@
 /**
- * verify_pixel_pet.ts — E4: small canvas sprite pet for the dashboard.
+ * verify_pixel_pet.ts — E4: dashboard pixel pet plus the overlay loading-screen pet.
  *
  * The authoring sandbox has no browser, so the visual "look-check" (idle,
- * queue pop, loading, game transition, both window sizes) is replaced by
- * structural checks: the pet is a fixed, bounded, pointer-events-none canvas
- * that only mounts in the dashboard shell, drawn with canvas primitives only
- * (no image assets), with the pure simulation in pixelPetLogic.ts exercised
- * directly for behaviour.
+ * queue pop, loading, game transition) is replaced by structural checks: the
+ * dashboard shell mounts PixelPet as a fixed, bounded, pointer-events-none
+ * canvas — stage-driven for the live pet and static for the appearance
+ * preview — while the overlay mounts OverlayPet only on its loading screen.
+ * Both components reuse the shared canvas primitives and the pure
+ * pixelPetLogic.ts simulation, which is exercised directly for behaviour.
  *
  * Covered:
- *   1. Stage transitions — the pet is visible only during idle / queue /
- *      loading and disappears in game (and draft/post/offline/…).
+ *   1. Stage transitions — the dashboard pet is visible in every league stage
+ *      except an active game (`game`), and stops rendering there.
  *   2. Animation selection — idle → wander → sleep timeline, queue-pop
  *      one-shot reaction ("react once when stage enters queue/ReadyCheck,
  *      then settle"), re-arm on re-entry, bounded walk that stays inside its
@@ -21,8 +22,9 @@
  *      phase clock freezes under prefers-reduced-motion and wandering stops.
  *   5. Persistence through the E3 settings path (electron/app-settings.ts),
  *      including deep-merge, flush to disk and relaunch survival.
- *   6. Structural checks — canvas primitives only, no overlay / League-client
- *      coupling, fixed bounded area, passive (pointer-events: none).
+ *   6. Structural checks — canvas primitives only, no League-client coupling;
+ *      the overlay never mounts the dashboard PixelPet, while its loading
+ *      screen deliberately mounts OverlayPet with the shared logic.
  *
  * Run: npx --yes tsx verify_pixel_pet.ts
  */
