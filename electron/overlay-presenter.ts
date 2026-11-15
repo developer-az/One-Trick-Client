@@ -209,6 +209,11 @@ class NativeSurface implements NativeSurfaceHandle {
      * raw NativeImage and converted only when a frame is actually shipped.
      */
     private lastFrame: PaintFrame | null = null;
+    /**
+     * Last bitmap that converted successfully. Resends use only this frame so
+     * a failed conversion can never displace the last good presenter image.
+     */
+    private lastValidatedFrame: PaintFrame | null = null;
     private pingTimer: ReturnType<typeof setInterval> | null = null;    /** Last PONG (or READY) from the presenter; 0 before the first handshake. */
     private lastPongAt = 0;
     private lastReloadAt = 0;
@@ -523,7 +528,8 @@ class NativeSurface implements NativeSurfaceHandle {
         // Retain the latest paint cheaply (size only). The full bitmap copy is
         // deferred to frameBytes(), so every dropped paint below — presenter
         // down, queue full, or throttled/coalesced — avoids the ~8 MB
-        // toBitmap cost. Resend-last-frame still has the latest frame.
+        // toBitmap cost. Resends use the last validated frame, not this raw
+        // candidate.
         const retained = this.retainFrame(image);
         if (retained) this.lastFrame = retained;
         // An unusable image cannot advance the frame; drop it instead of
@@ -556,18 +562,25 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     private shipFrame(dirtyRect: PaintRect): void {
-        if (!this.lastFrame) {
+        const frame = this.lastFrame;
+        if (!frame) {
             this.framesDropped++;
             return;
         }
-        const bytes = this.frameBytes(this.lastFrame);
+        const bytes = this.frameBytes(frame);
         if (!bytes) {
+            // Drop the failed paint, keep the previous validated frame for
+            // resend, and ask the renderer for a fresh full paint. Never crop
+            // the older bitmap with this paint's dirty rect.
+            if (this.lastFrame === frame) this.lastFrame = null;
             this.framesDropped++;
+            this.requestFullFrame();
             return;
         }
+        this.lastValidatedFrame = frame;
         // The dirty rect is already in physical pixels of this bitmap; ship
         // exactly that sub-rectangle so the presenter pastes it at (x, y).
-        const cropped = cropDirtyRect(bytes, this.lastFrame.width, this.lastFrame.height, dirtyRect);
+        const cropped = cropDirtyRect(bytes, frame.width, frame.height, dirtyRect);
         if (!cropped) {
             // Corrupt bitmap or empty rect — never send a broken frame.
             this.framesDropped++;
@@ -618,13 +631,14 @@ class NativeSurface implements NativeSurfaceHandle {
     }
 
     private resendLastFrame(): void {
-        if (this.destroyed || !this.isLive() || !this.lastFrame) return;
+        const frame = this.lastValidatedFrame;
+        if (this.destroyed || !this.isLive() || !frame) return;
         // The OSR image can be a pixel larger than the presenter surface (DPI
         // rounding); the presenter clips, so no size-equality guard here.
         if (this.queuedBytes > MAX_QUEUED_BYTES) return;
-        const bytes = this.frameBytes(this.lastFrame);
+        const bytes = this.frameBytes(frame);
         if (!bytes) return;
-        const header = encodeU32s([0, 0, this.lastFrame.width, this.lastFrame.height]);
+        const header = encodeU32s([0, 0, frame.width, frame.height]);
         if (!this.send(MSG_FRAME, Buffer.concat([header, bytes]))) return;
         this.frames++;
         this.lastFrameAt = Date.now();
@@ -837,6 +851,7 @@ class NativeSurface implements NativeSurfaceHandle {
         this.instance += 1;
         this.readyWaiter = null;
         this.lastFrame = null;
+        this.lastValidatedFrame = null;
         this.paintThrottle.reset();
         if (this.paintFlushTimer) {
             clearTimeout(this.paintFlushTimer);
