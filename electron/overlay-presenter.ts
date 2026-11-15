@@ -93,6 +93,7 @@ export interface NativeSurfaceStats {
     alive: boolean;
     shown: boolean;
     frames: number;
+    /** Paints rejected as corrupt/unshippable; intentional throttle/queue skips are not counted. */
     framesDropped: number;
     lastFrameAt: number | null;
     respawns: number;
@@ -532,30 +533,31 @@ class NativeSurface implements NativeSurfaceHandle {
         // candidate.
         const retained = this.retainFrame(image);
         if (retained) this.lastFrame = retained;
-        // An unusable image cannot advance the frame; drop it instead of
-        // re-shipping a stale crop. Same for a dead/presenter-less surface.
-        if (!retained || this.destroyed || !this.isLive()) {
+        // Only an unreadable image is a corrupt-frame drop. A dead surface is a
+        // lifecycle skip, not corruption.
+        if (!retained) {
             this.framesDropped++;
             return;
         }
+        if (this.destroyed || !this.isLive()) return;
         if (this.queuedBytes > MAX_QUEUED_BYTES) {
-            // Queue full: drop this frame but force the next one to be a FULL
-            // frame so the presenter never ends up with a hole.
+            // Queue back-pressure: an intentional skip, not a corrupt frame.
+            // Force the next frame to be FULL so the presenter never ends up
+            // with a hole.
             this.needsFullFrame = true;
-            this.framesDropped++;
             return;
         }
         // Strict main-process paint throttle: one forwarded paint per
         // PAINT_THROTTLE_MS window. The leading paint of a window ships
-        // immediately; intermediate paints are dropped with their dirty rects
+        // immediately; intermediate paints are coalesced with their dirty rects
         // merged into a union; the union is always flushed once the window
-        // elapses (see flushHeldPaint).
+        // elapses (see flushHeldPaint). Coalescing is the intended 12 fps
+        // budget, not frame corruption, so it must not increment framesDropped.
         const shipped = this.paintThrottle.accept(dirtyRect);
         this.schedulePaintFlush();
         if (!shipped) {
             // Coalesced: the throttle keeps the dirty-rect union and lastFrame
             // keeps the latest image; flushHeldPaint converts it once.
-            this.framesDropped++;
             return;
         }
         this.shipFrame(shipped);
@@ -623,8 +625,8 @@ class NativeSurface implements NativeSurfaceHandle {
         const rect = this.paintThrottle.flush();
         if (!rect) return;
         if (this.queuedBytes > MAX_QUEUED_BYTES) {
+            // Queue back-pressure: an intentional skip, not a corrupt frame.
             this.needsFullFrame = true;
-            this.framesDropped++;
             return;
         }
         this.shipFrame(rect);
