@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   type Champion,
   type Build,
@@ -1178,6 +1178,43 @@ export const OverlayApp: React.FC = () => {
   const actionAnchor = useMemo(() => layoutElement(hudLayout, 'action') || DEFAULT_ACTION_ANCHOR, [hudLayout]);
   const buyAnchor = useMemo(() => layoutElement(hudLayout, 'buy') || DEFAULT_BUY_ANCHOR, [hudLayout]);
   const gankStyle = useMemo(() => ({ ...layoutStyle(gankAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [gankAnchor, paintGeo]);
+  const visionStackRef = useRef<HTMLDivElement | null>(null);
+  const [visionStackHeight, setVisionStackHeight] = useState(0);
+  // The saved Vision y is always its top edge. The vision/objectives stack can
+  // grow when objectives appear or text wraps, so measure the painted (scaled)
+  // height and lift only the part that would cross the bottom of the viewport.
+  // Re-measure on resize/layout changes and on content changes; never switch
+  // the stack to bottom-anchoring (that made the panel jump between anchors).
+  // Measurement triggers only: the effect body re-attaches the observer when
+  // geometry, visibility or rail content changes; the observer catches size
+  // changes between renders.
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useLayoutEffect(() => {
+    const node = visionStackRef.current;
+    if (!node) {
+      setVisionStackHeight((prev) => (prev === 0 ? prev : 0));
+      return;
+    }
+    const measure = (): void => {
+      const next = node.getBoundingClientRect().height;
+      setVisionStackHeight((prev) => (Math.abs(prev - next) < 0.5 ? prev : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    visionAnchor,
+    paintGeo,
+    hudModules,
+    wardStatus,
+    state.objectiveTimers,
+    mayhemPanelActive,
+    slot,
+    state.inGame,
+    state.loading,
+  ]);
+  /* eslint-enable react-hooks/exhaustive-deps */
   const visionStackStyle = useMemo<React.CSSProperties>(() => {
     const base = { ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE };
     const stack: React.CSSProperties = {
@@ -1186,27 +1223,14 @@ export const OverlayApp: React.FC = () => {
       gap: 6,
       minWidth: 0,
     };
-    if (visionAnchor.y < 0.5) return { ...base, ...stack };
-    // Bottom-half anchors grow upward from their bottom edge, so the expanded
-    // vision/objectives stack can never run off the bottom of the game view.
     const anchorTop = paintGeo.offsetY + visionAnchor.y * paintGeo.gameViewH;
-    const originX = base.transformOrigin.includes('right')
-      ? 'right'
-      : base.transformOrigin.includes('left')
-        ? 'left'
-        : 'center';
+    const bottomOverflow = Math.max(0, anchorTop + visionStackHeight - paintGeo.vh);
     return {
-      position: 'absolute',
-      ...(typeof base.right === 'number' ? { right: base.right } : { left: base.left }),
-      top: 'auto',
-      bottom: Math.max(0, paintGeo.vh - anchorTop),
-      transform: base.transform,
-      transformOrigin: `bottom ${originX}`,
-      opacity: base.opacity,
-      ...RAIL_PANEL_SIZE,
+      ...base,
+      top: Math.max(0, anchorTop - bottomOverflow),
       ...stack,
     };
-  }, [visionAnchor, paintGeo]);
+  }, [visionAnchor, paintGeo, visionStackHeight]);
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
 
@@ -1351,6 +1375,7 @@ export const OverlayApp: React.FC = () => {
 
           {(showVision || showObjectives) && slotHasModule('vision') && (
             <div
+              ref={visionStackRef}
               className="hud-overlay-scale hud-overlay-scale--right flex flex-col gap-1.5 min-w-0"
               style={visionStackStyle}
             >

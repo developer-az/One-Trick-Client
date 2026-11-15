@@ -116,17 +116,17 @@ function moodsOver(initial: PetState, count: number, opts: Parameters<typeof ste
 async function main(): Promise<void> {
   console.log('\n— 1. stage transitions: dashboard-only, gone in game —');
   for (const stage of ALL_STAGES) {
-    const visible = stage === 'idle' || stage === 'queue' || stage === 'loading';
+    const visible = stage !== 'game';
     check(`petVisibleForStage('${stage}') === ${visible}`, petVisibleForStage(stage) === visible);
   }
   deepEqual(
-    'PET_VISIBLE_STAGES is exactly {idle, queue, loading}',
+    'PET_VISIBLE_STAGES is every stage except game',
     [...PET_VISIBLE_STAGES].sort(),
-    ['idle', 'loading', 'queue']
+    ALL_STAGES.filter((stage) => stage !== 'game').sort()
   );
   const gameStep = stepPet(createPetState(0, 'idle'), { stage: 'game', now: 100, hidden: false, reducedMotion: false, width: 140 });
   check('stepping into game hides the pet', gameStep.mood === 'hidden' && petPoseFromState(gameStep).mood === 'hidden');
-  check('draft hides the pet', stepPet(createPetState(0, 'queue'), { stage: 'draft', now: 100, hidden: false, reducedMotion: false, width: 140 }).mood === 'hidden');
+  check('draft keeps the pet visible', stepPet(createPetState(0, 'queue'), { stage: 'draft', now: 100, hidden: false, reducedMotion: false, width: 140 }).mood !== 'hidden');
   // ReadyCheck arrives as stage 'queue' (leagueStatus folds Matchmaking/ReadyCheck together).
   const statusSrc = fs.readFileSync('src/app/status.ts', 'utf8');
   check('status.ts folds ReadyCheck into the queue stage', /QUEUE_PHASES\s*=\s*new Set\(\[[^\]]*'ReadyCheck'/.test(statusSrc));
@@ -341,10 +341,24 @@ async function main(): Promise<void> {
   check('electron/app-settings.ts exports normalizePet', /export function normalizePet/.test(electronSrc));
   check('electron defaults include pet', /pet:\s*PET_DEFAULTS/.test(electronSrc));
 
+  const overlayAppSrc = fs.readFileSync('src/overlay/OverlayApp.tsx', 'utf8');
+  check(
+    'OverlayApp intentionally mounts OverlayPet for the loading screen',
+    /import\s*\{[^}]*OverlayPet[^}]*\}\s*from\s*['"]\.\/OverlayPet['"]/.test(overlayAppSrc) &&
+      overlayAppSrc.includes('<OverlayPet')
+  );
+  const overlayPetSrc = fs.readFileSync('src/overlay/OverlayPet.tsx', 'utf8');
+  check(
+    'OverlayPet reuses the shared pixelPetLogic rules',
+    /from\s+['"]\.\.\/app\/pixelPetLogic['"]/.test(overlayPetSrc)
+  );
   const overlayFiles = fs.readdirSync('src/overlay').filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'));
   for (const f of overlayFiles) {
     const src = fs.readFileSync(`src/overlay/${f}`, 'utf8');
-    check(`overlay/${f} never mounts the pet`, !src.includes('PixelPet') && !src.includes('pixelPetLogic'));
+    check(
+      `overlay/${f} never mounts the dashboard PixelPet component`,
+      !/<PixelPet\b/.test(src) && !/from\s+['"][^'"]*\/PixelPet['"]/.test(src)
+    );
   }
 
   console.log(`\nverify_pixel_pet: ${pass} passed, ${fail} failed`);

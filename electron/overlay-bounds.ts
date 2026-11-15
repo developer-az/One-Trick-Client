@@ -136,15 +136,19 @@ function unionRects(rects: OverlayRect[]): OverlayRect | null {
 }
 
 function clampToDisplay(rect: OverlayRect, display: OverlayRect): OverlayRect {
+    // Keep the window's origin on-screen, but never shrink it below the union
+    // of the panels it owns. Right-anchored panels can have their reference box
+    // extend past the display edge (see placedRect); clamping the window size
+    // to the remaining display width used to clip those panels at the window
+    // edge, so preserve the full union and let the OS clip only the transparent
+    // overhang.
     const x = Math.max(display.x, Math.min(display.x + display.width - 8, display.x + rect.x - PAD));
     const y = Math.max(display.y, Math.min(display.y + display.height - 8, display.y + rect.y - PAD));
-    const maxW = display.x + display.width - x;
-    const maxH = display.y + display.height - y;
     return {
         x: Math.round(x),
         y: Math.round(y),
-        width: Math.max(64, Math.min(maxW, rect.width + PAD * 2)),
-        height: Math.max(64, Math.min(maxH, rect.height + PAD * 2)),
+        width: Math.max(64, Math.round(rect.width + PAD * 2)),
+        height: Math.max(64, Math.round(rect.height + PAD * 2)),
     };
 }
 

@@ -101,7 +101,14 @@ export const PixelPet: React.FC<PixelPetProps> = ({ stage, preference, mode = 'l
 
   return (
     <div className={mode === 'static' ? 'ot-pet-preview' : 'ot-pet-area'} aria-hidden="true">
-      <canvas ref={canvasRef} width={PET_LOGICAL_W} height={PET_LOGICAL_H} />
+      {/* Backing store uses the shared logical constants; display size is pinned
+          here to the same fixed 128×72 allotment that .ot-pet-area reserves. */}
+      <canvas
+        ref={canvasRef}
+        width={PET_LOGICAL_W}
+        height={PET_LOGICAL_H}
+        style={{ width: 128, height: 72 }}
+      />
     </div>
   );
 };
