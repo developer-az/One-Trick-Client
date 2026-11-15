@@ -8,6 +8,9 @@ import {
 } from '../app/pixelPetLogic';
 import { drawPetPose, PET_LOGICAL_H, PET_LOGICAL_W, preparePetCanvas } from '../app/pixelPetCanvas';
 
+/** Loading-screen pet: ~8 fps is plenty for a small idle animation. */
+const PET_FRAME_MS = 125;
+
 export const OverlayPet: React.FC<{ preference: PetSettings }> = ({ preference }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<PetState | null>(null);
@@ -37,9 +40,25 @@ export const OverlayPet: React.FC<{ preference: PetSettings }> = ({ preference }
     const nowMs = () => performance.now();
     stateRef.current = createPetState(nowMs(), 'loading');
     let raf = 0;
+    let lastFrameAt = 0;
     let lastKey = '';
-    const tick = () => {
+    let disposed = false;
+
+    const stopLoop = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+    };
+
+    const tick = (now: number) => {
+      if (disposed) return;
+      if (document.hidden) {
+        stopLoop();
+        return;
+      }
       raf = requestAnimationFrame(tick);
+      // Cap the paint/animation cadence; rAF still drives the timer smoothly.
+      if (now - lastFrameAt < PET_FRAME_MS) return;
+      lastFrameAt = now;
       const s = stateRef.current;
       if (!s) return;
       const next = stepPet(s, {
@@ -51,13 +70,35 @@ export const OverlayPet: React.FC<{ preference: PetSettings }> = ({ preference }
       });
       stateRef.current = next;
       const pose = petPoseFromState(next);
-      const key = `${prefRef.current.species}|${prefRef.current.color}|${pose.mood}|${pose.x.toFixed(3)}|${pose.dir}|${pose.phase.toFixed(3)}|${pose.popProgress.toFixed(3)}`;
+      // Key on whole canvas pixels: sub-pixel idle drift must not repaint.
+      const pixelX = Math.round(pose.x * PET_LOGICAL_W);
+      const key = `${prefRef.current.species}|${prefRef.current.color}|${pose.mood}|${pixelX}|${pose.dir}|${pose.phase.toFixed(3)}|${pose.popProgress.toFixed(3)}`;
       if (key === lastKey) return;
       lastKey = key;
       drawPetPose(ctx, pose, prefRef.current, reducedRef.current);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+
+    const startLoop = () => {
+      if (disposed || raf || document.hidden) return;
+      lastFrameAt = 0;
+      // Hidden time is paused: restart from "now" instead of fast-forwarding
+      // through the whole time the document was in the background.
+      if (stateRef.current) stateRef.current = { ...stateRef.current, lastNow: nowMs() };
+      raf = requestAnimationFrame(tick);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) stopLoop();
+      else startLoop();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    startLoop();
+    return () => {
+      disposed = true;
+      stopLoop();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   return (

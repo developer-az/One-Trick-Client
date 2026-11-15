@@ -634,12 +634,26 @@ export function useScouting(live: boolean): { players: ScoutingPlayer[]; loading
     if (!active) return;
     const api = window.electronAPI!;
     let cancelled = false;
+    let inFlight = false;
     const pull = (): void => {
-      void api.getScouting!().then((res) => {
-        if (cancelled) return;
-        if (res?.success && Array.isArray(res.players)) setPlayers(res.players);
-        setLoading(false);
-      });
+      // Polls are slower than the LCU read can be; never let two stack up.
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      void api
+        .getScouting!()
+        .then((res) => {
+          if (cancelled) return;
+          if (res?.success && Array.isArray(res.players)) setPlayers(res.players);
+          setLoading(false);
+        })
+        .catch(() => {
+          // Keep the last good roster on a transient LCU failure; only clear
+          // the spinner so the next poll can try again.
+          if (!cancelled) setLoading(false);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     queueMicrotask(() => {
       if (!cancelled) setLoading(true);

@@ -57,7 +57,7 @@ import {
     setSummonerFocus,
 } from './summoner-tracker';
 import { clipboard } from 'electron';
-import { getAppSettings } from './app-settings';
+import { getAppSettings, type AppSettings } from './app-settings';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
@@ -119,6 +119,12 @@ let lastClipboardWrite = 0;
 let lastKeepOnTopAt = 0;
 /** Last healthy live payload — never clobber the HUD with a null Live Client blip. */
 let lastGoodPayload: ReturnType<typeof buildOverlayPayload> | null = null;
+/** Settings snapshot for the current liveTick; undefined outside a tick. */
+let tickSettings: AppSettings | null = null;
+
+function settingsForTick(): AppSettings {
+    return tickSettings ?? getAppSettings();
+}
 
 export interface CachedEnemy {
     championId: number;
@@ -455,7 +461,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         gameTime,
         trustedGameTime,
         objectiveTimers: getObjectiveTimers() ?? undefined,
-        pet: getAppSettings().pet,
+        pet: settingsForTick().pet,
         mapName: live?.gameData?.mapName || null,
         localPlayer: localPlayer
             ? {
@@ -1046,7 +1052,7 @@ function handleOverlayWindowCreated(): void {
 }
 
 function ensureOverlayShown(): void {
-    if (isOverlayUserHidden() || !getAppSettings().overlayEnabled) return;
+    if (isOverlayUserHidden() || !settingsForTick().overlayEnabled) return;
     if (!getOverlayWindow()) {
         createOverlayWindow();
         showOverlay();
@@ -1095,7 +1101,7 @@ function beginMatch(): void {
     }
     // New match — never stay hidden from a previous manual hide
     setOverlayUserHidden(false);
-    if (getAppSettings().overlayEnabled) {
+    if (settingsForTick().overlayEnabled) {
         syncScalesFromLeague();
         createOverlayWindow();
         showOverlay();
@@ -1165,7 +1171,7 @@ function scheduleLive(): void {
     if (!monitorStarted) return;
     // Keep the State Service's slower hidden-HUD sample rate in lockstep with
     // the overlay's visibility and the user's overlay setting.
-    setStateServiceHudHidden(isOverlayUserHidden() || !getAppSettings().overlayEnabled);
+    setStateServiceHudHidden(isOverlayUserHidden() || !settingsForTick().overlayEnabled);
     const cadence = liveCadence();
     if (cadence === null) {
         if (liveTimer) clearTimeout(liveTimer);
@@ -1190,6 +1196,8 @@ let tickInFlight = false;
 async function liveTick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
+    // Read settings once per tick: every helper below shares this snapshot.
+    tickSettings = getAppSettings();
     const hudBuildStart = performance.now();
     try {
         const phase = lcuSocket.phase;
@@ -1285,6 +1293,7 @@ async function liveTick(): Promise<void> {
         holdLastBoard(overlayHidden);
     } finally {
         recordLatency('hud.build', performance.now() - hudBuildStart);
+        tickSettings = null;
         tickInFlight = false;
     }
 }
@@ -1293,7 +1302,8 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
-    if (phase === 'GameStart' && getAppSettings().overlayEnabled && !isOverlayUserHidden()) {
+    const settings = getAppSettings();
+    if (phase === 'GameStart' && settings.overlayEnabled && !isOverlayUserHidden()) {
         syncScalesFromLeague();
         createOverlayWindow();
         showOverlay();
@@ -1303,7 +1313,7 @@ function onPhase(phase: string | null): void {
             gameflowPhase: phase,
             gameTime: 0,
             trustedGameTime: 0,
-            pet: getAppSettings().pet,
+            pet: settings.pet,
             timestamp: Date.now(),
         });
     }

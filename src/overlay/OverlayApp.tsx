@@ -155,6 +155,8 @@ const DEFAULT_GANK_ANCHOR = { x: 0.835, y: 0.078, scale: 1, opacity: 1, anchor: 
 const DEFAULT_VISION_ANCHOR = { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
 const DEFAULT_ACTION_ANCHOR = { x: 0.835, y: 0.54, scale: 1, opacity: 1, anchor: 'tr' as const };
 const DEFAULT_BUY_ANCHOR = { x: 0.835, y: 0.42, scale: 1, opacity: 1, anchor: 'tr' as const };
+/** Objectives stack in the vision column, clear of the vision panel above it. */
+const OBJECTIVE_STACK_OFFSET = 0.06;
 
 const GankRailPanel = React.memo(function GankRailPanel({
   status,
@@ -1183,6 +1185,13 @@ export const OverlayApp: React.FC = () => {
   const buyAnchor = useMemo(() => layoutElement(hudLayout, 'buy') || DEFAULT_BUY_ANCHOR, [hudLayout]);
   const gankStyle = useMemo(() => ({ ...layoutStyle(gankAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [gankAnchor, paintGeo]);
   const visionStyle = useMemo(() => ({ ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [visionAnchor, paintGeo]);
+  const objectivesStyle = useMemo(() => {
+    const anchor = {
+      ...visionAnchor,
+      y: Math.min(0.94, visionAnchor.y + OBJECTIVE_STACK_OFFSET),
+    };
+    return { ...layoutStyle(anchor, paintGeo), ...RAIL_PANEL_SIZE };
+  }, [visionAnchor, paintGeo]);
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
 
@@ -1330,7 +1339,7 @@ export const OverlayApp: React.FC = () => {
           )}
 
           {showObjectives && slotHasModule('vision') && (
-          <div className="hud-overlay-scale hud-overlay-scale--right w-[220px]" style={layoutStyle(layoutElement(hudLayout, 'vision') || { x: 0.982, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' }, paintGeo)}>
+          <div className="hud-overlay-scale hud-overlay-scale--right" style={objectivesStyle}>
             <OverlayChromePanel>
               <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
                 {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
