@@ -132,6 +132,22 @@ export function accentSoft(hex: string, alpha = 0.14): string {
   return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
 }
 
+export interface AccentTransition {
+  /** Reset both tokens to chrome before the new source is resolved. */
+  reset: boolean;
+  /** Resolve (and later apply) the accent for this source. */
+  resolve: boolean;
+}
+
+/**
+ * What a champion-source change must do. A new pick must never keep the old
+ * champion's color while its replacement is resolving, so every change resets
+ * the tokens first; only a non-empty source is then resolved.
+ */
+export function accentTransition(previousKey: string | null, nextKey: string | null): AccentTransition {
+  return { reset: previousKey !== nextKey, resolve: !!nextKey };
+}
+
 const STORAGE_KEY = 'ot.overlay.champAccent.v1';
 const memoryCache = new Map<string, string>();
 const pending = new Map<string, Promise<string>>();

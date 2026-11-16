@@ -66,7 +66,7 @@ import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
-import { DEFAULT_ACCENT, accentSoft, resolveChampionAccent } from './champAccent';
+import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveChampionAccent } from './champAccent';
 import { resolveChampionRef } from '../data/championCatalog';
 import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
 
@@ -1247,21 +1247,31 @@ export const OverlayApp: React.FC = () => {
     }),
     [state.championId, state.localPlayer?.championName, state.championName]
   );
+  /** Invalidates a resolved accent that no longer belongs to the current pick. */
+  const accentApplyToken = useRef(0);
+  /** Source key currently on the root, so a change can reset first. */
+  const accentPreviousKey = useRef<string | null>(null);
   useEffect(() => {
     const root = document.documentElement;
-    let cancelled = false;
-    if (accentSource.key == null && !accentSource.name) {
-      root.style.setProperty('--ov-champ', DEFAULT_ACCENT);
-      root.style.setProperty('--ov-champ-soft', accentSoft(DEFAULT_ACCENT));
-      return;
-    }
-    void resolveChampionAccent(accentSource).then((hex) => {
-      if (cancelled) return;
+    const apply = (hex: string): void => {
       root.style.setProperty('--ov-champ', hex);
       root.style.setProperty('--ov-champ-soft', accentSoft(hex));
+    };
+    const key = accentCacheKey(accentSource);
+    const transition = accentTransition(accentPreviousKey.current, key);
+    accentPreviousKey.current = key;
+    const token = accentApplyToken.current + 1;
+    accentApplyToken.current = token;
+    // A changed source must not keep the old champion's color while the new
+    // one resolves: chrome first, then the resolved accent if still current.
+    if (transition.reset) apply(DEFAULT_ACCENT);
+    if (!transition.resolve) return;
+    void resolveChampionAccent(accentSource).then((hex) => {
+      if (accentApplyToken.current !== token) return;
+      apply(hex);
     });
     return () => {
-      cancelled = true;
+      if (accentApplyToken.current === token) accentApplyToken.current += 1;
     };
   }, [accentSource]);
 

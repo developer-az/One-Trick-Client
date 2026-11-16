@@ -165,6 +165,7 @@
     "verify:loading-card": "npx --yes tsx verify_loading_card.ts",
     "verify:champ-accent": "npx --yes tsx verify_champ_accent.ts",
     "verify:prematch-loading": "npx --yes tsx verify_prematch_loading.ts",
+    "verify:prematch-lifecycle": "npx --yes tsx verify_prematch_lifecycle.ts",
     "verify:scouting": "npx --yes tsx verify_scouting.ts",
     "verify:scouting-identity": "npx --yes tsx verify_scouting_identity.ts",
     "verify:review-fixes": "npx --yes tsx verify_review_fixes.ts"

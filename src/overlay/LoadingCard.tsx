@@ -19,7 +19,7 @@ export const LoadingCard: React.FC<{
       {hasGames ? (
         <>
           <div className="ov-loading-sub">
-            Last {games} game{games === 1 ? '' : 's'} on this champion
+            Last {games} {stats.scope === 'ranked' ? 'ranked ' : ''}game{games === 1 ? '' : 's'} on this champion
           </div>
           <div className="ov-loading-stats">
             <div className="ov-loading-stat">

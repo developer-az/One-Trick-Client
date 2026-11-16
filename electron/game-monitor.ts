@@ -59,8 +59,14 @@ import {
 } from './summoner-tracker';
 import { clipboard } from 'electron';
 import { getAppSettings, type AppSettings } from './app-settings';
-import { getMatchHistory } from './match-history';
-import { computeLoadingStats, type LoadingStats } from '../src/overlay/loadingStats';
+import { getMatchHistorySummaries } from './match-history';
+import {
+    createOverlayDestroyGate,
+    createPrematchStatsCache,
+    resolveLoadingChampion,
+    type LocalSummonerIdentity,
+} from './prematch-loading';
+import type { LoadingStats } from '../src/overlay/loadingStats';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
@@ -144,10 +150,33 @@ let lastChampSelectEnemies: CachedEnemy[] = [];
  * already delivers the session — no extra polling.
  */
 let lastChampSelectSelf: { championId: number; championName?: string } | null = null;
-/** Recent form on `lastChampSelectSelf.championId`, fetched once per load. */
+/** Champion resolved from the gameflow session when no champ-select event ran (reconnect). */
+let loadingChampion: { championId: number; championName?: string } | null = null;
+/** Recent form on `lastChampSelectSelf.championId`, read from the champ-select cache. */
 let prematchStats: LoadingStats | null = null;
-/** Bumped on every load so a late fetch cannot attach to the wrong game. */
+/** Bumped on every load so a late resolution cannot attach to the wrong game. */
 let prematchStatsToken = 0;
+/** Local identity, for matching the gameflow session without another request. */
+let localSummonerIdentity: LocalSummonerIdentity | null = null;
+let identityWaiters: Array<(value: LocalSummonerIdentity | null) => void> = [];
+/** True once this champ select has started its one history prefetch. */
+let champSelectHistoryPrefetched = false;
+let lastPrefetchPhase: string | null = null;
+/**
+ * Summaries fetched during champ select so the loading path can fold them
+ * without issuing a single LCU request. Empty cache ≠ zero games: only a loaded
+ * cache may claim "First game on this champion".
+ */
+const prematchHistoryCache = createPrematchStatsCache({
+    fetchHistory: () => getMatchHistorySummaries({ count: 60 }),
+});
+/** Finished-match overlay destroy, delayed so a phase blip cannot kill it. */
+const overlayDestroyGate = createOverlayDestroyGate({
+    setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown,
+    clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    isInGame: () => inGame,
+    destroy: () => destroyOverlay(),
+});
 let inGame = false;
 /**
  * League is loading a game: GameStart, or InProgress before the Live Client
@@ -155,7 +184,6 @@ let inGame = false;
  * back in a menu) ends it.
  */
 let prematchLoading = false;
-let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOverlayFingerprint = '';
 let lastSentOverlayPayload: unknown = null;
 let overlayWindowCreatedUnsubscribe: (() => void) | null = null;
@@ -239,6 +267,108 @@ export function shouldReplayOverlayState(state: {
     return state.inGame || state.prematchLoading;
 }
 
+/**
+ * The client's own summoner event (already fetched once per LCU connect) gives
+ * the identity that matches us inside `/lol-gameflow/v1/session`. Caching it
+ * here is what keeps the reconnect champion read at a single request.
+ */
+function rememberLocalSummoner(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
+    const summoner = value as { summonerId?: number; puuid?: string };
+    if (typeof summoner.summonerId !== 'number' && !summoner.puuid) return;
+    localSummonerIdentity = {
+        summonerId: typeof summoner.summonerId === 'number' ? summoner.summonerId : null,
+        puuid: typeof summoner.puuid === 'string' ? summoner.puuid : null,
+    };
+    const waiters = identityWaiters;
+    identityWaiters = [];
+    for (const resolve of waiters) resolve(localSummonerIdentity);
+}
+
+/** Bounded wait for the summoner event that follows an LCU (re)connect. */
+function waitForLocalSummoner(timeoutMs: number): Promise<LocalSummonerIdentity | null> {
+    if (localSummonerIdentity) return Promise.resolve(localSummonerIdentity);
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = (value: LocalSummonerIdentity | null): void => {
+            if (settled) return;
+            settled = true;
+            const index = identityWaiters.indexOf(done);
+            if (index >= 0) identityWaiters.splice(index, 1);
+            resolve(value);
+        };
+        identityWaiters.push(done);
+        const timer = setTimeout(() => done(null), timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+    });
+}
+
+/** Mark that this champ select already asked for its history. */
+function prefetchHistoryForChampSelect(): void {
+    if (champSelectHistoryPrefetched || inGame || prematchLoading) return;
+    champSelectHistoryPrefetched = true;
+    void prematchHistoryCache.prefetch();
+}
+
+/** Cache-only fold: no LCU request, and null stays "unknown" (pet only). */
+function prematchStatsFromCache(championId: number | null | undefined): LoadingStats | null {
+    return prematchHistoryCache.statsFor(championId);
+}
+
+/** Send the loading payload for the champion currently known (if any). */
+function sendPrematchLoadingPayload(): void {
+    sendFullOverlayUpdate(
+        prematchLoadingPayload(lcuSocket.phase, settingsForTick().pet, loadingChampion, prematchStats)
+    );
+}
+
+/**
+ * Reconnect straight into InProgress: no champ-select event ever ran, so the
+ * pick is unknown. One gameflow-session read is allowed for this case only;
+ * every other loading tick reads the cache.
+ */
+async function resolvePrematchChampionFromSession(): Promise<void> {
+    if (!prematchLoading || loadingChampion) return;
+    const token = prematchStatsToken;
+    // The client fetches its own summoner once per connect; wait for that
+    // event instead of spending a second request on identity.
+    const identity = await waitForLocalSummoner(1500);
+    if (!identity) return;
+    const champion = await resolveLoadingChampion({
+        getIdentity: () => identity,
+        fetchSession: () => makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000),
+    });
+    if (!champion) return;
+    if (token !== prematchStatsToken || !prematchLoading || loadingChampion) return;
+    loadingChampion = champion;
+    prematchStats = prematchStatsFromCache(champion.championId);
+    overlayLog('prematch-loading champion', {
+        source: 'gameflow-session',
+        championId: champion.championId,
+        stats: prematchStats ? 'cache' : 'none',
+    });
+    sendPrematchLoadingPayload();
+}
+
+/**
+ * A late champ-select swap while the load is drawing must recolor/re-stat the
+ * payload instead of leaving the previous pick on screen.
+ */
+function applyChampSelectChampionToLoading(): void {
+    if (!prematchLoading || !lastChampSelectSelf) return;
+    const next = lastChampSelectSelf;
+    if (
+        loadingChampion &&
+        loadingChampion.championId === next.championId &&
+        (loadingChampion.championName || '') === (next.championName || '')
+    ) {
+        return;
+    }
+    loadingChampion = { championId: next.championId, championName: next.championName };
+    prematchStats = prematchStatsFromCache(next.championId);
+    sendPrematchLoadingPayload();
+}
+
 /** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
 export function dismissMayhemAugmentPanelFromHotkey(): void {
     if (!isMayhemMatchActive()) return;
@@ -309,7 +439,15 @@ export function setMatchStartHotkeyHandler(handler: (() => void) | null): void {
  * a stale champion cannot color the next load.
  */
 function rememberChampSelectSelf(
-    myTeam: Array<{ cellId?: number; championId?: number; championName?: string }> | undefined,
+    myTeam:
+        | Array<{
+              cellId?: number;
+              championId?: number;
+              championName?: string;
+              summonerId?: number;
+              puuid?: string;
+          }>
+        | undefined,
     localPlayerCellId: number | undefined
 ): void {
     if (!Array.isArray(myTeam)) return;
@@ -328,13 +466,22 @@ function rememberChampSelectSelf(
               : undefined;
     if (!self?.championId) return;
     lastChampSelectSelf = { championId: self.championId, championName: self.championName };
+    // Champ select already carries the identity the reconnect path needs, so
+    // the gameflow-session read never has to fetch it separately.
+    if (typeof self.summonerId === 'number' || self.puuid) rememberLocalSummoner(self);
 }
 
 function ingestChampSelectSession(session: unknown): void {
     if (!session || typeof session !== 'object') return;
     const typed = session as {
         localPlayerCellId?: number;
-        myTeam?: Array<{ cellId?: number; championId?: number; championName?: string }>;
+        myTeam?: Array<{
+            cellId?: number;
+            championId?: number;
+            championName?: string;
+            summonerId?: number;
+            puuid?: string;
+        }>;
         theirTeam?: Array<{
             championId?: number;
             championName?: string;
@@ -346,6 +493,11 @@ function ingestChampSelectSession(session: unknown): void {
         }>;
     };
     rememberChampSelectSelf(typed.myTeam, typed.localPlayerCellId);
+    // One summaries-only prefetch per champ select; the loading path only reads it.
+    if (lastChampSelectSelf) {
+        prefetchHistoryForChampSelect();
+        applyChampSelectChampionToLoading();
+    }
     const theirTeam = typed.theirTeam;
     if (!Array.isArray(theirTeam)) return;
 
@@ -972,8 +1124,10 @@ export function getMayhemLiveOfferIds(): string[] {
 function resetMatchCaches(): void {
     lastChampSelectEnemies = [];
     lastChampSelectSelf = null;
+    loadingChampion = null;
     prematchStats = null;
     prematchStatsToken += 1;
+    champSelectHistoryPrefetched = false;
     lastOverlayFingerprint = '';
     lastSentOverlayPayload = null;
     lastGoodPayload = null;
@@ -1192,44 +1346,31 @@ function handleOverlayPageReady(): void {
 }
 
 /**
- * Fetch your recent match history once per load and fold it into the loading
- * payload. Reuses the existing match-history reader (summaries only: no per-game
- * detail requests, no polling); the card shows the pet alone until this lands.
- */
-async function loadPrematchStats(championId: number | null): Promise<void> {
-    if (!championId) return;
-    const token = prematchStatsToken;
-    try {
-        const matches = await getMatchHistory({
-            count: 60,
-            detailLimit: 0,
-            canFetchDetails: () => false,
-        });
-        if (token !== prematchStatsToken || !prematchLoading) return;
-        if (!lastChampSelectSelf || lastChampSelectSelf.championId !== championId) return;
-        prematchStats = computeLoadingStats(matches, championId);
-        sendFullOverlayUpdate(
-            prematchLoadingPayload(lcuSocket.phase, settingsForTick().pet, lastChampSelectSelf, prematchStats)
-        );
-    } catch {
-        // Offline or a fresh account: the card simply never appears.
-    }
-}
-
-/**
- * Enter the pre-match loading state once per load: clear a hide carried over
- * from the last match, raise the overlay and send the loading payload through
- * sendFullOverlayUpdate so lastSentOverlayPayload can replay it.
+ * Enter the pre-match loading state once per load: cancel the finished match's
+ * delayed window destroy (a quick requeue must not destroy the pet window),
+ * clear a hide carried over from the last match, raise the overlay and send the
+ * loading payload through sendFullOverlayUpdate so lastSentOverlayPayload can
+ * replay it. Stats come from the champ-select cache only — this path issues no
+ * LCU request. A reconnect with no known pick resolves it from the gameflow
+ * session (one request, that case only).
  */
 function enterPrematchLoading(phase: string | null): void {
+    // A requeue inside the 12 s window owns the overlay again.
+    overlayDestroyGate.cancel();
     if (prematchLoading) return;
     prematchLoading = true;
     prematchStats = null;
     prematchStatsToken += 1;
+    loadingChampion = lastChampSelectSelf
+        ? { championId: lastChampSelectSelf.championId, championName: lastChampSelectSelf.championName }
+        : null;
+    prematchStats = prematchStatsFromCache(loadingChampion?.championId ?? null);
     const previousHide = isOverlayUserHidden();
     overlayLog('prematch-loading enter', {
         phase: phase ?? 'none',
         userHidden: previousHide,
+        champion: loadingChampion ? 'champ-select' : 'unknown',
+        stats: prematchStats ? 'cache' : 'none',
     });
     if (previousHide) setOverlayUserHidden(false);
     const settings = settingsForTick();
@@ -1239,8 +1380,8 @@ function enterPrematchLoading(phase: string | null): void {
     syncScalesFromLeague();
     createOverlayWindow();
     showOverlay();
-    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, lastChampSelectSelf, prematchStats));
-    void loadPrematchStats(lastChampSelectSelf?.championId ?? null);
+    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, loadingChampion, prematchStats));
+    if (!loadingChampion) void resolvePrematchChampionFromSession();
 }
 
 /**
@@ -1251,11 +1392,16 @@ function enterPrematchLoading(phase: string | null): void {
 function exitPrematchLoading(reason: string, hide: boolean): void {
     if (!prematchLoading) return;
     prematchLoading = false;
-    // Invalidate an in-flight stats fetch: it belongs to the load we just left.
+    // Invalidate an in-flight resolution: it belongs to the load we just left.
     prematchStats = null;
+    loadingChampion = null;
     prematchStatsToken += 1;
     overlayLog('prematch-loading exit', { reason });
     if (!hide) return;
+    // A dodge/cancel leaves no pick for the next game: drop the stale one so a
+    // later reconnect cannot use it. A match takeover keeps it (the live board
+    // still reads the pick for the accent and match list).
+    lastChampSelectSelf = null;
     hideOverlay();
     sendFullOverlayUpdate({
         inGame: false,
@@ -1314,10 +1460,7 @@ function beginMatch(): void {
     // Ring buffer starts recording as the match opens.
     void setClipperActive(true);
     lastLiveProofAt = Date.now();
-    if (destroyOverlayTimer) {
-        clearTimeout(destroyOverlayTimer);
-        destroyOverlayTimer = null;
-    }
+    overlayDestroyGate.cancel();
     // New match — never stay hidden from a previous manual hide
     setOverlayUserHidden(false);
     if (settingsForTick().overlayEnabled) {
@@ -1356,11 +1499,8 @@ function endGameSession(): void {
     void setClipperActive(false);
     hideOverlay();
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
-    if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
-    destroyOverlayTimer = setTimeout(() => {
-        destroyOverlayTimer = null;
-        if (!inGame) destroyOverlay();
-    }, 12000);
+    // A new load/match cancels this gate before the 12 s elapse.
+    overlayDestroyGate.schedule();
     sendFullOverlayUpdate({
         inGame: false,
         enemies: [],
@@ -1521,6 +1661,17 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
+    // One history prefetch per champ select, on entry. A pick lock retries it
+    // through ingestChampSelectSession if the client was still walking in.
+    if (phase === 'ChampSelect') {
+        if (lastPrefetchPhase !== 'ChampSelect') {
+            champSelectHistoryPrefetched = false;
+            prefetchHistoryForChampSelect();
+        }
+    } else {
+        champSelectHistoryPrefetched = false;
+    }
+    lastPrefetchPhase = phase;
     // Loading screen: GameStart, or InProgress before the Live Client answers.
     // Leaving those phases without a live board means the load was dodged or
     // cancelled — take the overlay back down.
@@ -1558,6 +1709,8 @@ export function refreshLiveCadence(): void {
 
 const onStateChange = () => scheduleLive();
 const onChampSelect = (session: unknown) => ingestChampSelectSession(session);
+/** The client's own summoner event: identity for the reconnect session read. */
+const onSummoner = (summoner: unknown) => rememberLocalSummoner(summoner);
 
 export function startGameMonitor(): void {
     if (monitorStarted) return;
@@ -1569,6 +1722,7 @@ export function startGameMonitor(): void {
     lcuSocket.on('phase', onPhase);
     lcuSocket.on('state', onStateChange);
     lcuSocket.on('champSelect', onChampSelect);
+    lcuSocket.on('summoner', onSummoner);
     lcuSocket.start();
     overlayWindowCreatedUnsubscribe = onOverlayWindowCreated(handleOverlayWindowCreated);
     setOverlayPageReadyHandler(handleOverlayPageReady);
@@ -1580,20 +1734,23 @@ export function stopGameMonitor(): void {
     monitorStarted = false;
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = null;
-    if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
-    destroyOverlayTimer = null;
+    overlayDestroyGate.cancel();
     if (overlayWindowCreatedUnsubscribe) {
         overlayWindowCreatedUnsubscribe();
         overlayWindowCreatedUnsubscribe = null;
     }
     setOverlayPageReadyHandler(null);
     prematchLoading = false;
+    loadingChampion = null;
+    prematchStats = null;
+    prematchHistoryCache.reset();
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();
     lcuSocket.off('phase', onPhase);
     lcuSocket.off('state', onStateChange);
     lcuSocket.off('champSelect', onChampSelect);
+    lcuSocket.off('summoner', onSummoner);
     lcuSocket.stop();
 }
 

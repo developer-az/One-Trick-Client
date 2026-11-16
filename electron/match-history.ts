@@ -175,6 +175,13 @@ function saveCacheSoon(): void {
 }
 
 let inFlight: Promise<MatchSummary[]> | null = null;
+/**
+ * Summaries-only requests keep their own in-flight slot. The champ-select
+ * prefetch must never join another caller's in-flight detail fetch (it would
+ * inherit per-game requests for games it does not need), and the loading path
+ * must never join either — it reads the cache the prefetch fills.
+ */
+let summariesInFlight: Promise<MatchSummary[]> | null = null;
 
 /**
  * Up to `count` recent Summoner's Rift games, newest first. Enemy details are
@@ -186,6 +193,22 @@ export function getMatchHistory(opts: { count?: number; detailLimit?: number; ca
         inFlight = null;
     });
     return inFlight;
+}
+
+/**
+ * Summaries only: count games, no per-game detail requests, no joining of a
+ * detail fetch. This is the champ-select prefetch behind the loading card.
+ */
+export function getMatchHistorySummaries(opts: { count?: number } = {}): Promise<MatchSummary[]> {
+    if (summariesInFlight) return summariesInFlight;
+    summariesInFlight = load({
+        count: opts.count ?? 60,
+        detailLimit: 0,
+        canFetchDetails: () => false,
+    }).finally(() => {
+        summariesInFlight = null;
+    });
+    return summariesInFlight;
 }
 
 async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?: number; detailLimit?: number; canFetchDetails: () => boolean }): Promise<MatchSummary[]> {

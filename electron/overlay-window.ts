@@ -9,6 +9,11 @@ import { isWinAlive, safeCall } from './safe-window';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
 import { attachNativeSurface, createOsrWindow, type NativeSurfaceHandle } from './overlay-presenter';
+import {
+    pageReadyAfterBeat,
+    resetPageReadiness,
+    type OverlayPageBeat,
+} from './prematch-loading';
 export interface FrameCalibration {
     dx: number;
     dy: number;
@@ -160,12 +165,7 @@ let holdDown = false;
 let matchActive = false;
 
 /** Last report from each overlay page, keyed by webContents id. */
-interface OverlayBeat {
-    at: number;
-    frameAt: number | null;
-    pageVisible: boolean;
-}
-const overlayBeats = new Map<number, OverlayBeat>();
+const overlayBeats = new Map<number, OverlayPageBeat>();
 /** Since when the overlay window has been on screen, as seen by the health log. */
 let shownSince: number | null = null;
 let lastHealthSignature = '';
@@ -348,6 +348,30 @@ function forgetSlot(webContentsId: number): void {
     shownSince = null;
 }
 
+/**
+ * A renderer reload keeps the same webContents id, so its beat entry would
+ * survive and the remounted page's first heartbeat would never fire the
+ * page-ready replay. Clear readiness whenever a page mount can start.
+ */
+function resetOverlayPageReadiness(webContentsId: number, reason: string): void {
+    resetPageReadiness(overlayBeats, webContentsId, reason, overlayLog);
+}
+
+/** Arm the fresh-page signals on one overlay webContents (electron or OSR). */
+function armPageReadiness(win: BrowserWindow): void {
+    const contentsId = win.webContents.id;
+    win.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+        if (!isMainFrame) return;
+        resetOverlayPageReadiness(contentsId, 'did-start-navigation');
+    });
+    win.webContents.on('did-finish-load', () => {
+        resetOverlayPageReadiness(contentsId, 'did-finish-load');
+    });
+    win.webContents.on('render-process-gone', () => {
+        resetOverlayPageReadiness(contentsId, 'render-process-gone');
+    });
+}
+
 function reloadOverlayRenderer(win: BrowserWindow): void {
     // isWinAlive wraps both destroy checks in a try/catch, and the explicit
     // webContents check closes the window-destroyed-but-webContents-alive gap.
@@ -380,6 +404,9 @@ function reloadOverlayRenderer(win: BrowserWindow): void {
 function armOverlayRenderer(win: BrowserWindow): void {
     const contentsId = win.webContents.id;
     win.on('closed', () => forgetSlot(contentsId));
+    // A reload/navigation keeps the webContents id: re-arm page readiness so the
+    // remounted page's first heartbeat replays the payload again.
+    armPageReadiness(win);
     win.webContents.on('render-process-gone', (_event, details) => {
         console.warn('[overlay] renderer exited');
         overlayLog('renderer-exited', {
@@ -439,12 +466,10 @@ export function noteOverlayHeartbeat(
     const isElectron = windowHasWebContents(overlayWin, webContentsId);
     if (!isNative && !isElectron) return;
     const now = Date.now();
-    const previous = overlayBeats.get(webContentsId);
-    overlayBeats.set(webContentsId, {
-        at: now,
-        frameAt: beat.frames ? now : previous?.frameAt ?? null,
-        pageVisible: beat.pageVisible,
-    });
+    // `previous` is true when this page mount already reported a beat. Page
+    // reloads clear it (resetOverlayPageReadiness), so the next beat is first
+    // again and gets its own replay.
+    const previous = pageReadyAfterBeat(overlayBeats, webContentsId, beat, now);
     // First beat of a page: its effects have run, so a replay is actually heard.
     if (!previous && overlayPageReadyHandler) {
         try {
@@ -980,6 +1005,9 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
     // webContents is torn down with the window; capture its id before the
     // closed callback can read it after teardown.
     const wcId = win.webContents.id;
+    // The OSR page reloads independently of the Electron overlay: give it the
+    // same fresh-page readiness signals.
+    armPageReadiness(win);
     win.on('closed', () => {
         forgetSlot(wcId);
         if (osrWin === win) osrWin = null;
