@@ -1519,7 +1519,7 @@ export const OverlayApp: React.FC = () => {
             >
               {showVision && <VisionRailPanel status={wardStatus} />}
               {showObjectives && (
-                <OverlayChromePanel>
+                <OverlayChromePanel className="ov-panel--short">
                   <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
                     {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
                     {objectiveTimers?.baron ? <div>Baron {objectiveTimers.baron.inSec}s</div> : null}

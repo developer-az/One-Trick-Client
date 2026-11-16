@@ -3,7 +3,7 @@
  * verifier measures the exact markup) and the one ornaments component. Fast
  * refresh falls back to a full reload for it, which is fine for a constant
  * decoration module. */
-import React, { createContext, useContext, useLayoutEffect, useRef } from 'react';
+import React, { createContext, useContext } from 'react';
 import type { HudSkin } from './hudSkins';
 
 /**
@@ -126,105 +126,28 @@ export function useHudSkinChrome(): HudSkinChromeValue {
 }
 
 /**
- * Panels shorter than this draw no corner marks at all: a 22px mark cannot
- * fit a one-line plate (e.g. the "Dragon 95s" timer row) without touching the
- * text. Taller panels still check each corner against the panel's text rects
- * (see HudSkinOrnaments) so an ornament never covers a glyph.
+ * Historical guard value, kept for the settings/preview copy. The live guard is
+ * now CSS: ornaments are sized to the panel's padding gutter (so they can never
+ * reach the content box) and the known one-line panel variants opt out with a
+ * static class (`ov-panel--short`). No runtime measure runs per panel.
  */
 export const ORNAMENT_MIN_PANEL_HEIGHT = 34;
 
-/** Text rects inside a panel (text nodes only, so padding is not counted). */
-function textRectsIn(panel: HTMLElement): DOMRect[] {
-  const rects: DOMRect[] = [];
-  if (typeof document === 'undefined') return rects;
-  const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
-  let node = walker.nextNode();
-  while (node) {
-    const value = node.nodeValue || '';
-    if (value.trim()) {
-      const range = document.createRange();
-      range.selectNodeContents(node);
-      for (const rect of Array.from(range.getClientRects())) {
-        if (rect.width > 0.5 && rect.height > 0.5) rects.push(rect);
-      }
-    }
-    node = walker.nextNode();
-  }
-  return rects;
-}
-
-/** One static corner mark: an absolutely positioned span around an inline SVG. */
+/**
+ * One static corner mark: an absolutely positioned span around an inline SVG.
+ *
+ * There is deliberately no ResizeObserver, MutationObserver or text-rect walk
+ * here: a panel re-renders on every payload update, and measuring every panel's
+ * text on each update made the in-game HUD lay out dozens of times per second.
+ * The CSS gutter placement (see hud-skins.css) is the collision guard.
+ */
 export const HudSkinOrnaments: React.FC<HudSkinChromeValue> = ({ skin, ornaments }) => {
-  const hostRef = useRef<HTMLSpanElement | null>(null);
   const corners = SKIN_CORNERS[skin] ?? ORNAMENT_CORNERS;
   const emblem = ornamentEmblemSource(skin);
 
-  useLayoutEffect(() => {
-    const host = hostRef.current;
-    const panel = host?.parentElement;
-    if (!ornaments || !host || !panel) return;
-    let live = true;
-    let frame = 0;
-    let pendingFrame = 0;
-    const measure = () => {
-      if (!live) return;
-      const spans = Array.from(host.querySelectorAll<HTMLElement>('.ov-skin-orn'));
-      const hide = (span: HTMLElement) => {
-        span.dataset.hidden = 'true';
-      };
-      if (panel.clientHeight < ORNAMENT_MIN_PANEL_HEIGHT) {
-        spans.forEach(hide);
-        return;
-      }
-      const textRects = textRectsIn(panel);
-      for (const span of spans) {
-        const rect = span.getBoundingClientRect();
-        const covered =
-          !!rect.width &&
-          !!rect.height &&
-          textRects.some(
-            (text) =>
-              rect.left < text.right - 0.5 &&
-              rect.right > text.left + 0.5 &&
-              rect.top < text.bottom - 0.5 &&
-              rect.bottom > text.top + 0.5
-          );
-        if (covered) span.dataset.hidden = 'true';
-        else delete span.dataset.hidden;
-      }
-    };
-    /** Coalesce content/layout churn into one re-test per frame. */
-    const schedule = () => {
-      if (pendingFrame) return;
-      pendingFrame = window.requestAnimationFrame(() => {
-        pendingFrame = 0;
-        measure();
-      });
-    };
-    // The collision attribute is written straight to the marks (no state), so
-    // a data payload never re-renders a panel because of an ornament.
-    measure();
-    // Panels settle their content one frame later; fonts can swap too.
-    frame = window.requestAnimationFrame(measure);
-    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null;
-    resizeObserver?.observe(panel);
-    // A row that appears after mount (e.g. the buy row) keeps the panel height
-    // but adds text, so watch the subtree for structural changes as well.
-    const mutationObserver = typeof MutationObserver === 'function' ? new MutationObserver(schedule) : null;
-    mutationObserver?.observe(panel, { childList: true, subtree: true });
-    document.fonts?.ready.then(measure).catch(() => undefined);
-    return () => {
-      live = false;
-      window.cancelAnimationFrame(frame);
-      if (pendingFrame) window.cancelAnimationFrame(pendingFrame);
-      resizeObserver?.disconnect();
-      mutationObserver?.disconnect();
-    };
-  }, [skin, ornaments]);
-
   if (!ornaments) return null;
   return (
-    <span ref={hostRef} className="ov-skin-orn-host" aria-hidden>
+    <span className="ov-skin-orn-host" aria-hidden>
       {corners.map((corner) => (
         <span
           key={corner}

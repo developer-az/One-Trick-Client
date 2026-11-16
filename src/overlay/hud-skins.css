@@ -77,25 +77,37 @@ html.overlay-root,
 /* ---------- Corner ornament placement ----------
  * Ornaments are absolute, pointer-transparent spans inside a panel; they are
  * outside the layout flow, so no skin can move a module box or clip its text.
+ *
+ * Measurement-free bounds: a mark is sized to the panel's padding gutter
+ * (≤6px) and pinned one pixel outside the border edge, so its whole box stays
+ * in the border/padding area and can never reach the content box. A data
+ * payload therefore never triggers a layout read for the ornaments. Panels with
+ * a known one-line variant opt out with the static `ov-panel--short` class
+ * (the min-height rule, resolved from the variant instead of a runtime check).
  */
 .ov-skin-orn {
   position: absolute;
   z-index: 3;
   display: block;
-  width: calc(22px * var(--ov-skin-orn-scale, 1));
-  height: calc(22px * var(--ov-skin-orn-scale, 1));
+  --ov-skin-orn-size: clamp(4px, calc(6px * var(--ov-skin-orn-scale, 1)), 6px);
+  width: var(--ov-skin-orn-size);
+  height: var(--ov-skin-orn-size);
   color: var(--ov-skin-orn, var(--ov-champ, #c9ced6));
   opacity: 0.9;
   pointer-events: none;
 }
 /* The ornament host participates in no layout: its children anchor to the
- * panel. Collision-hidden marks keep their boxes (visibility, not display) so
- * a resize can re-test them without a remount. */
+ * panel. */
 .ov-skin-orn-host {
   display: contents;
 }
-.ov-skin-orn[data-hidden='true'] {
-  visibility: hidden;
+/* Known short variants (one-line plates such as the "Dragon 95s" timer row)
+ * draw no corner marks at all: a 6px mark would sit beside the only text line
+ * and read as noise. This is the static replacement for the old runtime
+ * `clientHeight < ORNAMENT_MIN_PANEL_HEIGHT` measurement. */
+:root[data-ov-skin] .ov-panel--short > .ov-skin-orn-host,
+.hud-skin-scope .ov-panel--short > .ov-skin-orn-host {
+  display: none;
 }
 .ov-skin-orn svg {
   display: block;
@@ -103,28 +115,28 @@ html.overlay-root,
   height: 100%;
 }
 .ov-skin-orn--tl {
-  top: 2px;
-  left: 2px;
+  top: -1px;
+  left: -1px;
 }
 .ov-skin-orn--tr {
-  top: 2px;
-  right: 2px;
+  top: -1px;
+  right: -1px;
 }
 .ov-skin-orn--br {
-  bottom: 2px;
-  right: 2px;
+  bottom: -1px;
+  right: -1px;
 }
 .ov-skin-orn--bl {
-  bottom: 2px;
-  left: 2px;
+  bottom: -1px;
+  left: -1px;
 }
 /* Vanguard's shield crest sits on the header's top edge, centred. */
 .ov-skin-orn--emblem {
-  top: 1px;
+  top: -1px;
   left: 50%;
   transform: translateX(-50%);
-  width: calc(14px * var(--ov-skin-orn-scale, 1));
-  height: calc(14px * var(--ov-skin-orn-scale, 1));
+  width: calc(10px * var(--ov-skin-orn-scale, 1));
+  height: clamp(4px, calc(6px * var(--ov-skin-orn-scale, 1)), 6px);
   opacity: 0.75;
 }
 

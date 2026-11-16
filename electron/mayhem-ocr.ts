@@ -40,9 +40,21 @@ let blackFrameSeen = false;
 let loggedTargetSignature = '';
 
 export interface MayhemOcrRead {
+  /** Display ids: this frame's matches, or the retained roll while a pick session is open. */
   ids: string[];
+  /**
+   * Offer ids matched on THIS frame only. Never the retained/display set, so a
+   * blank frame reads as zero even while the HUD keeps the previous roll up.
+   */
+  frameIds: string[];
   /** A real capture + OCR pass ran for this call (not throttled/cached). */
   fresh: boolean;
+  /**
+   * The capture + OCR pass produced a trustworthy frame. False for a failed
+   * capture, no game window or an OCR exception: such reads must neither
+   * advance nor reset the visibility/pick streaks.
+   */
+  valid: boolean;
   /** Best fuzzy score (0–1) of the matched card titles on this pass. */
   fuzzyScore: number;
   blackFrame: boolean;
@@ -237,7 +249,9 @@ export async function detectMayhemOffers(
   const minMatches = opts.minMatches ?? 1;
   const idle: MayhemOcrRead = {
     ids: lastOfferIds,
+    frameIds: [],
     fresh: false,
+    valid: false,
     fuzzyScore: lastFuzzyScore,
     blackFrame: blackFrameSeen,
     foreground: true,
@@ -256,16 +270,27 @@ export async function detectMayhemOffers(
       blackFrameSeen = true;
       overlayLog('ocr-black-frame', { reason: 'exclusive-fullscreen-or-hidden-window' });
     }
+    // A foreground read is only trusted when the game window itself was
+    // captured; the desktop fallback cannot prove what was on top.
+    const foreground = parsed.target ? parsed.target.foreground !== false : false;
+    const base: MayhemOcrRead = {
+      ids: lastOfferIds,
+      frameIds: [],
+      fresh: true,
+      valid: true,
+      fuzzyScore: lastFuzzyScore,
+      blackFrame: parsed.blackFrame,
+      foreground,
+    };
+    if (parsed.noTarget) {
+      lastCaptureMethod = 'none';
+      return { ...base, valid: false, foreground: false };
+    }
     lastOcrSnippet = parsed.text.slice(0, 400);
     if (!parsed.text.trim()) {
       lastCaptureMethod = 'none';
       lastFuzzyScore = 0;
-      return {
-        ...idle,
-        fresh: true,
-        blackFrame: parsed.blackFrame,
-        foreground: parsed.target?.foreground !== false,
-      };
+      return { ...base, fuzzyScore: 0 };
     }
     const fuzzyScore = bestAugmentMatchConfidence(parsed.text, augments);
     const effectiveMin = effectiveAutoMinMatches({
@@ -275,17 +300,20 @@ export async function detectMayhemOffers(
     });
     const matched = matchAugmentsFromOcr(parsed.text, augments);
     lastFuzzyScore = fuzzyScore;
+    const frameIds = matched.slice(0, 3);
     const ids = applyMatchedOffers(parsed.text, matched, effectiveMin);
     return {
       ids,
+      frameIds,
       fresh: true,
+      valid: true,
       fuzzyScore,
       blackFrame: parsed.blackFrame,
-      foreground: parsed.target?.foreground !== false,
+      foreground,
     };
   } catch (error) {
     logOcrError(String(error));
-    return { ...idle, fresh: true };
+    return { ...idle, fresh: true, valid: false };
   } finally {
     recordLatency('ocr.mayhem', performance.now() - ocrStart);
     ocrInFlight = false;

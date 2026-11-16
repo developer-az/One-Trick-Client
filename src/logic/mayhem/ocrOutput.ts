@@ -52,6 +52,45 @@ function parseTarget(rest: string): MayhemOcrTarget {
 }
 
 /**
+ * Target metadata as JSON: `__OT_TARGET__{"pid":4242,"exe":"League of Legends",…}`.
+ * The process name contains spaces, which the old space-separated key/value
+ * marker could not carry, so the current script emits JSON (the key/value
+ * parser stays for logs from older builds).
+ */
+function targetFromJson(json: string): MayhemOcrTarget | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw as Record<string, unknown>;
+  const text = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.length > 0 ? value : undefined;
+  const bool = (value: unknown): boolean | undefined =>
+    typeof value === 'boolean' ? value : typeof value === 'string' ? parseBool(value) : undefined;
+  const pidRaw = typeof src.pid === 'number' ? src.pid : Number(src.pid);
+  const target: MayhemOcrTarget = {};
+  if (Number.isFinite(pidRaw) && pidRaw > 0) target.pid = pidRaw;
+  const exe = text(src.exe);
+  if (exe) target.exe = exe;
+  const className = text(src.className) ?? text(src.class);
+  if (className) target.className = className;
+  const rect = text(src.rect);
+  if (rect) target.rect = rect;
+  const frame = text(src.frame);
+  if (frame) target.frame = frame;
+  const black = bool(src.black);
+  if (black !== undefined) target.black = black;
+  const foreground = bool(src.foreground) ?? bool(src.fg);
+  if (foreground !== undefined) target.foreground = foreground;
+  return target;
+}
+
+const TARGET_JSON_PREFIX = '__OT_TARGET__';
+
+/**
  * Peel the `__OT_*__` control lines off the PowerShell OCR output.
  * The remaining lines are exactly what Windows.Media.Ocr recognized, so the
  * augment matcher never sees diagnostics.
@@ -65,6 +104,11 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
 
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
+    if (trimmed.startsWith(TARGET_JSON_PREFIX)) {
+      const parsedTarget = targetFromJson(trimmed.slice(TARGET_JSON_PREFIX.length).trim());
+      if (parsedTarget) target = parsedTarget;
+      continue;
+    }
     const marker = MARKER.exec(trimmed);
     if (!marker) {
       kept.push(line);

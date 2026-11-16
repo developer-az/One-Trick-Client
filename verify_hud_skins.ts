@@ -198,11 +198,6 @@ ok(/hudSkin = normalizeHudSkinSettings\(settings\.hudSkin\)/.test(WINDOW_TS), 't
 ok(/export function setHudSkin/.test(WINDOW_TS), 'overlay-window.ts exports setHudSkin');
 ok(/export function getHudSkin/.test(WINDOW_TS), 'overlay-window.ts exports getHudSkin');
 ok(
-  /hudSkinOpacity: clampInt\(src\.hudSkinOpacity, 80, 100/.test(WINDOW_TS) &&
-    /hudSkinScale: clampInt\(src\.hudSkinScale, 75, 150/.test(WINDOW_TS),
-  'the electron store clamps opacity 80–100 and scale 75–150'
-);
-ok(
   /export function setHudSkin[\s\S]{0,400}?saveSettings\(\);[\s\S]{0,200}?broadcastOverlayMeta\(\);/.test(WINDOW_TS),
   'setHudSkin persists and broadcasts live to a running overlay'
 );
@@ -214,6 +209,22 @@ ok(PRELOAD_TS.includes("setOverlayHudSkin: (skin: unknown) => ipcRenderer.invoke
 ok(TYPES.includes('interface HudSkinSettings'), 'types.d.ts declares HudSkinSettings');
 ok(TYPES.includes('setOverlayHudSkin: (skin: Partial<HudSkinSettings>)'), 'types.d.ts types the bridge');
 ok(/hudSkin\?: HudSkinSettings;/.test(TYPES), 'getOverlayStatus carries hudSkin');
+// One normalization implementation: electron imports the pure renderer module.
+ok(
+  WINDOW_TS.includes("from '../src/overlay/hudSkins'") && WINDOW_TS.includes('normalizeHudSkinSettings'),
+  'overlay-window.ts imports normalizeHudSkinSettings from src/overlay/hudSkins.ts'
+);
+ok(!/function normalizeHudSkinSettings\(/.test(WINDOW_TS), 'overlay-window.ts no longer duplicates the normalizer');
+const HUD_SKINS_TS = read('src/overlay/hudSkins.ts');
+ok(
+  /hudSkinOpacity: clampInt\([\s\S]{0,120}?HUD_SKIN_OPACITY_MIN/.test(HUD_SKINS_TS) &&
+    /hudSkinScale: clampInt\([\s\S]{0,120}?HUD_SKIN_SCALE_MIN/.test(HUD_SKINS_TS),
+  'the shared normalizer clamps opacity 80–100 and scale 75–150'
+);
+ok(
+  read('tsconfig.electron.json').includes('src/overlay/hudSkins.ts'),
+  'the electron tsconfig includes the shared pure hudSkins module'
+);
 
 // ---------------------------------------------------------------------------
 console.log('--- live propagation into the overlay ---');
@@ -281,28 +292,31 @@ ok(
 );
 
 // ---------------------------------------------------------------------------
-console.log('--- ornaments never cover text (short panels + per-corner guard) ---');
+console.log('--- ornaments never cover text (CSS gutter + short-panel variant) ---');
 // ---------------------------------------------------------------------------
-ok(ORNAMENT_MIN_PANEL_HEIGHT >= 34, `minimum panel height for ornaments is ${ORNAMENT_MIN_PANEL_HEIGHT}px (>= 34)`);
+ok(ORNAMENT_MIN_PANEL_HEIGHT >= 34, `historical minimum panel height stays ${ORNAMENT_MIN_PANEL_HEIGHT}px (>= 34)`);
 ok(
-  /panel\.clientHeight < ORNAMENT_MIN_PANEL_HEIGHT/.test(ORNAMENTS_TSX),
-  'panels below the minimum height draw no corner marks (the "Dragon 95s" row class)'
-);
-ok(ORNAMENTS_TSX.includes('textRectsIn'), 'each panel measures its text-node rects before drawing a mark');
-ok(
-  /rect\.left < text\.right - 0\.5[\s\S]{0,160}?rect\.bottom > text\.top \+ 0\.5/.test(ORNAMENTS_TSX),
-  'a corner whose box intersects any text rect is hidden (geometric non-overlap)'
-);
-ok(
-  ORNAMENTS_TSX.includes("span.dataset.hidden = 'true'") && ORNAMENTS_TSX.includes('delete span.dataset.hidden'),
-  'the guard marks every corner (and the emblem) as hidden when covered'
+  !ORNAMENTS_TSX.includes('createTreeWalker') &&
+    !ORNAMENTS_TSX.includes('new ResizeObserver') &&
+    !ORNAMENTS_TSX.includes('new MutationObserver') &&
+    !ORNAMENTS_TSX.includes('document.fonts') &&
+    !ORNAMENTS_TSX.includes('getBoundingClientRect') &&
+    !ORNAMENTS_TSX.includes('clientHeight'),
+  'the ornaments component does no runtime measurement (no observers, text walk or layout reads)'
 );
 ok(
-  ORNAMENTS_TSX.includes('ResizeObserver') && ORNAMENTS_TSX.includes('MutationObserver') && ORNAMENTS_TSX.includes('document.fonts'),
-  'the guard re-runs on panel resize, content changes and after fonts load'
+  /--ov-skin-orn-size:\s*clamp\(4px,\s*calc\(6px \* var\(--ov-skin-orn-scale/.test(CSS),
+  'ornament size is clamped to the 6px padding gutter'
 );
-ok(CSS.includes("[data-hidden='true']") && /visibility:\s*hidden/.test(CSS),
-  'hidden marks keep their box but draw nothing (re-testable without a remount)');
+ok(
+  /\.ov-skin-orn--tl\s*\{[^}]*top:\s*-1px[^}]*left:\s*-1px/.test(CSS) &&
+    /\.ov-skin-orn--br\s*\{[^}]*bottom:\s*-1px[^}]*right:\s*-1px/.test(CSS),
+  'corners sit on the border edge with negative offsets (outside the content box)'
+);
+ok(
+  /\.ov-panel--short\s*>\s*\.ov-skin-orn-host\s*\{[^}]*display:\s*none/.test(CSS),
+  'the known one-line panel variant hides its marks with a static class (min-height rule, no measurement)'
+);
 ok(CSS.includes('.ov-skin-orn-host') && /display:\s*contents/.test(CSS),
   'the ornament host adds no layout box');
 ok(

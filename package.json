@@ -122,6 +122,8 @@
     "verify:mayhem-visibility": "npx --yes tsx verify_mayhem_visibility.ts",
     "verify:mayhem-ocr": "npx --yes tsx verify_mayhem_ocr.ts",
     "verify:mayhem-live": "npx --yes tsx verify_mayhem_live.ts",
+    "verify:mayhem-monitor": "npx --yes tsx verify_mayhem_monitor.ts",
+    "verify:hud-skins-dom": "node scripts/verify-hud-skins-dom.mjs",
     "verify:global-hotkeys": "npx --yes tsx verify_global_hotkeys.ts",
     "verify:local-extended": "npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:presenter-live",
     "verify:presenter-live": "node scripts/probe-presenter.mjs",

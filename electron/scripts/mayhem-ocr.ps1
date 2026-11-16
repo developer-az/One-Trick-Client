@@ -229,13 +229,20 @@ if ($CaptureScreen) {
   }
   if ($target) {
     $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)
-    $foregroundText = if ($foreground) { 'true' } else { 'false' }
-    $blackText = if ($blackFrame) { 'true' } else { 'false' }
     $frameWidth = [Math]::Max(64, [int]($target.Width * $WidthFrac))
     $frameHeight = [Math]::Max(64, [int]($target.Height * $HeightFrac))
-    Write-Marker 'TARGET' ("pid={0} exe={1} class={2} rect={3},{4},{5},{6} frame={7}x{8} black={9} fg={10}" -f `
-      $target.ProcessId, $target.Exe, $target.Class, $target.Left, $target.Top, $target.Width, $target.Height, `
-      $frameWidth, $frameHeight, $blackText, $foregroundText)
+    # JSON, not key=value pairs: the game process name is "League of Legends"
+    # (it contains spaces) and the old space-separated marker truncated it.
+    $targetInfo = [ordered]@{
+      pid = [int]$target.ProcessId
+      exe = [string]$target.Exe
+      class = [string]$target.Class
+      rect = "$($target.Left),$($target.Top),$($target.Width),$($target.Height)"
+      frame = "${frameWidth}x${frameHeight}"
+      black = [bool]$blackFrame
+      fg = [bool]$foreground
+    }
+    Write-Output ("__OT_TARGET__" + ($targetInfo | ConvertTo-Json -Compress))
   }
   if ($blackFrame) { Write-Marker 'BLACK_FRAME' }
   if (-not (Test-Path -LiteralPath $ImagePath)) { exit 3 }

@@ -45,7 +45,7 @@ export const OverlayMayhemPanel: React.FC<{
 
   if (resolvedMode === 'reading') {
     return (
-      <div className="hud-overlay-panel px-2 py-1.5">
+      <div className="hud-overlay-panel ov-panel--short px-2 py-1.5">
         <div className="hud-chrome-meta !text-[11px]">Reading augment cards…</div>
       </div>
     );

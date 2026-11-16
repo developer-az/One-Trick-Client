@@ -29,6 +29,7 @@ import {
     type OverlayPageBeat,
 } from './electron/prematch-loading';
 import { prematchLoadingPayload, shouldReplayOverlayState } from './electron/game-monitor';
+import { getMatchHistorySummaries, type LcuRequest } from './electron/match-history';
 import { computeLoadingStats } from './src/overlay/loadingStats';
 import { accentCacheKey, accentTransition } from './src/overlay/champAccent';
 
@@ -544,7 +545,7 @@ console.log('--- verify:prematch-lifecycle: production wiring ---');
         'the session read runs only when no champ-select pick is known'
     );
     ok(
-        monitor.includes('getMatchHistorySummaries({ count: 60 })'),
+        monitor.includes('getMatchHistorySummaries({ count: 60, session: champSelectSession })'),
         'the prefetch asks for 60 summaries and no details'
     );
     ok(
@@ -630,6 +631,54 @@ console.log('--- verify:prematch-lifecycle: production wiring ---');
     ok(!!summaries && summaries.includes('summariesInFlight'), 'summaries never join a detail in-flight slot');
 }
 
+console.log('--- verify:prematch-lifecycle: two reconnects never share a deferred page ---');
+{
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const pending: Array<(value: unknown) => void> = [];
+    let calls = 0;
+    const request: LcuRequest = async (_method, endpoint) => {
+        calls += 1;
+        if (endpoint.startsWith('/lol-summoner')) return { puuid: 'reconnect-puuid' };
+        return new Promise((resolve) => {
+            pending.push(resolve);
+        });
+    };
+    const page = (gameId: number) => ({
+        games: {
+            games: [
+                {
+                    gameId,
+                    gameCreation: 1_700_000_000_000 + gameId,
+                    gameDuration: 1800,
+                    queueId: 420,
+                    participants: [
+                        {
+                            participantId: 1,
+                            championId: 555,
+                            teamId: 100,
+                            stats: { win: true, kills: 1, deaths: 2, assists: 3 },
+                        },
+                    ],
+                    participantIdentities: [],
+                },
+            ],
+        },
+    });
+    // Load token 11 then 12: exactly what two consecutive reconnects pass.
+    const first = getMatchHistorySummaries({ count: 1, session: 11, request });
+    const second = getMatchHistorySummaries({ count: 1, session: 12, request });
+    await flush();
+    ok(second !== first, 'the second reconnect does not receive the first load token\'s promise');
+    ok(calls >= 4, `each reconnect starts its own summaries request (calls=${calls})`);
+    pending[0](page(101));
+    pending[1](page(202));
+    const [firstPage, secondPage] = await Promise.all([first, second]);
+    ok(
+        firstPage[0]?.gameId === 101 && secondPage[0]?.gameId === 202,
+        'the second reconnect accepts only its own result, never the first\'s'
+    );
+}
+
 console.log('--- verify:prematch-lifecycle: session-scoped prefetch + loading slot ---');
 {
     const monitor = code('electron/game-monitor.ts');
@@ -640,8 +689,8 @@ console.log('--- verify:prematch-lifecycle: session-scoped prefetch + loading sl
     const reconnect = bodyOf(monitor, 'prefetchHistoryForReconnect');
     ok(!!reconnect, 'the reconnect path has its own single prefetch');
     ok(
-        !!reconnect && reconnect.includes('getMatchHistorySummaries({ count: 60 })'),
-        'the reconnect prefetch asks for 60 summaries and no details'
+        !!reconnect && reconnect.includes('getMatchHistorySummaries({ count: 60, session: token })'),
+        'the reconnect prefetch carries its load token as the session key'
     );
     ok(
         !!reconnect && reconnect.includes('reconnectSummaryPrefetched === token'),

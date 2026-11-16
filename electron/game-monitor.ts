@@ -94,11 +94,15 @@ import {
     type MayhemPickPhase,
 } from '../src/logic/mayhem/pickPhase';
 import {
-    createMayhemPickCounterState,
-    observeMayhemPickScan,
     readLiveAugmentIds,
-    type MayhemPickCounterState,
 } from '../src/logic/mayhem/pickCount';
+import {
+    createMayhemMonitorState,
+    isUnknownQueueAram,
+    mayhemDiscoveryLive,
+    runMayhemMonitorScan,
+    type MayhemMonitorState,
+} from '../src/logic/mayhem/monitor';
 import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
 import { loadMayhemBundle } from './mayhem-data';
 import {
@@ -108,7 +112,6 @@ import {
     resetMayhemOcrCache,
     resetMayhemOcrMatchFlags,
     setMayhemOcrRetainOffers,
-    type MayhemOcrRead,
 } from './mayhem-ocr';
 import {
     getMayhemPicksTaken,
@@ -511,7 +514,10 @@ async function prefetchHistoryForReconnect(token: number, championId: number): P
     reconnectSummaryPrefetched = token;
     let matches: LoadingMatchLike[] | null = null;
     try {
-        matches = await getMatchHistorySummaries({ count: 60 });
+        // The load token is this prefetch's session key: two consecutive
+        // reconnects must never join each other's in-flight page (the second
+        // would accept the first's result and fold it into the wrong load).
+        matches = await getMatchHistorySummaries({ count: 60, session: token });
     } catch {
         return;
     }
@@ -1035,18 +1041,28 @@ let mayhemManualScanUntilMs = 0;
 /** Page Up dismiss — pause auto OCR until next pick window or Page Down. */
 let mayhemUserDismissedUntilMs = 0;
 let mayhemAugmentDismissedAt = 0;
-/** Hysteresis pick counter — a level-up alone never counts a pick. */
-let mayhemPickCounter: MayhemPickCounterState = createMayhemPickCounterState();
 /** Live Client owned augment ids for this match (ground truth when it exposes them). */
 let mayhemLiveAugmentIds: string[] = [];
 /** Consecutive fresh OCR scans that read at least one offer (single-card HUD gate). */
 let mayhemOfferScanStreak = 0;
 let mayhemOfferFuzzyScore = 0;
+/**
+ * Decision state for this match: pick counter, scan streaks, retained display
+ * ids and the bounded-discovery latch. The pure engine in
+ * src/logic/mayhem/monitor.ts drives it; the fields below are mirrors the rest
+ * of this module reads.
+ */
+let mayhemMonitorState: MayhemMonitorState = createMayhemMonitorState();
 /** Last `mode-detect` line written this match (dedupe: one line per signal set). */
 let lastModeDetectKey = '';
 
 function mayhemOffersDetected(): boolean {
-    return mergedMayhemOfferIds(mayhemOfferIds).length >= 2;
+    // Latched discovery wins even after a blank scan cleared the display ids:
+    // an unknown-queue game that showed augments stays Mayhem for the match.
+    return (
+        mayhemMonitorState.discovery.latched ||
+        mergedMayhemOfferIds(mayhemOfferIds).length >= 2
+    );
 }
 
 /** One `mode-detect` line per distinct signal set, to overlay.log. */
@@ -1108,6 +1124,13 @@ function mayhemAugmentHudShouldShow(): boolean {
 function clearMayhemLiveOffers(): void {
     mayhemOfferIds = [];
     setMayhemRollIds([]);
+    // Drop the engine's display mirror too: a throttled (non-fresh) scan must
+    // not resurrect the roll the HUD just cleared.
+    mayhemMonitorState.displayIds = [];
+    mayhemMonitorState.scanStreak = 0;
+    mayhemMonitorState.fuzzyScore = 0;
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
     resetMayhemOcrCache();
 }
 
@@ -1126,6 +1149,11 @@ function purgeMayhemOffersFromScreen(): void {
     mayhemOfferIds = [];
     setMayhemRollIds([]);
     mayhemManualScanUntilMs = 0;
+    mayhemMonitorState.displayIds = [];
+    mayhemMonitorState.scanStreak = 0;
+    mayhemMonitorState.fuzzyScore = 0;
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
     if (mayhemPickSessionActive) {
         endMayhemPickSession();
     } else {
@@ -1260,7 +1288,11 @@ function scheduleMayhemPoll(delayMs: number): void {
 }
 
 function nextMayhemPollDelayMs(): number {
-    if (!lastGoodPayload || currentMayhemMode() !== 'mayhem') return 15_000;
+    if (!lastGoodPayload) return 15_000;
+    if (currentMayhemMode() !== 'mayhem') {
+        // Discovery is deliberately slow: one foreground scan per 10 s.
+        return mayhemDiscoveryLive(mayhemMonitorState.discovery, Date.now()) ? 10_000 : 15_000;
+    }
     syncMayhemPickPhaseFromPayload();
     if (mayhemPickPhase.pickWindowOpen) return 900;
     if (mayhemPickPhase.waitingForDeath) return 4000;
@@ -1288,10 +1320,15 @@ function startMayhemPoll(): void {
     mayhemManualScanUntilMs = 0;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
-    mayhemPickCounter = createMayhemPickCounterState();
+    // A new match resets the monitor engine, but a discovery window that is
+    // already open (this same match) keeps its clock and 10 s budget.
+    const discovery = mayhemMonitorState.discovery;
+    mayhemMonitorState = createMayhemMonitorState();
+    mayhemMonitorState.discovery = { ...discovery };
     mayhemLiveAugmentIds = [];
-    mayhemOfferScanStreak = 0;
-    mayhemOfferFuzzyScore = 0;
+    mayhemOfferScanStreak = mayhemMonitorState.scanStreak;
+    mayhemOfferFuzzyScore = mayhemMonitorState.fuzzyScore;
+    mayhemOfferIds = mayhemMonitorState.displayIds;
     resetMayhemOcrMatchFlags();
     setMayhemOcrRetainOffers(false);
     resetMayhemMatchState();
@@ -1336,9 +1373,27 @@ export function notifyMayhemOverlayStateChanged(): void {
 
 async function tickMayhemOcr(): Promise<void> {
     if (!inGame || !lastGoodPayload) return;
-    if (currentMayhemMode() !== 'mayhem') return;
-    syncMayhemPickPhaseFromPayload();
-    pushMayhemOverlayPatch();
+    const signals: MayhemModeSignals = {
+        gameMode: lastGoodPayload.gameMode ?? null,
+        mapName: lastGoodPayload.mapName ?? null,
+        queueId: matchQueueId ?? lastGoodPayload.queueId ?? null,
+        mapId: matchMapId ?? lastGoodPayload.mapId ?? null,
+        augmentOffersDetected: mayhemOffersDetected(),
+    };
+    const mode = currentMayhemMode();
+    const now = Date.now();
+    // Unknown-queue ARAM: scan at a slow, bounded cadence so offer cards can
+    // classify the match. Classic ARAM (450) and other maps never qualify.
+    const discovery =
+        mode !== 'mayhem' &&
+        isUnknownQueueAram(signals) &&
+        mayhemDiscoveryLive(mayhemMonitorState.discovery, now);
+    if (mode !== 'mayhem' && !discovery) return;
+
+    if (mode === 'mayhem') {
+        syncMayhemPickPhaseFromPayload();
+        pushMayhemOverlayPatch();
+    }
 
     const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
     mayhemLastLevel = level;
@@ -1346,61 +1401,62 @@ async function tickMayhemOcr(): Promise<void> {
     const bundle = loadMayhemBundle();
     if (!bundle?.augments?.length) return;
 
-    if (!shouldRunMayhemAutoOcr(level)) {
-        if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
-        pushMayhemOverlayPatch();
-        return;
+    let minGap = 0;
+    if (mode === 'mayhem') {
+        if (!shouldRunMayhemAutoOcr(level)) {
+            if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
+            pushMayhemOverlayPatch();
+            return;
+        }
+        const onScreen = mayhemAugmentHudShouldShow();
+        setMayhemOcrRetainOffers(onScreen);
+        const rerollPending = isMayhemOcrRerollPending();
+        const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
+        minGap = onScreen
+            ? rerollPending
+                ? 550
+                : needThirdCard
+                  ? 450
+                  : mayhemOfferIds.length >= 3
+                    ? 1100
+                    : 750
+            : 1400;
+    } else {
+        setMayhemOcrRetainOffers(false);
     }
 
-    const onScreen = mayhemAugmentHudShouldShow();
-    setMayhemOcrRetainOffers(onScreen);
-    const rerollPending = isMayhemOcrRerollPending();
-    const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
-    const minGap = onScreen
-        ? rerollPending
-            ? 550
-            : needThirdCard
-              ? 450
-              : mayhemOfferIds.length >= 3
-                ? 1100
-                : 750
-        : 1400;
-    const read = await detectMayhemOffers(
-        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
-        minGap,
-        { minMatches: 2 }
+    const result = await runMayhemMonitorScan(
+        mayhemMonitorState,
+        {
+            now,
+            level,
+            isDead: !!lastGoodPayload?.localPlayer?.isDead,
+            signals,
+            liveAugmentIds: mayhemLiveAugmentIds,
+            autoOcrAllowed: mode === 'mayhem' ? shouldRunMayhemAutoOcr(level) : true,
+        },
+        (minMatches) =>
+            detectMayhemOffers(
+                bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+                minGap,
+                { minMatches }
+            )
     );
-    mayhemOfferIds = read.ids;
-    if (read.ids.length) setMayhemRollIds(read.ids);
-    if (read.fresh) {
-        mayhemOfferFuzzyScore = read.fuzzyScore;
-        mayhemOfferScanStreak = read.ids.length > 0 ? mayhemOfferScanStreak + 1 : 0;
-        observeMayhemPickScanForMatch(read);
-    }
-    applyMayhemOfferVisibilityAfterOcr();
-    pushMayhemOverlayPatch();
-}
+    mayhemMonitorState = result.state;
+    // Display ids may keep the last roll while the HUD is open; the counter
+    // already used this frame's ids only (frameIds) inside the engine.
+    mayhemOfferIds = result.state.displayIds;
 
-/**
- * Feed one fresh OCR frame to the pick counter. A pick is only recorded when
- * two consecutive frames showed offers and two consecutive frames showed none
- * (alive, foreground, non-black) — or when the Live Client lists augments.
- */
-function observeMayhemPickScanForMatch(read: MayhemOcrRead): void {
-    const isDead = !!lastGoodPayload?.localPlayer?.isDead;
-    const before = mayhemPickCounter.picksTaken;
-    mayhemPickCounter = observeMayhemPickScan(mayhemPickCounter, {
-        offerCount: read.ids.length,
-        isDead,
-        foreground: read.foreground,
-        blackFrame: read.blackFrame,
-        liveAugmentIds: mayhemLiveAugmentIds,
-    });
-    if (mayhemPickCounter.picksTaken > before) {
-        setMayhemPicksTaken(mayhemPickCounter.picksTaken);
-        mayhemPickPhase = { ...mayhemPickPhase, picksTaken: mayhemPickCounter.picksTaken };
+    mayhemOfferScanStreak = result.state.scanStreak;
+    mayhemOfferFuzzyScore = result.state.fuzzyScore;
+    if (mayhemOfferIds.length) setMayhemRollIds(mayhemOfferIds);
+    if (result.counted > 0) {
+        setMayhemPicksTaken(result.state.counter.picksTaken);
+        mayhemPickPhase = { ...mayhemPickPhase, picksTaken: result.state.counter.picksTaken };
         purgeMayhemOffersFromScreen();
     }
+    if (result.scanned) applyMayhemOfferVisibilityAfterOcr();
+    pushMayhemOverlayPatch();
 }
 
 export function clearMayhemOffersForDashboard(): void {
@@ -1445,10 +1501,10 @@ function resetMatchCaches(): void {
     mayhemManualScanUntilMs = 0;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
-    mayhemPickCounter = createMayhemPickCounterState();
+    mayhemMonitorState = createMayhemMonitorState();
     mayhemLiveAugmentIds = [];
-    mayhemOfferScanStreak = 0;
-    mayhemOfferFuzzyScore = 0;
+    mayhemOfferScanStreak = mayhemMonitorState.scanStreak;
+    mayhemOfferFuzzyScore = mayhemMonitorState.fuzzyScore;
     lastModeDetectKey = '';
     setMayhemOcrRetainOffers(false);
     resetMayhemMatchState();
@@ -1802,9 +1858,22 @@ function syncMayhemPollForMode(signals: {
     queueId?: number | null;
     mapId?: number | null;
 }): void {
-    if (logModeDetect({ ...signals, augmentOffersDetected: mayhemOffersDetected() }) === 'mayhem') {
+    const mode = logModeDetect({ ...signals, augmentOffersDetected: mayhemOffersDetected() });
+    if (mode === 'mayhem') {
         if (!mayhemPollTimer) startMayhemPoll();
         return;
+    }
+    if (isUnknownQueueAram(signals)) {
+        // Unknown queue on Howling Abyss: a bounded discovery window lets the
+        // OCR prove Mayhem. Classic ARAM (queue 450) never reaches this branch.
+        const now = Date.now();
+        if (mayhemMonitorState.discovery.startedAt == null) {
+            mayhemMonitorState.discovery.startedAt = now;
+        }
+        if (mayhemDiscoveryLive(mayhemMonitorState.discovery, now)) {
+            if (!mayhemPollTimer) startMayhemPoll();
+            return;
+        }
     }
     stopMayhemPoll();
 }

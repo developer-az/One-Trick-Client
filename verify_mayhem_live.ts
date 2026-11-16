@@ -301,6 +301,27 @@ ok(parsed.blackFrame === true, 'black frame marker parsed');
 ok(parsed.language === 'en-US', 'OCR language parsed');
 ok(parseMayhemOcrOutput('__OT_NO_TARGET__\ntext').noTarget === true, 'no-target marker parsed');
 
+// The target marker is JSON now: the process name is "League of Legends" and
+// the old space-separated marker truncated it at the first space.
+const jsonRaw = [
+  '__OT_TARGET__{"pid":4242,"exe":"League of Legends","class":"RiotWindowClass","rect":"100,50,1600,900","frame":"1360x765","black":false,"fg":true}',
+  'Jeweled Gauntlet',
+].join('\r\n');
+const jsonParsed = parseMayhemOcrOutput(jsonRaw);
+ok(jsonParsed.text.trim() === 'Jeweled Gauntlet', 'JSON target marker is stripped from OCR text');
+ok(jsonParsed.target?.exe === 'League of Legends', 'JSON target keeps the full exe name (League of Legends)');
+ok(jsonParsed.target?.pid === 4242, 'JSON target pid parsed');
+ok(jsonParsed.target?.className === 'RiotWindowClass', 'JSON target class parsed');
+ok(jsonParsed.target?.rect === '100,50,1600,900', 'JSON target rect parsed');
+ok(jsonParsed.target?.frame === '1360x765', 'JSON target frame parsed');
+ok(jsonParsed.target?.black === false && jsonParsed.target?.foreground === true, 'JSON target flags parsed');
+ok(
+  fs
+    .readFileSync(path.join(root, 'electron', 'scripts', 'mayhem-ocr.ps1'), 'utf8')
+    .includes('__OT_TARGET__'),
+  'the PowerShell capture script emits the JSON target marker'
+);
+
 console.log('--- capture masking ---');
 const mask = mayhemPanelMaskRect({ x: 0, y: 0, width: 2560, height: 1440 }, 1);
 ok(mask.width === 380 && mask.height === 220, 'mask uses the panel footprint');
