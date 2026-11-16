@@ -228,6 +228,16 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
         </Card>
 
         <Card>
+          <CardHeader title="Hotkeys" sub="Work while League has focus." />
+          <dl className="space-y-2.5 text-sm">
+            <Hotkey keys={['Page Up']} alt="Num 9" label="Enemy ADC used Flash" />
+            <Hotkey keys={['Page Down']} alt="Num 3" label="Enemy support used Flash" />
+            <Hotkey keys={['Ctrl', 'Shift', 'H']} label="Show or hide overlay" />
+            <Hotkey keys={['Ctrl', 'Shift', 'U']} label="Unlock overlay to move it" />
+          </dl>
+        </Card>
+
+        <Card>
           <CardHeader
             title="Match League's interface"
             sub="Use the same values as League's Interface settings so panels line up."
@@ -330,6 +340,25 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
   );
 };
 
+
+const Hotkey: React.FC<{ keys: string[]; alt?: string; label: string }> = ({ keys, alt, label }) => (
+  <div className="flex items-center justify-between gap-4">
+    <dt className="ot-muted">{label}</dt>
+    <dd className="flex gap-1 flex-none">
+      {keys.map((k) => (
+        <kbd key={k} className="ot-kbd">
+          {k}
+        </kbd>
+      ))}
+      {alt ? (
+        <>
+          <span className="ot-faint text-xs self-center px-0.5">or</span>
+          <kbd className="ot-kbd">{alt}</kbd>
+        </>
+      ) : null}
+    </dd>
+  </div>
+);
 const Slider: React.FC<{ label: string; value: number; onChange: (v: number) => void }> = ({ label, value, onChange }) => (
   <label className="block py-2">
     <div className="flex justify-between text-[15px] mb-1.5">

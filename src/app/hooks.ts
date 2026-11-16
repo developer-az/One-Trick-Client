@@ -6,7 +6,7 @@ import { roleFromLcuPosition } from '../catalog/roles';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { solveRoles } from '../logic/championPositions';
 import type { Champion } from '../logic/pykeLogic';
-import { orbitTier, type OrbitTier } from './orbitLayout';
+import { diskSize, orbitTier, type OrbitTier } from './orbitLayout';
 import {
   genericProfileId,
   getProfile,
@@ -769,12 +769,18 @@ export function useScouting(live: boolean): { players: ScoutingPlayer[]; loading
  * Window width to disk tier (arc / segmented bar / icon bar). One resize
  * listener, one state update per resize: no scroll work, no animation loop.
  */
-export function useOrbitTier(): OrbitTier {
+export function useViewportWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1600 : window.innerWidth));
   useEffect(() => {
     const onResize = () => setWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  return orbitTier(width);
+  return width;
+}
+
+/** Disk tier plus diameter for the current window width. */
+export function useOrbitShell(): { tier: OrbitTier; disk: number; width: number } {
+  const width = useViewportWidth();
+  return { tier: orbitTier(width), disk: diskSize(width), width };
 }

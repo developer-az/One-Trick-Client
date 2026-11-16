@@ -2,10 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import { championSplashUrl } from '../data/ddragonAssets';
 import type { Champion } from '../logic/pykeLogic';
-import { IconDraft, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats, IconCheck, IconGauge } from './icons';
+import { IconDraft, IconHome, IconLoadout, IconMayhem, IconOverlay, IconStats, IconCheck } from './icons';
 import { ChromeMark } from '../overlay/ChromeMark';
 import {
-  isDesktop,
   profileIdFor,
   ROLES,
   useAppSettings,
@@ -23,12 +22,11 @@ import {
   APPEARANCE_LAYOUT_OPTIONS,
   mainChampionId,
   useChampionAccent,
-  useOrbitTier,
+  useOrbitShell,
 } from './hooks';
 import { leagueStatus } from './status';
-import { Button, Pill, Toasts, Portrait } from './ui';
-import { Filigree, type BannerChampion } from './ornaments';
-import { IconProfile, OrbitNav, type OrbitNavItem } from './OrbitNav';
+import { Button, Toasts, Portrait } from './ui';
+import { OrbitNav, type OrbitNavItem } from './OrbitNav';
 import { addPin, movePin, pinHandlers, removePin } from './orbitLayout';
 import { HomeView } from './views/HomeView';
 import { DraftView } from './views/DraftView';
@@ -44,6 +42,11 @@ import { PET_DEFAULTS, PET_SPECIES, PET_COLORS, PET_SPECIES_LABELS, COLOR_HEX } 
 
 export type ViewId = 'home' | 'draft' | 'loadout' | 'mayhem' | 'stats' | 'review' | 'overlay' | 'performance' | 'profile';
 
+/**
+ * The reference's nav set. Profile is reached from the profile pill and
+ * Performance from the Stats page — nothing is dropped, nothing extra is
+ * invented for the arc.
+ */
 const NAV: OrbitNavItem[] = [
   { id: 'home', label: 'Home', icon: <IconHome /> },
   { id: 'draft', label: 'Draft', icon: <IconDraft /> },
@@ -52,23 +55,22 @@ const NAV: OrbitNavItem[] = [
   { id: 'review', label: 'Review', icon: <IconCheck /> },
   { id: 'mayhem', label: 'Mayhem', icon: <IconMayhem /> },
   { id: 'overlay', label: 'Overlay', icon: <IconOverlay /> },
-  { id: 'performance', label: 'Performance', icon: <IconGauge /> },
-  { id: 'profile', label: 'Profile', icon: <IconProfile /> },
 ];
 
 const VIEW_KEY = 'onetrick.view';
+const VALID_VIEWS: ViewId[] = [...NAV.map((n) => n.id), 'performance', 'profile'];
 
 function loadView(): ViewId {
   try {
     const v = localStorage.getItem(VIEW_KEY);
-    if (v && NAV.some((n) => n.id === v)) return v as ViewId;
+    if (v && VALID_VIEWS.includes(v as ViewId)) return v as ViewId;
   } catch {
     /* ignore */
   }
   return 'home';
 }
 
-/** Monogram for the profile chip: the app has no Riot profile icon yet. */
+/** Monogram for the profile pill (the client has no Riot profile icon yet). */
 function monogram(name: string): string {
   return (
     name
@@ -76,8 +78,25 @@ function monogram(name: string): string {
       .filter(Boolean)
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase() || '')
-      .join('') || 'OT'
+      .join('') || ''
   );
+}
+
+/**
+ * Where the profile pill sits. The mockup's spot is top-right; when the
+ * frameless window reports its native min/max/close overlay the pill drops
+ * just below that strip instead, so the two never collide. The browser
+ * preview and the screenshot harness have no overlay: the reference's spot.
+ */
+function titlebarMetrics(): { right: number; top: number } {
+  const overlay =
+    typeof navigator === 'undefined'
+      ? undefined
+      : (navigator as Navigator & {
+          windowControlsOverlay?: { visible?: boolean; getTitlebarAreaRect?: () => { width: number } };
+        }).windowControlsOverlay;
+  if (overlay && overlay.visible) return { right: 16, top: 158 };
+  return { right: 16, top: 14 };
 }
 
 export const App: React.FC = () => {
@@ -97,7 +116,8 @@ export const App: React.FC = () => {
   const { profile, setProfileId } = useProfile(draft, league, catalog.stamp);
   const { toasts, push, dismiss } = useToasts();
   const status = leagueStatus(league, draft);
-  const tier = useOrbitTier();
+  const { tier, disk } = useOrbitShell();
+  const titlebar = titlebarMetrics();
 
   // Jump to champ select when it starts; a lobby is the one moment the user
   // needs this screen without having to look for it.
@@ -135,26 +155,24 @@ export const App: React.FC = () => {
     }
   }, [enemies, allyAdc, allyPartner, profile]);
 
-  // Home's build card always has something real to show: the live loadout when
-  // enemies are known, else the champion profile's baseline plan.
-  const planBuild = useMemo(() => {
-    if (loadout?.build) return loadout.build;
+  // Home's build card always has real numbers: the live loadout when enemies
+  // are known, else the champion profile's baseline plan.
+  const plan = useMemo(() => {
+    if (loadout) return { build: loadout.build, runes: loadout.runes };
     try {
-      return profile.calculateBuild([]);
+      const build = profile.calculateBuild([]);
+      return { build, runes: profile.calculateRunes([], build) };
     } catch (error) {
-      console.error('Baseline build failed:', error);
+      console.error('Baseline plan failed:', error);
       return null;
     }
   }, [loadout, profile]);
+
   const { settings, update } = useAppSettings();
-  // The champion banner needs the history even before Stats is opened: an
-  // unset main champion defaults to the most-played one, and Home reads form.
   const wantsHistory =
     view === 'home' || view === 'stats' || view === 'profile' || draft.live || !settings?.appearance?.mainChampion;
   const history = useMatchHistory(league, wantsHistory);
 
-  // Apply dashboard appearance (theme/accent/density/radius/glass/font scale)
-  // straight to the app root so token.css / theme.css react immediately.
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   useEffect(() => {
     applyAppearance(settings);
@@ -179,6 +197,7 @@ export const App: React.FC = () => {
       document.documentElement.removeAttribute('data-ot-scrolling');
     };
   }, [view]);
+
   const appearance = settings?.appearance;
   const ap: AppearanceSettings = appearance ?? {
     theme: 'gothic',
@@ -191,13 +210,12 @@ export const App: React.FC = () => {
     layoutPreset: 'compact',
     ornament: 50,
   };
-  const setAppearance = (patch: Partial<AppearanceSettings>) =>
-    update({ appearance: patch as AppearanceSettings });
+  const setAppearance = (patch: Partial<AppearanceSettings>) => update({ appearance: patch as AppearanceSettings });
 
   // Champion-driven shell: explicit main champion, else the most-played in
   // history. The accent is sampled only when the champion palette is active.
   const mainChampionKey = mainChampionId(ap, history.games, catalog.champions);
-  const mainChampion: BannerChampion | null = mainChampionKey
+  const mainChampion: Champion | { id: string; name: string; key: string } | null = mainChampionKey
     ? catalog.champions.find((c) => c.id === mainChampionKey) || {
         id: mainChampionKey,
         name: mainChampionKey,
@@ -206,9 +224,8 @@ export const App: React.FC = () => {
     : null;
   useChampionAccent(mainChampion, ap.accent === 'champion');
 
-  // Pinned champions live in settings (top-level, so old appearance files
-  // migrate cleanly). Only an absent list falls back to the main champion; an
-  // explicitly empty list means nothing is pinned.
+  // Pinned champions live in settings (top-level). Only an absent list falls
+  // back to the main champion; an explicitly empty list means nothing is pinned.
   const storedPins = settings?.pinnedChampions;
   const pinnedChampions: string[] = Array.isArray(storedPins)
     ? storedPins
@@ -223,8 +240,6 @@ export const App: React.FC = () => {
     setActive: (id: string) =>
       setAppearance({
         mainChampion: id,
-        // Picking a champion opts into the champion palette unless the user
-        // already chose a different one (kept from the old main-champion picker).
         accent: ap.accent === 'chrome' ? 'champion' : ap.accent,
       }),
   });
@@ -238,8 +253,6 @@ export const App: React.FC = () => {
     loadout,
     settings,
     onResult: (res, first) => {
-      // The first send per lobby and any failure are worth a toast; silent
-      // re-sends as enemies lock in would just be noise.
       if (!res.ok) push({ tone: 'bad', title: `Auto-import: ${res.title}`, body: res.body });
       else if (first) push({ tone: 'good', title: 'Runes and items imported', body: res.body });
     },
@@ -262,8 +275,20 @@ export const App: React.FC = () => {
     [draft.live, league.inGame]
   );
 
+  // Room for the fan on ordinary views (the arc pills sit under the disk).
+  const mainPad = tier === 'arc' ? Math.round(disk / 2 + 120) : Math.round(disk / 2 + 170);
+
   return (
-    <div className="ot-shell" data-ot-view={view}>
+    <div
+      className="ot-shell"
+      data-ot-view={view}
+      style={{
+        ['--ot-disk-size' as string]: `${disk}px`,
+        ['--ot-titlebar-right' as string]: `${titlebar.right}px`,
+        ['--ot-titlebar-top' as string]: `${titlebar.top}px`,
+        ['--ot-main-pad' as string]: `${mainPad}px`,
+      }}
+    >
       <div className="ot-bg" aria-hidden="true">
         <div className="ot-bg-art">
           {mainChampionKey ? (
@@ -280,63 +305,35 @@ export const App: React.FC = () => {
         <div className="ot-bg-ink" />
       </div>
 
-      <header className="ot-titlebar">
-        <div className="ot-brand">
-          <span className="ot-brand-mark">
-            <ChromeMark size={19} />
+      <div className="ot-drag" aria-hidden="true" />
+
+      <div className="ot-status" data-ot-geo="status" title={status.detail}>
+        <span className="ot-status-dot" />
+        <span>{status.short}</span>
+      </div>
+
+      <button
+        type="button"
+        className="ot-profile-chip"
+        data-ot-geo="profile"
+        onClick={() => setView('profile')}
+        aria-label={connected && summonerName ? `Profile: ${summonerName}` : 'Profile: connect your account'}
+        aria-current={view === 'profile' ? 'page' : undefined}
+      >
+        <span className="ot-profile-chip-avatar" aria-hidden="true">
+          {connected && summonerName ? monogram(summonerName) : <ChromeMark size={14} />}
+        </span>
+        <span className="ot-profile-chip-text">
+          <b className="ot-profile-chip-name">{connected && summonerName ? summonerName : 'Profile'}</b>
+          <span className="ot-profile-chip-sub">
+            {connected && summonerName ? 'Profile' : 'Connect account'}
           </span>
-          One Trick
-        </div>
-        <div className="flex items-center gap-2 ot-no-drag min-w-0" data-ot-geo="status">
-          <Pill tone={status.tone} title={status.detail}>
-            {status.short}
-          </Pill>
-          {catalog.patch ? <span className="text-xs ot-faint hidden md:inline">Patch {catalog.patch}</span> : null}
-        </div>
-        <div className="ot-titlebar-right ot-no-drag">
-          <Button
-            variant="ghost"
-            icon={
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="2.5" y="2.5" width="19" height="19" rx="4" stroke="currentColor" strokeWidth="1.7" />
-                <circle cx="8" cy="9" r="2" fill="currentColor" />
-                <circle cx="16" cy="9" r="2" fill="currentColor" />
-                <circle cx="8" cy="16" r="2" fill="currentColor" />
-                <circle cx="16" cy="16" r="2" fill="currentColor" />
-              </svg>
-            }
-            onClick={() => setAppearanceOpen((o) => !o)}
-            aria-haspopup="dialog"
-            aria-expanded={appearanceOpen}
-            aria-label="Appearance"
-          >
-            Appearance
-          </Button>
-          <button
-            type="button"
-            className="ot-profile-chip"
-            data-ot-geo="profile"
-            onClick={() => setView('profile')}
-            aria-label={connected && summonerName ? `Profile: ${summonerName}` : 'Profile: connect your account'}
-            aria-current={view === 'profile' ? 'page' : undefined}
-          >
-            <span className="ot-profile-chip-avatar" aria-hidden="true">
-              {connected && summonerName ? monogram(summonerName) : <ChromeMark size={14} />}
-            </span>
-            <span className="ot-profile-chip-text">
-              <span className="ot-profile-chip-name truncate">
-                {connected && summonerName ? summonerName : 'Connect account'}
-              </span>
-              <span className="ot-profile-chip-sub truncate">
-                {connected && summonerName ? 'Rank: not linked' : 'Riot API coming soon'}
-              </span>
-            </span>
-          </button>
-        </div>
-      </header>
+        </span>
+      </button>
 
       <OrbitNav
         tier={tier}
+        disk={disk}
         items={navItems}
         view={view}
         onSelect={setView}
@@ -346,10 +343,9 @@ export const App: React.FC = () => {
         champions={catalog.champions}
         activePinId={mainChampionKey || null}
         pinActions={{ ...pinActions, onPin: (id: string) => setPins(addPin(pinnedChampions, id)) }}
-        onOpenProfile={() => setView('profile')}
       />
 
-      <main className="ot-main">
+      <main className={`ot-main ${view === 'home' ? 'is-home' : ''}`}>
         {view === 'home' ? (
           <HomeView
             league={league}
@@ -360,9 +356,7 @@ export const App: React.FC = () => {
             mainChampion={mainChampion}
             games={history.games}
             loadout={loadout}
-            plan={planBuild}
-            onSelectChampion={selectChampion}
-            onSelectProfile={setProfileId}
+            plan={plan}
             onNavigate={setView}
           />
         ) : null}
@@ -383,6 +377,9 @@ export const App: React.FC = () => {
             profile={profile}
             loadout={loadout}
             connected={league.lcu?.state === 'connected'}
+            champions={catalog.champions}
+            onSelectChampion={selectChampion}
+            onSelectProfile={setProfileId}
             onNavigate={setView}
             onToast={push}
           />
@@ -402,6 +399,7 @@ export const App: React.FC = () => {
             error={history.error}
             connected={league.lcu?.state === 'connected'}
             onReload={history.reload}
+            onNavigate={setView}
           />
         ) : null}
         {view === 'review' ? <ReviewView /> : null}
@@ -415,6 +413,8 @@ export const App: React.FC = () => {
             pins={pinnedChampions}
             activePinId={mainChampionKey || null}
             activeChampion={mainChampion}
+            settings={settings}
+            onOpenAppearance={() => setAppearanceOpen(true)}
             pinActions={{
               ...pinActions,
               onPin: (id: string) => setPins(addPin(pinnedChampions, id)),
@@ -423,16 +423,6 @@ export const App: React.FC = () => {
           />
         ) : null}
       </main>
-
-      <footer className="ot-shell-foot">
-        <span className="ot-shell-foot-rule">
-          <Filigree />
-        </span>
-        <p className="ot-shell-foot-text">
-          {isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games · Auto-clip plays FFmpeg 6.1.1
-          (GPL-3.0) as a separate program — see THIRD_PARTY_NOTICES.txt
-        </p>
-      </footer>
 
       <PixelPet stage={status.stage} preference={pet} />
 

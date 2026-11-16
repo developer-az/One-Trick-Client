@@ -31,6 +31,15 @@ export const ORBIT_BAR_BELOW = 1100;
 /** Below this viewport width the bar becomes icon-only. */
 export const ORBIT_ICONS_BELOW = 760;
 
+/** Disk diameter: 23% of the viewport, clamped to the reference's bounds. */
+export const DISK_MIN = 260;
+export const DISK_MAX = 420;
+export const DISK_WIDTH_RATIO = 0.23;
+
+export function diskSize(viewportWidth: number): number {
+  const raw = Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth * DISK_WIDTH_RATIO : 300;
+  return Math.round(Math.min(DISK_MAX, Math.max(DISK_MIN, raw)));
+}
 export type OrbitTier = 'arc' | 'bar' | 'icons';
 
 /** Which shell the disk uses for a window width. */
@@ -86,6 +95,12 @@ export interface OrbitOptions {
   itemHeight?: number;
   /** Give each ring a slice of the angle range instead of stacking radially. */
   splitSpan?: boolean;
+  /**
+   * Collision shape: 'rect' for pills (axis-aligned boxes), 'circle' for pin
+   * portraits. Two round portraits 48px apart never visually touch, while two
+   * boxed pills on a steep arc do — so circles may sit closer.
+   */
+  shape?: 'rect' | 'circle';
 }
 
 function sizeOf(size: OrbitSize | number | undefined, fallbackHeight: number): { width: number; height: number } {
@@ -207,6 +222,27 @@ function toRects(placements: OrbitPlacement[]): Rect[] {
   }));
 }
 
+/** Circle collision: centre distance must clear both radii plus the gap. */
+function circlesOverlap(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+  gap: number
+): boolean {
+  const dx = a.x + a.width / 2 - (b.x + b.width / 2);
+  const dy = a.y + a.height / 2 - (b.y + b.height / 2);
+  const min = (a.width + b.width) / 2 + gap;
+  return dx * dx + dy * dy < min * min - 0.25;
+}
+
+function anyCircleOverlap(rects: Rect[], gap: number): boolean {
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      if (circlesOverlap(rects[i], rects[j], gap)) return true;
+    }
+  }
+  return false;
+}
+
 function extent(placements: OrbitPlacement[]): { width: number; height: number } {
   if (!placements.length) return { width: 0, height: 0 };
   let minX = Number.POSITIVE_INFINITY;
@@ -273,7 +309,9 @@ export function orbitLayout<T extends { id: string }>(
       ringRadii.push(ringRadius);
       placements.push(...placed);
     }
-    if (anyOverlap(toRects(placements))) return null;
+    if (options.shape === 'circle' ? anyCircleOverlap(toRects(placements), gap) : anyOverlap(toRects(placements))) {
+      return null;
+    }
     return { placements, ringRadii };
   };
 
@@ -286,8 +324,10 @@ export function orbitLayout<T extends { id: string }>(
   } else {
     for (let k = 1; k <= maxRings; k++) ringCounts.push(k);
   }
-  for (const ringCount of ringCounts) {
-    for (let r = base; r <= maxRadius; r += step) {
+  // Radius outer, rings inner: the first hit is the tightest fan that fits,
+  // which is what the reference shows (rings open before the arc grows).
+  for (let r = base; r <= maxRadius; r += step) {
+    for (const ringCount of ringCounts) {
       const attempt = build(ringCount, r);
       if (!attempt) continue;
       const box = extent(attempt.placements);
@@ -438,4 +478,88 @@ export function pinHandlers(args: {
 /** The pin a click should make active: the clicked id when it is pinned. */
 export function activePin(list: readonly string[], id: string, fallback: string): string {
   return list.includes(id) ? id : fallback;
+}
+
+/* ------------------------------------------------------- reference anchors */
+
+/** Polar anchor: 
+ is a multiple of the disk radius, deg from +x (y down). */
+export interface OrbitAnchor {
+  r: number;
+  deg: number;
+}
+
+/** Evenly spaced anchors between two polar points (inclusive). */
+export function anchorsAlongArc(count: number, from: OrbitAnchor, to: OrbitAnchor): OrbitAnchor[] {
+  const n = Math.max(1, Math.trunc(count));
+  if (n === 1) return [from];
+  const out: OrbitAnchor[] = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    out.push({ r: from.r + (to.r - from.r) * t, deg: from.deg + (to.deg - from.deg) * t });
+  }
+  return out;
+}
+
+/**
+ * Lay items on the approved mockup's fan: each item takes its polar anchor
+ * (scaled by the disk radius), then any pair whose boxes touch is
+ * pushed radially outward in small steps until the set is collision free.
+ * The reference's hand-placed shape is kept; the guarantee is a solver.
+ */
+export function orbitFromAnchors<T extends { id: string }>(
+  items: readonly T[],
+  anchors: ReadonlyArray<OrbitAnchor>,
+  radius: number,
+  itemSizes: ReadonlyArray<OrbitSize | number | undefined>,
+  options: OrbitOptions = {}
+): OrbitLayout {
+  const gap = options.gap ?? ORBIT_GAP;
+  const fallbackHeight = options.itemHeight ?? ORBIT_ITEM_HEIGHT;
+  const base = Math.max(24, Number.isFinite(radius) && radius > 0 ? radius : 150);
+  const placements: OrbitPlacement[] = items.map((item, i) => {
+    const anchor = anchors[i] || anchors[anchors.length - 1] || { r: 1.5, deg: 45 };
+    const size = sizeOf(itemSizes[i], fallbackHeight);
+    const rad = (anchor.deg * Math.PI) / 180;
+    return {
+      id: item.id,
+      ring: 0,
+      angleDeg: anchor.deg,
+      x: Math.cos(rad) * anchor.r * base,
+      y: Math.sin(rad) * anchor.r * base,
+      width: size.width,
+      height: size.height,
+    };
+  });
+
+  const hits = (list: OrbitPlacement[]): boolean =>
+    options.shape === 'circle' ? anyCircleOverlap(toRects(list), gap) : anyOverlap(toRects(list));
+
+  // Radial relaxation: push the later item of each colliding pair outward.
+  for (let pass = 0; pass < 240 && hits(placements); pass++) {
+    for (let i = 0; i < placements.length; i++) {
+      for (let j = i + 1; j < placements.length; j++) {
+        const a = placements[i];
+        const b = placements[j];
+        const ra = { x: a.x - a.width / 2, y: a.y - a.height / 2, width: a.width, height: a.height };
+        const rb = { x: b.x - b.width / 2, y: b.y - b.height / 2, width: b.width, height: b.height };
+        const collides = options.shape === 'circle' ? circlesOverlap(ra, rb, gap) : rectsOverlap(ra, rb);
+        if (!collides) continue;
+        const rad = (Math.atan2(b.y, b.x) * 180) / Math.PI;
+        const dist = Math.hypot(b.x, b.y) + 6;
+        b.x = Math.cos((rad * Math.PI) / 180) * dist;
+        b.y = Math.sin((rad * Math.PI) / 180) * dist;
+      }
+    }
+  }
+
+  const box = extent(placements);
+  return {
+    placements,
+    ringRadii: [base],
+    rings: 1,
+    fallback: false,
+    width: box.width,
+    height: box.height,
+  };
 }

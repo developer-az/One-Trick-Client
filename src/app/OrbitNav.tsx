@@ -1,22 +1,25 @@
 /**
- * OrbitNav — the client's disk navigation (brief J).
+ * OrbitNav — the client's disk navigation (brief K, matching the approved
+ * mockup 1:1).
  *
- * A half-disk plaque docked at the top edge: champion hub in the middle, page
- * pills on the right arc, pinned champions on the left arc. Positions come
- * from `orbitLayout` (pure, collision-free) using the *measured* pill widths,
- * so no breakpoint ever overlaps. Below 1100px the arcs collapse into a
- * segmented bar under the hub; below 760px the bar goes icon-only.
+ * A true circle, half off the top edge. The hub portrait sits inside it with
+ * the champion name in Cinzel under it; pinned champions fan down the LEFT
+ * arc and page pills fan up the RIGHT arc, both on circles concentric with the
+ * disk at `disk radius + 70px`. Positions come from `orbitLayout` (pure) with
+ * the measured pill widths, so the fan never overlaps.
  *
- * Ink and hairlines only: one solid chrome line, one dashed inner ring, no
- * glow, no blur. Nothing animates except hover/active steps (<=120ms).
+ * Below 1100px the arcs collapse to a segmented bar under the disk; below
+ * 760px the bar goes icon-only (the only place icons are used — the reference
+ * arc pills are text only).
  */
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Champion } from '../logic/pykeLogic';
 import type { ViewId } from './App';
-import { Filigree, type BannerChampion } from './ornaments';
 import {
-  orbitLayout,
+  anchorsAlongArc,
+  orbitFromAnchors,
   resolvePins,
+  type OrbitAnchor,
   type OrbitPlacement,
   type OrbitTier,
   type PinActions,
@@ -32,15 +35,33 @@ export interface OrbitNavItem {
   badge?: boolean;
 }
 
-/** Rough width used before the first measurement lands (layout effect fixes it). */
+/** Arc pills are text only (reference); this is the measured-size estimate. */
 function estimateWidth(label: string): number {
-  return Math.round(label.length * 7 + 40);
+  return Math.round(label.length * 7.6 + label.length * 1.9 + 24);
 }
 
 /**
+ * The mockup's own nav fan, measured off mockup-orbital.html at 1280x720 and
+ * expressed in disk radii: HOME sits at the disk's lower right and the pills
+ * climb up-right, Mayhem farthest out. OrbitNav feeds these to the anchor
+ * solver so the shape matches the reference and still cannot overlap.
+ */
+const REF_NAV_ANCHORS: OrbitAnchor[] = [
+  { r: 1.273, deg: 64.6 },
+  { r: 1.507, deg: 45.0 },
+  { r: 1.847, deg: 28.1 },
+  { r: 2.32, deg: 16.2 },
+  { r: 2.767, deg: 8.9 },
+  { r: 3.293, deg: 11.0 },
+  { r: 2.907, deg: 16.8 },
+];
+/** The mockup's pin band: far left (the "+") sweeping down to the disk. */
+const PIN_FROM: OrbitAnchor = { r: 1.52, deg: 165 };
+const PIN_TO: OrbitAnchor = { r: 1.1, deg: 116 };
+
+/**
  * Profile glyph in the app's own stroke idiom (icons.tsx is not part of this
- * brief's allowlist, so the one new mark lives here rather than in the shared
- * set). Same 24px box, 1.8 stroke, currentColor.
+ * brief's allowlist). Same 24px box, 1.8 stroke, currentColor.
  */
 export const IconProfile: React.FC<{ size?: number; className?: string }> = ({ size = 18, className }) => (
   <svg
@@ -61,29 +82,19 @@ export const IconProfile: React.FC<{ size?: number; className?: string }> = ({ s
   </svg>
 );
 
-const NAV_RADIUS = 1500;
-/**
- * Half-width of the arc in degrees. A 12° window at a ~1500px radius reads as
- * a gently curved rail (the sag is ~10px) — the disk's curve comes from the
- * plaque and the ring, and the rail stays dense instead of ballooning into a
- * half circle that would eat the window.
- */
-const NAV_SPAN = 12;
-const PIN_RADIUS = 900;
-
 export const OrbitNav: React.FC<{
   tier: OrbitTier;
+  disk: number;
   items: OrbitNavItem[];
   view: ViewId;
   onSelect: (id: ViewId) => void;
-  champion: BannerChampion | null;
+  champion: Champion | { id?: string | null; name?: string | null; key?: string | number | null } | null;
   championName: string;
   pins: readonly string[];
   champions: Champion[];
   activePinId: string | null;
   pinActions: PinActions & { onPin: (id: string) => void };
-  onOpenProfile: () => void;
-}> = ({ tier, items, view, onSelect, champion, championName, pins, champions, activePinId, pinActions, onOpenProfile }) => {
+}> = ({ tier, disk, items, view, onSelect, champion, championName, pins, champions, activePinId, pinActions }) => {
   const navRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [widths, setWidths] = useState<number[]>(() => items.map((item) => estimateWidth(item.label)));
 
@@ -96,45 +107,36 @@ export const OrbitNav: React.FC<{
     setWidths((prev) => (prev.length === next.length && prev.every((w, i) => w === next[i]) ? prev : next));
   };
 
-  // Once per mount / tier / item-set change: the pills are content-sized, so a
-  // single read after layout is exact. No observers, no per-frame work.
+  // One read after layout / tier / item-set change: the pills are content
+  // sized, so a single pass is exact. No observers, no per-frame work.
   useLayoutEffect(measure, [tier, items, championName]);
+
+  const diskRadius = disk / 2;
 
   const navLayout = useMemo(() => {
     const sizes = items.map((_, i) => ({ width: widths[i] ?? estimateWidth(items[i].label), height: 36 }));
-    // Item 0 (Home) sits nearest the hub, so the arc sweeps away from it.
-    return orbitLayout(items, NAV_RADIUS, 90 + NAV_SPAN, 90 - NAV_SPAN, sizes, {
-      maxRings: 2,
-      fixedRings: 2,
-      ringGap: 46,
-      itemHeight: 36,
-    });
-  }, [items, widths]);
+    return orbitFromAnchors(items, REF_NAV_ANCHORS, diskRadius, sizes, { gap: 8, itemHeight: 36 });
+  }, [items, widths, diskRadius]);
 
-  const pinLayout = useMemo(() => {
-    const slots = [...pins, '\u0000add'];
-    const sizes = slots.map(() => ({ width: 40, height: 40 }));
-    return orbitLayout(
-      slots.map((id) => ({ id })),
-      PIN_RADIUS,
-      90 - NAV_SPAN,
-      90 + NAV_SPAN,
-      sizes,
-      { maxRings: 2, ringGap: 48, itemHeight: 40 }
-    );
-  }, [pins]);
-
-  const navTop = 96 - (navLayout.ringRadii[0] ?? NAV_RADIUS);
-  const pinTop = 96 - (pinLayout.ringRadii[0] ?? PIN_RADIUS);
-  const rowOffset = Math.max((navLayout.rings - 1) * 46, (pinLayout.rings - 1) * 48);
-  const diskHeight = tier === 'arc' ? Math.round(96 + rowOffset + 42) : 0;
+  // "+" first in the fan so it lands at the far end of the left arc.
+  const pinSlots = useMemo(() => ['\u0000add', ...pins], [pins]);
+  const pinLayout = useMemo(
+    () =>
+      orbitFromAnchors(
+        pinSlots.map((id) => ({ id })),
+        anchorsAlongArc(pinSlots.length, PIN_FROM, PIN_TO),
+        diskRadius,
+        pinSlots.map(() => ({ width: 40, height: 40 })),
+        { gap: 8, itemHeight: 40, shape: 'circle' }
+      ),
+    [pinSlots, diskRadius]
+  );
 
   const placementsById = useMemo(() => {
     const map = new Map<string, OrbitPlacement>();
     for (const p of navLayout.placements) map.set(p.id, p);
     return map;
   }, [navLayout]);
-
   const pinPlacements = useMemo(() => {
     const map = new Map<string, OrbitPlacement>();
     for (const p of pinLayout.placements) map.set(p.id, p);
@@ -142,37 +144,37 @@ export const OrbitNav: React.FC<{
   }, [pinLayout]);
 
   const resolvedPins = resolvePins(pins, champions);
+  const badgeFor = (item: OrbitNavItem) =>
+    item.badge ? <span className="ot-nav-badge" aria-label="Live" /> : null;
 
   const hub = (
     <button
       type="button"
       className="ot-disk-hub"
-      onClick={onOpenProfile}
+      onClick={() => onSelect('profile')}
       data-ot-geo="hub"
       title={championName ? `${championName} · open profile` : 'Open profile'}
       aria-label={championName ? `${championName}, open your profile` : 'Open your profile'}
     >
-      <Portrait champion={champion} size={tier === 'arc' ? 56 : 48} className="ot-disk-hub-portrait" />
+      <Portrait champion={champion} size={Math.round(disk * 0.28)} className="ot-disk-hub-portrait" />
     </button>
   );
-
-  const badgeFor = (item: OrbitNavItem) => (item.badge ? <span className="ot-nav-badge" aria-label="Live" /> : null);
 
   if (tier === 'bar' || tier === 'icons') {
     const iconOnly = tier === 'icons';
     return (
-      <div className={`ot-disk is-${tier}`} style={{ ['--ot-disk-h' as string]: '184px' }}>
-        <div className="ot-disk-plate" aria-hidden="true" />
-        <div className="ot-disk-top">
-          {hub}
-          <span className="ot-disk-name">{championName || 'No champion'}</span>
-        </div>
+      <div className={`ot-disk is-${tier}`} style={{ ['--ot-disk-size' as string]: `${disk}px` }}>
+        <div className="ot-disk-circle" aria-hidden="true" />
+        {hub}
+        <span className="ot-disk-name" data-ot-geo="hub-name">
+          {championName || 'No champion'}
+        </span>
         <nav className="ot-disk-bar" aria-label="Main">
           {items.map((item) => (
             <button
               key={item.id}
               type="button"
-              className={`ot-disk-pill ${iconOnly ? 'is-icon' : ''} ${view === item.id ? 'is-active' : ''}`}
+              className={`ot-disk-pill is-core ${iconOnly ? 'is-icon' : ''} ${view === item.id ? 'is-active' : ''}`}
               onClick={() => onSelect(item.id)}
               aria-current={view === item.id ? 'page' : undefined}
               aria-label={item.label}
@@ -206,20 +208,13 @@ export const OrbitNav: React.FC<{
   }
 
   return (
-    <div className="ot-disk is-arc" style={{ ['--ot-disk-h' as string]: `${diskHeight}px` }}>
-      <div className="ot-disk-plate" aria-hidden="true">
-        <span className="ot-disk-ring" />
-      </div>
-      <div className="ot-disk-top">
-        {hub}
-        <span className="ot-disk-name">{championName || 'No champion'}</span>
-        <Filigree className="ot-disk-filigree" />
-      </div>
-      <nav
-        className="ot-orbit"
-        aria-label="Main"
-        style={{ left: 'calc(50% + 274px)', top: navTop }}
-      >
+    <div className="ot-disk is-arc" style={{ ['--ot-disk-size' as string]: `${disk}px` }}>
+      <div className="ot-disk-circle" aria-hidden="true" />
+      {hub}
+      <span className="ot-disk-name" data-ot-geo="hub-name">
+        {championName || 'No champion'}
+      </span>
+      <nav className="ot-orbit ot-orbit-nav" aria-label="Main">
         {items.map((item, i) => {
           const p = placementsById.get(item.id);
           if (!p) return null;
@@ -231,23 +226,28 @@ export const OrbitNav: React.FC<{
               }}
               type="button"
               className={`ot-disk-pill is-arc ${view === item.id ? 'is-active' : ''}`}
-              style={{
-                left: p.x,
-                top: p.y,
-              }}
+              style={{ left: p.x, top: p.y }}
               onClick={() => onSelect(item.id)}
               aria-current={view === item.id ? 'page' : undefined}
               aria-label={item.label}
               data-ot-geo="nav"
             >
-              {item.icon}
               <span>{item.label}</span>
               {badgeFor(item)}
             </button>
           );
         })}
       </nav>
-      <div className="ot-orbit ot-orbit-pins" style={{ left: 'calc(50% - 300px)', top: pinTop }}>
+      <div className="ot-orbit ot-orbit-pins">
+        {(() => {
+          const slot = pinPlacements.get('\u0000add');
+          if (!slot || pins.length >= 6) return null;
+          return (
+            <span className="ot-orbit-slot" style={{ left: slot.x, top: slot.y }} data-ot-geo="pin">
+              <PinAdd champions={champions} pins={pins} onPin={pinActions.onPin} />
+            </span>
+          );
+        })()}
         {resolvedPins.map((championPin, index) => {
           const p = pinPlacements.get(String(championPin.id));
           if (!p) return null;
@@ -265,17 +265,6 @@ export const OrbitNav: React.FC<{
             </span>
           );
         })}
-        {pins.length < 6
-          ? (() => {
-              const slot = pinPlacements.get('\u0000add');
-              if (!slot) return null;
-              return (
-                <span className="ot-orbit-slot" style={{ left: slot.x, top: slot.y }} data-ot-geo="pin">
-                  <PinAdd champions={champions} pins={pins} onPin={pinActions.onPin} />
-                </span>
-              );
-            })()
-          : null}
       </div>
     </div>
   );

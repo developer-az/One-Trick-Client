@@ -315,21 +315,25 @@ async function main(): Promise<void> {
   // Shell wiring.
   check(
     'champion backdrop replaces the strip on every view',
-    /<div className="ot-shell" data-ot-view=\{view\}>/.test(appTsx) &&
+    /className="ot-shell"[\s\S]{0,80}?data-ot-view=\{view\}/.test(appTsx) &&
       /className="ot-bg-ink"/.test(appTsx) &&
       /\.ot-shell\[data-ot-view='home'\]\s*\{\s*--ot-bg-art:\s*1;/.test(theme) &&
-      /\.ot-shell\[data-ot-view='stats'\][\s\S]{0,200}--ot-bg-art:\s*0\.34;/.test(theme) &&
+      /\.ot-shell\[data-ot-view='stats'\][\s\S]{0,200}--ot-bg-art:\s*0\.4;/.test(theme) &&
       !/<ChampionStrip/.test(appTsx)
   );
   check('App resolves the main champion and applies the accent', /mainChampionId\(ap, history\.games, catalog\.champions\)/.test(appTsx) && /useChampionAccent\(mainChampion, ap\.accent === 'champion'\)/.test(appTsx));
   check(
     'Home names your main champion on its own plate',
     /ot-home-champion ot-orn-title/.test(homeView) &&
-      /<span>Your main<\/span>/.test(homeView) &&
-      /const bannerName = bannerChampion\.name \|\| bannerChampion\.id/.test(homeView) &&
-      /\{bannerName\}/.test(homeView)
+      /ot-home-eyebrow-main">Your main</.test(homeView) &&
+      /const name = mainChampion\?\.name \|\| mainChampion\?\.id/.test(homeView) &&
+      /\{name\}/.test(homeView)
   );
-  check('shell has a sidebar filigree divider', /<Filigree \/>/.test(appTsx));
+  check(
+    'shell keeps a chrome hairline + dashed orbit ring on the disk',
+    /\.ot-disk-circle\s*\{[^}]*border:\s*1px solid var\(--ot-border-bright\)/.test(theme) &&
+      /\.ot-disk-circle::after\s*\{[^}]*border:\s*1px dashed var\(--ot-border\)/.test(theme)
+  );
 
   // Appearance controls.
   check(

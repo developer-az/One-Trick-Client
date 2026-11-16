@@ -33,9 +33,22 @@ export const ProfileView: React.FC<{
   pins: readonly string[];
   activePinId: string | null;
   activeChampion: BannerChampion | null;
+  settings?: AppSettings | null;
+  onOpenAppearance: () => void;
   pinActions: PinActions & { onPin: (id: string) => void };
   onNavigate: (view: ViewId) => void;
-}> = ({ league, draft, champions, pins, activePinId, activeChampion, pinActions, onNavigate }) => {
+}> = ({
+  league,
+  draft,
+  champions,
+  pins,
+  activePinId,
+  activeChampion,
+  settings,
+  onOpenAppearance,
+  pinActions,
+  onNavigate,
+}) => {
   const status = leagueStatus(league, draft);
   const summoner = league.lcu?.summonerName || '';
   const connected = league.lcu?.state === 'connected';
@@ -168,6 +181,40 @@ export const ProfileView: React.FC<{
           <Button variant="primary" disabled>
             Connect Riot API
           </Button>
+        </Card>
+      </div>
+
+      <div className="ot-profile-grid">
+        <Card>
+          <CardHeader
+            title="Appearance"
+            sub="Theme, palette, accent, density, type scale, ornament and the dashboard pet."
+            action={<Badge tone="gold">{settings?.appearance?.theme || 'gothic'}</Badge>}
+          />
+          <div className="ot-info-row">
+            <span>Accent</span>
+            <span>{settings?.appearance?.accent || 'chrome'}</span>
+          </div>
+          <div className="ot-info-row">
+            <span>Density</span>
+            <span>{settings?.appearance?.density || 'comfortable'}</span>
+          </div>
+          <div className="mt-3">
+            <Button variant="primary" onClick={onOpenAppearance}>
+              Open appearance
+            </Button>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="About" sub="Attribution and third-party licences." />
+          <p className="ot-profile-about">
+            {isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games.
+          </p>
+          <p className="ot-profile-about">
+            Auto-clip plays FFmpeg 6.1.1 as a separate program. That build is GPL-3.0. License and source are in
+            THIRD_PARTY_NOTICES.txt.
+          </p>
         </Card>
       </div>
     </div>

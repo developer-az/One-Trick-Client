@@ -82,6 +82,8 @@ async function main(): Promise<void> {
   const orbit = await import('./src/app/orbitLayout');
   const {
     orbitLayout,
+    orbitFromAnchors,
+    anchorsAlongArc,
     orbitTier,
     normalizePins,
     addPin,
@@ -91,7 +93,6 @@ async function main(): Promise<void> {
     pinHandlers,
     resolvePins,
     rectsOverlap,
-    PIN_LIMIT,
     ORBIT_BAR_BELOW,
     ORBIT_ICONS_BELOW,
   } = orbit;
@@ -122,26 +123,67 @@ async function main(): Promise<void> {
     check(`${n} items: reports the room it needs (w ${Math.round(layout.width)}, h ${Math.round(layout.height)})`, layout.width > 0 && layout.height >= 36);
   }
 
-  // The rail the shell actually renders: two rings, so it stays a compact fan.
-  const rail = orbitLayout(items(8), 1500, 78, 102, sizes(8), { maxRings: 2, fixedRings: 2, ringGap: 46 });
-  check('rail: exactly 2 rings for the 8 page pills', rail.rings === 2);
-  check('rail: fits inside the 940px disk (half-width < 470)', rail.width / 2 < 440);
-  check('rail: second ring is 46px below the first', Math.abs((rail.ringRadii[1] ?? 0) - (rail.ringRadii[0] ?? 0) - 46) < 0.001);
-  check('rail: heights leave room for a 36px pill', rail.height >= 36 && rail.height < 120);
+  // The fan the shell renders: the approved mockup's own anchor shape, scaled by
+  // the disk radius (7 page pills, no overlap, inside the window).
+  const REF_ANCHORS = [
+    { r: 1.273, deg: 64.6 },
+    { r: 1.507, deg: 45.0 },
+    { r: 1.847, deg: 28.1 },
+    { r: 2.32, deg: 16.2 },
+    { r: 2.767, deg: 8.9 },
+    { r: 3.293, deg: 11.0 },
+    { r: 2.907, deg: 16.8 },
+  ];
+  const navWidths = [67, 73, 94, 71, 81, 88, 91];
+  for (const viewport of [1280, 1600, 1920, 2560]) {
+    const radius = Math.min(420, Math.max(260, viewport * 0.23)) / 2;
+    const rail = orbitFromAnchors(
+      items(7),
+      REF_ANCHORS,
+      radius,
+      navWidths.map((width) => ({ width, height: 36 })),
+      { gap: 8, itemHeight: 36 }
+    );
+    const rects = rail.placements.map((p: { x: number; y: number; width: number; height: number }) => ({
+      x: p.x - p.width / 2,
+      y: p.y - p.height / 2,
+      width: p.width,
+      height: p.height,
+    }));
+    let hits = 0;
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) if (rectsOverlap(rects[i], rects[j])) hits++;
+    }
+    const rightEdge = Math.max(...rail.placements.map((p: { x: number; y: number; width: number }) => p.x + p.width / 2));
+    check(`${viewport}px: mockup fan has 7 pills and no overlap (hits=${hits})`, hits === 0 && rail.placements.length === 7);
+    check(`${viewport}px: fan stays inside the window (right edge ${Math.round(rightEdge)} < ${viewport / 2 - 20})`, rightEdge < viewport / 2 - 20);
+    check(`${viewport}px: first pill sits at the reference's lower-right anchor`, (() => {
+      const first = rail.placements[0];
+      const expected = REF_ANCHORS[0];
+      return Math.abs(first.x - Math.cos((expected.deg * Math.PI) / 180) * expected.r * radius) < 1 &&
+        Math.abs(first.y - Math.sin((expected.deg * Math.PI) / 180) * expected.r * radius) < 1;
+    })());
+  }
 
-  // Pins: 6 portraits + the "+" slot, two rings.
-  const pinRail = orbitLayout(items(7), 900, 78, 102, Array.from({ length: 7 }, () => ({ width: 40, height: 40 })), {
-    maxRings: 2,
-    fixedRings: 2,
-    ringGap: 48,
+  // Pins: the mockup's left band, one round portrait per anchor, "+" outermost.
+  const pinAnchors = anchorsAlongArc(7, { r: 1.52, deg: 165 }, { r: 1.1, deg: 116 });
+  const pinRail = orbitFromAnchors(items(7), pinAnchors, 147, Array.from({ length: 7 }, () => ({ width: 40, height: 40 })), {
+    gap: 8,
+    itemHeight: 40,
+    shape: 'circle',
   });
-  check('pins: 7 slots (6 pins + add) fit two rings', pinRail.rings === 2 && pinRail.placements.length === 7);
-  check('pins: no overlap', (() => {
-    const r = pinRail.placements.map((p: { x: number; y: number }) => ({ x: p.x - 20, y: p.y - 20, width: 40, height: 40 }));
-    for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) if (rectsOverlap(r[i], r[j])) return false;
+  check('pins: 7 slots (6 pins + add) placed on the reference band', pinRail.placements.length === 7 && pinRail.fallback === false);
+  check('pins: round portraits never overlap', (() => {
+    const centres = pinRail.placements.map((p: { x: number; y: number }) => ({ x: p.x, y: p.y }));
+    for (let i = 0; i < centres.length; i++) {
+      for (let j = i + 1; j < centres.length; j++) {
+        if (Math.hypot(centres[i].x - centres[j].x, centres[i].y - centres[j].y) < 40) return false;
+      }
+    }
     return true;
   })());
-  check('pins: ring gap clears two 40px portraits', (pinRail.ringRadii[1] ?? 0) - (pinRail.ringRadii[0] ?? 0) >= 48);
+  check('pins: the "+" slot is the outermost (leftmost) anchor', pinRail.placements[0].x < Math.min(...pinRail.placements.slice(1).map((p: { x: number }) => p.x)) + 40);
+  check('pins: the band mirrors the reference angles (165deg to 116deg)', Math.abs(pinAnchors[0].deg - 165) < 0.001 && Math.abs(pinAnchors[6].deg - 116) < 0.001);
 
   // Hostile input: very wide pills must still resolve (column fallback allowed).
   const wide = orbitLayout(items(9), 80, 88, 92, Array.from({ length: 9 }, () => ({ width: 300, height: 36 })), {
@@ -168,24 +210,30 @@ async function main(): Promise<void> {
   check('breakpoints: garbage width falls back to the bar', orbitTier(Number.NaN) === 'bar' && orbitTier(0) === 'bar');
   for (const width of VIEWPORTS) {
     const tier = orbitTier(width);
-    const fits = width >= 1100 ? rail.width + 2 * 262 < width : rail.width < width;
-    check(`${width}px → ${tier} layout, rail fits the window`, fits);
+    const radius = Math.min(420, Math.max(260, width * 0.23)) / 2;
+    const fan = orbitFromAnchors(
+      items(7),
+      REF_ANCHORS,
+      radius,
+      navWidths.map((w) => ({ width: w, height: 36 })),
+      { gap: 8, itemHeight: 36 }
+    );
+    const right = Math.max(...fan.placements.map((pl: { x: number; width: number }) => pl.x + pl.width / 2));
+    check(`${width}px -> ${tier} layout, fan fits the window (right ${Math.round(right)})`, tier !== 'arc' || right < width / 2 - 20);
   }
-
-  /* --------------------------------------------------------------- pins */
-  console.log('\n— pinned champions —');
-  check('PIN_LIMIT is 6', PIN_LIMIT === 6);
-  deepEqual('normalize keeps order', normalizePins(['Yone', 'Ahri', 'Pyke']), ['Yone', 'Ahri', 'Pyke']);
+  check('pins cap at 6 in both modules', orbit.PIN_LIMIT === 6 && appSettings.PINNED_CHAMPIONS_MAX === 6);
+  check('normalize drops non-strings', normalizePins([1, null, 'Ahri']).join(',') === 'Ahri');
+  deepEqual('normalize keeps pin order', normalizePins(['Yone', 'Ahri', 'Pyke']), ['Yone', 'Ahri', 'Pyke']);
   check('normalize caps at six', normalizePins(['A', 'B', 'C', 'D', 'E', 'F', 'G']).length === 6);
   check('normalize de-duplicates', normalizePins(['Ahri', 'Ahri', 'Pyke']).join(',') === 'Ahri,Pyke');
   check('normalize rejects markup and paths', normalizePins(['Ah<ri>', '../x', 'Ahri']).join(',') === 'Ahri');
-  check('normalize drops non-strings', normalizePins([1, null, 'Ahri']).join(',') === 'Ahri');
   deepEqual('normalize seeds when the field is absent', normalizePins(undefined, 'Pyke'), ['Pyke']);
   deepEqual('normalize keeps an explicitly empty list (last pin stays unpinned)', normalizePins([], 'Pyke'), []);
   deepEqual('normalize ignores an invalid seed', normalizePins(undefined, 'bad id!'), []);
   deepEqual('normalize does not seed a non-empty list', normalizePins(['Yone'], 'Pyke'), ['Yone']);
 
   deepEqual('addPin appends', addPin(['Ahri'], 'Pyke'), ['Ahri', 'Pyke']);
+  check('pins cap at 6 in both modules', appSettings.PINNED_CHAMPIONS_MAX === 6);
   deepEqual('addPin ignores duplicates', addPin(['Ahri'], 'Ahri'), ['Ahri']);
   deepEqual('addPin ignores a full list', addPin(['A', 'B', 'C', 'D', 'E', 'F'], 'G'), ['A', 'B', 'C', 'D', 'E', 'F']);
   deepEqual('addPin rejects invalid ids', addPin(['Ahri'], 'not an id'), ['Ahri']);
@@ -241,7 +289,11 @@ async function main(): Promise<void> {
   const home = read('src/app/views/HomeView.tsx');
 
   check("ViewId includes 'profile'", /export type ViewId = [^;]*'profile'/.test(appTsx));
-  check('nav lists the Profile page', /\{ id: 'profile', label: 'Profile'/.test(appTsx));
+  check(
+    'nav keeps the reference set (Home..Overlay) and reaches Profile from the pill',
+    /\{ id: 'overlay', label: 'Overlay'/.test(appTsx) && !/\{ id: 'profile'/.test(appTsx) && /data-ot-geo="profile"/.test(appTsx) && /setView\('profile'\)/.test(appTsx)
+  );
+  check('Performance stays reachable from Stats', /onNavigate\('performance'\)/.test(read('src/app/views/StatsView.tsx')));
   check('shell renders ProfileView', /<ProfileView\b/.test(appTsx));
   check('profile chip opens the profile', /className="ot-profile-chip"[\s\S]*?setView\('profile'\)/.test(appTsx));
   check('shell mounts the disk nav', /<OrbitNav\b/.test(appTsx) && /items=\{navItems\}/.test(appTsx));

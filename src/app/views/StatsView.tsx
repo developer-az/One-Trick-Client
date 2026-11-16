@@ -3,6 +3,7 @@ import type { Champion } from '../../logic/pykeLogic';
 import { championLossProfile, lossMatchupInsights } from '../../logic/lossInsights';
 import { byChampion, pct, personalTier, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
 import { isDesktop } from '../hooks';
+import type { ViewId } from '../App';
 import { IconStats } from '../icons';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
 
@@ -17,7 +18,8 @@ export const StatsView: React.FC<{
   error: string | null;
   connected: boolean;
   onReload: () => void;
-}> = ({ champions, games, loading, error, connected, onReload }) => {
+  onNavigate?: (view: ViewId) => void;
+}> = ({ champions, games, loading, error, connected, onReload, onNavigate }) => {
   const byKey = useMemo(() => new Map(champions.map((c) => [Number(c.key), c])), [champions]);
   const rows = useMemo(() => byChampion(games || []), [games]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -41,11 +43,18 @@ export const StatsView: React.FC<{
           From your recent Summoner's Rift games in the League client. Remakes and other modes are left out.
         </p>
       </div>
-      {isDesktop && connected ? (
-        <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
-          {loading ? 'Loading' : 'Refresh'}
-        </button>
-      ) : null}
+      <div className="flex items-center gap-2">
+        {onNavigate ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={() => onNavigate('performance')}>
+            Performance
+          </button>
+        ) : null}
+        {isDesktop && connected ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
+            {loading ? 'Loading' : 'Refresh'}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 
