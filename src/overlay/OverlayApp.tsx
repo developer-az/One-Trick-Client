@@ -673,8 +673,16 @@ export const OverlayApp: React.FC = () => {
     [situationKey, enemyKey]
   );
 
-  const inMayhem = isMayhemGame(state.gameMode, state.mapName);
-  const inAram = isAramOrMayhem(state.gameMode, state.mapName);
+  const inMayhem = isMayhemGame(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
+  const inAram = isAramOrMayhem(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
 
   const build: Build | null = useMemo(() => {
     const base = profile.calculateBuild(enemyChampions, adcForProfile, allyPartner, situation);
@@ -1374,6 +1382,14 @@ export const OverlayApp: React.FC = () => {
         gameWidth={gameWidth}
         gameHeight={gameHeight}
       />
+
+      {inMayhem && state.mayhemOcrHint ? (
+        <div className="hud-overlay-scale hud-overlay-scale--right absolute top-2 right-3 z-40 pointer-events-none">
+          <div className="hud-overlay-panel !px-2 !py-1 text-[11px] text-[var(--ov-amber)]">
+            {state.mayhemOcrHint}
+          </div>
+        </div>
+      ) : null}
 
       {alignMode && (
       <div className="hud-overlay-controls absolute top-3 left-1/2 -translate-x-1/2 pointer-events-auto z-10">

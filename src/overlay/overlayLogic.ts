@@ -172,6 +172,8 @@ export interface OverlayState {
   mayhemWaitingForDeath?: boolean;
   /** Set when user hits Page Up to close a stuck augment HUD. */
   mayhemAugmentDismissedAt?: number;
+  /** One-time OCR notice (e.g. "Use borderless for augment detection"). */
+  mayhemOcrHint?: string;
 }
 
 export interface OverlayCue {
@@ -339,7 +341,10 @@ export interface OverlayCueContext {
 export function resolveProfileId(state: OverlayState, fallback?: ProfileId): ProfileId {
   const liveName = state.localPlayer?.championName;
   if (liveName) {
-    const aramStyle = isAramOrMayhem(state.gameMode, state.mapName);
+    const aramStyle = isAramOrMayhem(state.gameMode, state.mapName, {
+      queueId: state.queueId,
+      mapId: state.mapId,
+    });
     const liveRole = aramStyle ? null : roleFromLivePosition(state.localPlayer?.position);
     return profileIdFromChampion(liveName, liveRole);
   }
@@ -463,7 +468,9 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
           buildProgress: trackBuildProgress(state.localPlayer?.items, ctx.build),
         };
 
-  if (isAramOrMayhem(state.gameMode, state.mapName)) {
+  if (
+    isAramOrMayhem(state.gameMode, state.mapName, { queueId: state.queueId, mapId: state.mapId })
+  ) {
     const aram = buildAramInGameCues(state);
     return mergeMomentCues(
       finalizeCues(aram as OverlayCue[], state, profileId, cueCtx, { skipLaneMacro: true }),

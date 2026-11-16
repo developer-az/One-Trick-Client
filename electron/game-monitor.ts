@@ -81,7 +81,11 @@ import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
-import { isAramOrMayhem, isMayhemGame } from '../src/logic/mayhem/mode';
+import {
+    detectMayhemMode,
+    type MayhemMode,
+    type MayhemModeSignals,
+} from '../src/logic/mayhem/mode';
 import { planMayhemOcr } from '../src/logic/mayhem/augmentSchedule';
 import {
     computeMayhemPickPhase,
@@ -89,19 +93,29 @@ import {
     resolveMayhemPicksTaken,
     type MayhemPickPhase,
 } from '../src/logic/mayhem/pickPhase';
+import {
+    createMayhemPickCounterState,
+    observeMayhemPickScan,
+    readLiveAugmentIds,
+    type MayhemPickCounterState,
+} from '../src/logic/mayhem/pickCount';
 import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
 import { loadMayhemBundle } from './mayhem-data';
 import {
-    detectMayhemOfferIds,
+    detectMayhemOffers,
     isMayhemOcrRerollPending,
+    mayhemOcrBlackFrameSeen,
     resetMayhemOcrCache,
+    resetMayhemOcrMatchFlags,
     setMayhemOcrRetainOffers,
+    type MayhemOcrRead,
 } from './mayhem-ocr';
 import {
     getMayhemPicksTaken,
     getOwnedMayhemAugmentIds,
     mergedMayhemOfferIds,
     resetMayhemMatchState,
+    setMayhemPicksTaken,
     setMayhemRollIds,
 } from './mayhem-state';
 
@@ -241,11 +255,7 @@ export function isCurrentlyInGame(): boolean {
 }
 
 export function isMayhemMatchActive(): boolean {
-    return (
-        inGame &&
-        !!lastGoodPayload &&
-        isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)
-    );
+    return inGame && !!lastGoodPayload && currentMayhemMode() === 'mayhem';
 }
 
 /** The overlay is showing the pre-match loading screen right now. */
@@ -552,17 +562,18 @@ export function dismissMayhemAugmentPanelFromHotkey(): void {
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
 export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
     if (!inGame || !lastGoodPayload) return;
-    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
+    if (currentMayhemMode() !== 'mayhem') return;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
     const bundle = loadMayhemBundle();
     if (!bundle?.augments?.length) return;
     resetMayhemOcrCache();
-    const ids = await detectMayhemOfferIds(
+    const read = await detectMayhemOffers(
         bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
         0,
         { minMatches: 1 }
     );
+    const ids = read.ids;
     mayhemOfferIds = ids;
     if (ids.length >= 1) {
         mayhemManualScanUntilMs = Date.now() + 60_000;
@@ -817,8 +828,9 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
     const enemyPlayers =
         live?.allPlayers?.filter((p) => localPlayer && p.team !== localPlayer.team) || [];
     const enemies = mapEnemies(enemyPlayers);
-    const aramMatch = isAramOrMayhem(live?.gameData?.gameMode, live?.gameData?.mapName);
-    if (isMayhemGame(live?.gameData?.gameMode, live?.gameData?.mapName) && live) {
+    const mayhemMode = mayhemModeForLive(live);
+    const aramMatch = mayhemMode !== 'other';
+    if (mayhemMode === 'mayhem' && live) {
         syncMayhemPickPhase(live);
     }
     // Lane-based enemy sum tracking is SR-only (ADC/mid bot lane model).
@@ -933,6 +945,9 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
+        mayhemOcrHint: mayhemOcrBlackFrameSeen()
+            ? 'Use borderless for augment detection'
+            : undefined,
         timestamp: Date.now(),
     };
 
@@ -979,6 +994,7 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         payload.mayhemPickHint || '',
         payload.mayhemWaitingForDeath ? 1 : 0,
         payload.mayhemAugmentDismissedAt ?? 0,
+        payload.mayhemOcrHint || '',
     ].join('~');
 }
 
@@ -1019,6 +1035,63 @@ let mayhemManualScanUntilMs = 0;
 /** Page Up dismiss — pause auto OCR until next pick window or Page Down. */
 let mayhemUserDismissedUntilMs = 0;
 let mayhemAugmentDismissedAt = 0;
+/** Hysteresis pick counter — a level-up alone never counts a pick. */
+let mayhemPickCounter: MayhemPickCounterState = createMayhemPickCounterState();
+/** Live Client owned augment ids for this match (ground truth when it exposes them). */
+let mayhemLiveAugmentIds: string[] = [];
+/** Consecutive fresh OCR scans that read at least one offer (single-card HUD gate). */
+let mayhemOfferScanStreak = 0;
+let mayhemOfferFuzzyScore = 0;
+/** Last `mode-detect` line written this match (dedupe: one line per signal set). */
+let lastModeDetectKey = '';
+
+function mayhemOffersDetected(): boolean {
+    return mergedMayhemOfferIds(mayhemOfferIds).length >= 2;
+}
+
+/** One `mode-detect` line per distinct signal set, to overlay.log. */
+function logModeDetect(signals: MayhemModeSignals): MayhemMode {
+    const mode = detectMayhemMode(signals);
+    const key = [
+        signals.gameMode ?? '',
+        signals.mapName ?? '',
+        signals.queueId ?? '',
+        signals.mapId ?? '',
+        signals.augmentOffersDetected ? 1 : 0,
+        mode,
+    ].join('|');
+    if (key !== lastModeDetectKey) {
+        lastModeDetectKey = key;
+        overlayLog('mode-detect', {
+            gameMode: signals.gameMode ?? 'unknown',
+            mapName: signals.mapName ?? 'unknown',
+            queueId: signals.queueId ?? 'unknown',
+            mapId: signals.mapId ?? 'unknown',
+            result: mode,
+        });
+    }
+    return mode;
+}
+
+function mayhemModeForLive(live: LiveClientAllGameData | null): MayhemMode {
+    return logModeDetect({
+        gameMode: live?.gameData?.gameMode ?? null,
+        mapName: live?.gameData?.mapName ?? null,
+        queueId: matchQueueId,
+        mapId: matchMapId,
+        augmentOffersDetected: mayhemOffersDetected(),
+    });
+}
+
+function currentMayhemMode(): MayhemMode {
+    return logModeDetect({
+        gameMode: lastGoodPayload?.gameMode ?? null,
+        mapName: lastGoodPayload?.mapName ?? null,
+        queueId: matchQueueId ?? lastGoodPayload?.queueId ?? null,
+        mapId: matchMapId ?? lastGoodPayload?.mapId ?? null,
+        augmentOffersDetected: mayhemOffersDetected(),
+    });
+}
 
 function mayhemManualScanActive(): boolean {
     return Date.now() < mayhemManualScanUntilMs;
@@ -1026,7 +1099,10 @@ function mayhemManualScanActive(): boolean {
 
 function mayhemAugmentHudShouldShow(): boolean {
     const merged = mergedMayhemOfferIds(mayhemOfferIds);
-    return isMayhemAugmentHudVisible(merged, mayhemManualScanActive());
+    return isMayhemAugmentHudVisible(merged, mayhemManualScanActive(), {
+        consecutiveScans: mayhemOfferScanStreak,
+        fuzzyScore: mayhemOfferFuzzyScore,
+    });
 }
 
 function clearMayhemLiveOffers(): void {
@@ -1111,8 +1187,10 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
         mayhemAugmentDismissedAt = 0;
     }
     mayhemWasDead = isDead;
+    // Live Client owned augments are authoritative when the game exposes them.
+    mayhemLiveAugmentIds = readLiveAugmentIds(live.activePlayer);
     const events = live.events?.Events;
-    if (events?.length && isMayhemGame(live.gameData?.gameMode, live.gameData?.mapName)) {
+    if (events?.length && mayhemModeForLive(live) === 'mayhem') {
         const start = events.length + 8 < mayhemEventScanFrom ? 0 : Math.max(0, mayhemEventScanFrom - 4);
         let maxId = mayhemLastEventScanId;
         for (let i = start; i < events.length; i++) {
@@ -1182,7 +1260,7 @@ function scheduleMayhemPoll(delayMs: number): void {
 }
 
 function nextMayhemPollDelayMs(): number {
-    if (!lastGoodPayload || !isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return 15_000;
+    if (!lastGoodPayload || currentMayhemMode() !== 'mayhem') return 15_000;
     syncMayhemPickPhaseFromPayload();
     if (mayhemPickPhase.pickWindowOpen) return 900;
     if (mayhemPickPhase.waitingForDeath) return 4000;
@@ -1210,6 +1288,11 @@ function startMayhemPoll(): void {
     mayhemManualScanUntilMs = 0;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
+    mayhemPickCounter = createMayhemPickCounterState();
+    mayhemLiveAugmentIds = [];
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
+    resetMayhemOcrMatchFlags();
     setMayhemOcrRetainOffers(false);
     resetMayhemMatchState();
     mayhemPickPhase = {
@@ -1234,6 +1317,9 @@ function pushMayhemOverlayPatch(): void {
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
+        mayhemOcrHint: mayhemOcrBlackFrameSeen()
+            ? 'Use borderless for augment detection'
+            : undefined,
         timestamp: Date.now(),
     };
     const fp = overlayFingerprint(payload);
@@ -1250,7 +1336,7 @@ export function notifyMayhemOverlayStateChanged(): void {
 
 async function tickMayhemOcr(): Promise<void> {
     if (!inGame || !lastGoodPayload) return;
-    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
+    if (currentMayhemMode() !== 'mayhem') return;
     syncMayhemPickPhaseFromPayload();
     pushMayhemOverlayPatch();
 
@@ -1279,15 +1365,42 @@ async function tickMayhemOcr(): Promise<void> {
                 ? 1100
                 : 750
         : 1400;
-    const ids = await detectMayhemOfferIds(
+    const read = await detectMayhemOffers(
         bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
         minGap,
         { minMatches: 2 }
     );
-    mayhemOfferIds = ids;
-    if (ids.length) setMayhemRollIds(ids);
+    mayhemOfferIds = read.ids;
+    if (read.ids.length) setMayhemRollIds(read.ids);
+    if (read.fresh) {
+        mayhemOfferFuzzyScore = read.fuzzyScore;
+        mayhemOfferScanStreak = read.ids.length > 0 ? mayhemOfferScanStreak + 1 : 0;
+        observeMayhemPickScanForMatch(read);
+    }
     applyMayhemOfferVisibilityAfterOcr();
     pushMayhemOverlayPatch();
+}
+
+/**
+ * Feed one fresh OCR frame to the pick counter. A pick is only recorded when
+ * two consecutive frames showed offers and two consecutive frames showed none
+ * (alive, foreground, non-black) — or when the Live Client lists augments.
+ */
+function observeMayhemPickScanForMatch(read: MayhemOcrRead): void {
+    const isDead = !!lastGoodPayload?.localPlayer?.isDead;
+    const before = mayhemPickCounter.picksTaken;
+    mayhemPickCounter = observeMayhemPickScan(mayhemPickCounter, {
+        offerCount: read.ids.length,
+        isDead,
+        foreground: read.foreground,
+        blackFrame: read.blackFrame,
+        liveAugmentIds: mayhemLiveAugmentIds,
+    });
+    if (mayhemPickCounter.picksTaken > before) {
+        setMayhemPicksTaken(mayhemPickCounter.picksTaken);
+        mayhemPickPhase = { ...mayhemPickPhase, picksTaken: mayhemPickCounter.picksTaken };
+        purgeMayhemOffersFromScreen();
+    }
 }
 
 export function clearMayhemOffersForDashboard(): void {
@@ -1332,6 +1445,11 @@ function resetMatchCaches(): void {
     mayhemManualScanUntilMs = 0;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
+    mayhemPickCounter = createMayhemPickCounterState();
+    mayhemLiveAugmentIds = [];
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
+    lastModeDetectKey = '';
     setMayhemOcrRetainOffers(false);
     resetMayhemMatchState();
     mayhemBurstUntilMs = 0;
@@ -1678,8 +1796,13 @@ function beginMatch(): void {
     onGameStateChange?.(true);
 }
 
-function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
-    if (isMayhemGame(gameMode, mapName)) {
+function syncMayhemPollForMode(signals: {
+    gameMode?: string | null;
+    mapName?: string | null;
+    queueId?: number | null;
+    mapId?: number | null;
+}): void {
+    if (logModeDetect({ ...signals, augmentOffersDetected: mayhemOffersDetected() }) === 'mayhem') {
         if (!mayhemPollTimer) startMayhemPoll();
         return;
     }
@@ -1786,7 +1909,12 @@ async function liveTick(): Promise<void> {
             if ((payload.gameTime || 0) < trustedGameTime) {
                 payload.gameTime = trustedGameTime;
             }
-            syncMayhemPollForMode(payload.gameMode, payload.mapName);
+            syncMayhemPollForMode({
+                gameMode: payload.gameMode,
+                mapName: payload.mapName,
+                queueId: payload.queueId,
+                mapId: payload.mapId,
+            });
             lastGoodPayload = payload;
             if (overlayHidden) {
                 // Slim ping so the main window stays parked as "in match"

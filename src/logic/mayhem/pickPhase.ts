@@ -28,23 +28,31 @@ export interface MayhemPickPhase {
 }
 
 /**
- * When OCR / manual owned list is empty, infer how many augment slots are already behind you.
- * Mayhem blocks leveling past 3 / 7 / 11 / 15 until you pick, so `level > threshold` implies that pick happened.
+ * Legacy level estimate, kept exported for older callers/tests.
+ *
+ * Do NOT use this to decide whether a pick happened: reaching level 3 (or
+ * passing 7 / 11 / 15) only opens the augment shop, a player can stay at
+ * level 5 without picking. The live pick counter is
+ * `observeMayhemPickScan` (src/logic/mayhem/pickCount.ts).
  */
 export function inferMayhemPicksTakenFromLevel(level: number, storedOwnedCount: number): number {
   if (storedOwnedCount > 0) return storedOwnedCount;
   return MAYHEM_AUGMENT_LEVELS.filter((pickLevel) => level > pickLevel).length;
 }
 
-/** Owned ids, manual pick count, and level gate — whichever says you've taken the most picks. */
+/**
+ * Owned ids and the persisted pick count — no level inference.
+ * `_level` stays in the signature so existing call sites keep compiling; the
+ * level gate cannot prove a pick, only an augment window/offer disappearance
+ * or Live Client augment data can.
+ */
 export function resolveMayhemPicksTaken(
-  level: number,
+  _level: number,
   ownedAugmentIds: string[],
   persistedPicksTaken: number
 ): number {
   const owned = ownedAugmentIds.length;
-  const stored = Math.max(owned, Math.max(0, persistedPicksTaken));
-  return Math.max(stored, inferMayhemPicksTakenFromLevel(level, stored));
+  return Math.max(owned, Math.max(0, Math.floor(persistedPicksTaken)));
 }
 
 /**
