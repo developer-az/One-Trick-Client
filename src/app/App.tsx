@@ -264,6 +264,38 @@ export const App: React.FC = () => {
     if (!pinnedChampions.includes(champion.id)) setPins(addPin(pinnedChampions, champion.id));
   };
 
+  /**
+   * The licence line is always on screen; its Licenses link jumps to the
+   * Profile About card. The card is the last block on that view, so keep the
+   * shell's scroll container pinned to the bottom while the view's portraits
+   * and type finish laying out, then settle the card into view above the
+   * fixed line.
+   */
+  const openLicences = () => {
+    setView('profile');
+    const aboutCard = () =>
+      (Array.from(document.querySelectorAll<HTMLElement>('.ot-card-title')).find(
+        (el) => (el.textContent || '').trim() === 'About'
+      )?.closest('.ot-card') as HTMLElement | null) ?? null;
+    const deadline = performance.now() + 1000;
+    const reveal = () => {
+      const shell = document.querySelector<HTMLElement>('.ot-shell');
+      const main = document.querySelector<HTMLElement>('.ot-main');
+      const inProfile = shell?.getAttribute('data-ot-view') === 'profile';
+      if (main && inProfile) {
+        // Keep the view pinned to the bottom while the profile's portraits and
+        // type finish laying out; the About card is the last block.
+        main.scrollTop = main.scrollHeight;
+      }
+      if (performance.now() < deadline) {
+        window.setTimeout(reveal, 100);
+        return;
+      }
+      if (inProfile) aboutCard()?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    };
+    window.setTimeout(reveal, 0);
+  };
+
   const summonerName = league.lcu?.summonerName || '';
   const connected = league.lcu?.state === 'connected';
   const navItems = useMemo(
@@ -464,6 +496,19 @@ export const App: React.FC = () => {
           />
         ) : null}
       </main>
+
+      <a
+        className="ot-licence"
+        data-ot-geo="licence"
+        href="#about"
+        title="FFmpeg licence and third-party notices"
+        onClick={(event) => {
+          event.preventDefault();
+          openLicences();
+        }}
+      >
+        FFmpeg 6.1.1 · GPL-3.0 · <span className="ot-licence-link">Licenses</span>
+      </a>
 
       <PixelPet stage={status.stage} preference={pet} />
 

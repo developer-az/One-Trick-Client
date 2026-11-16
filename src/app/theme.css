@@ -2835,6 +2835,9 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
 .ot-shell:not([data-ot-view='home']) .ot-main {
   top: var(--ot-shell-band, var(--ot-main-pad, 240px));
   padding-top: 0;
+  /* Leave the fixed licence line its bottom gutter; content (including the
+   * Profile About card) stops above it at full scroll. */
+  padding-bottom: 28px;
 }
 
 /* ---- Home: exactly the mockup's composition ---- */
@@ -3085,6 +3088,44 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   }
 }
 
+/* ---- Licence line (visible on every view) ----
+ * FFmpeg is a separate GPL-3.0 program, so its notice must be reachable from
+ * the whole shell, not only Profile. The line is fixed in the bottom-left
+ * gutter (below Home's dock, which ends 24px above the viewport bottom) and
+ * the non-Home .ot-main padding keeps scrolled content above it.
+ * Its Licenses link opens Profile and scrolls to the About card. */
+.ot-licence {
+  position: fixed;
+  left: 16px;
+  bottom: 3px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ot-bg) 55%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: var(--ot-text-3);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ot-licence:hover {
+  color: var(--ot-text-2);
+}
+.ot-licence:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-licence-link {
+  color: var(--ot-text-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 /* ---- Profile pin chips (brief L): portrait + full name, own actions ---- */
 .ot-pin-list {
   display: flex;
