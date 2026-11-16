@@ -59,6 +59,8 @@ import {
 } from './summoner-tracker';
 import { clipboard } from 'electron';
 import { getAppSettings, type AppSettings } from './app-settings';
+import { getMatchHistory } from './match-history';
+import { computeLoadingStats, type LoadingStats } from '../src/overlay/loadingStats';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
@@ -136,6 +138,16 @@ export interface CachedEnemy {
 let monitorStarted = false;
 let liveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastChampSelectEnemies: CachedEnemy[] = [];
+/**
+ * The champion you locked in champ select (numeric LCU key + name). The
+ * loading card's form and the champion accent both need it, and champ select
+ * already delivers the session — no extra polling.
+ */
+let lastChampSelectSelf: { championId: number; championName?: string } | null = null;
+/** Recent form on `lastChampSelectSelf.championId`, fetched once per load. */
+let prematchStats: LoadingStats | null = null;
+/** Bumped on every load so a late fetch cannot attach to the wrong game. */
+let prematchStatsToken = 0;
 let inGame = false;
 /**
  * League is loading a game: GameStart, or InProgress before the Live Client
@@ -198,7 +210,9 @@ export function isPrematchLoadingPhase(phase: string | null, inGameNow: boolean)
 /** The one payload the loading screen needs: pet + phase, no board. */
 export function prematchLoadingPayload(
     phase: string | null,
-    pet: AppSettings['pet']
+    pet: AppSettings['pet'],
+    champion?: { championId: number; championName?: string } | null,
+    stats?: LoadingStats | null
 ): Record<string, unknown> {
     return {
         inGame: true,
@@ -207,6 +221,9 @@ export function prematchLoadingPayload(
         gameTime: 0,
         trustedGameTime: 0,
         pet,
+        championId: champion?.championId ?? null,
+        championName: champion?.championName ?? null,
+        ...(stats ? { loadingStats: stats } : {}),
         timestamp: Date.now(),
     };
 }
@@ -286,9 +303,38 @@ export function setMatchStartHotkeyHandler(handler: (() => void) | null): void {
     onMatchStartHotkeys = handler;
 }
 
+/**
+ * Remember the champion you locked in. `localPlayerCellId` links the session to
+ * your row; with no pick yet the slot is 0 and the previous value is dropped so
+ * a stale champion cannot color the next load.
+ */
+function rememberChampSelectSelf(
+    myTeam: Array<{ cellId?: number; championId?: number; championName?: string }> | undefined,
+    localPlayerCellId: number | undefined
+): void {
+    if (!Array.isArray(myTeam)) return;
+    const locked = myTeam.filter(
+        (member) => !!member && typeof member.championId === 'number' && member.championId > 0
+    );
+    if (locked.length === 0) {
+        lastChampSelectSelf = null;
+        return;
+    }
+    const self =
+        typeof localPlayerCellId === 'number' && localPlayerCellId >= 0
+            ? locked.find((member) => member.cellId === localPlayerCellId)
+            : locked.length === 1
+              ? locked[0]
+              : undefined;
+    if (!self?.championId) return;
+    lastChampSelectSelf = { championId: self.championId, championName: self.championName };
+}
+
 function ingestChampSelectSession(session: unknown): void {
     if (!session || typeof session !== 'object') return;
-    const theirTeam = (session as {
+    const typed = session as {
+        localPlayerCellId?: number;
+        myTeam?: Array<{ cellId?: number; championId?: number; championName?: string }>;
         theirTeam?: Array<{
             championId?: number;
             championName?: string;
@@ -298,7 +344,9 @@ function ingestChampSelectSession(session: unknown): void {
             spell1Id?: number;
             spell2Id?: number;
         }>;
-    }).theirTeam;
+    };
+    rememberChampSelectSelf(typed.myTeam, typed.localPlayerCellId);
+    const theirTeam = typed.theirTeam;
     if (!Array.isArray(theirTeam)) return;
 
     const enemies: CachedEnemy[] = [];
@@ -503,10 +551,22 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         trustedGameTime,
         matchEngaged: true,
     });
+    // Champ-select pick for this game. The numeric key drives the accent and
+    // the match list; only trust it when the name still matches the live
+    // champion (a stale pick must never recolor an unknown board).
+    const champSelectChampionId = ((): number | null => {
+        if (!lastChampSelectSelf) return null;
+        const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const live = compact(localPlayer?.championName || '');
+        const picked = compact(lastChampSelectSelf.championName || '');
+        if (live && picked && live !== picked) return null;
+        return lastChampSelectSelf.championId;
+    })();
     const payload = {
         inGame: !loading,
         loading,
         gameflowPhase,
+        championId: champSelectChampionId,
         gameMode: live?.gameData?.gameMode || null,
         gameTime,
         trustedGameTime,
@@ -911,6 +971,9 @@ export function getMayhemLiveOfferIds(): string[] {
 
 function resetMatchCaches(): void {
     lastChampSelectEnemies = [];
+    lastChampSelectSelf = null;
+    prematchStats = null;
+    prematchStatsToken += 1;
     lastOverlayFingerprint = '';
     lastSentOverlayPayload = null;
     lastGoodPayload = null;
@@ -1129,6 +1192,31 @@ function handleOverlayPageReady(): void {
 }
 
 /**
+ * Fetch your recent match history once per load and fold it into the loading
+ * payload. Reuses the existing match-history reader (summaries only: no per-game
+ * detail requests, no polling); the card shows the pet alone until this lands.
+ */
+async function loadPrematchStats(championId: number | null): Promise<void> {
+    if (!championId) return;
+    const token = prematchStatsToken;
+    try {
+        const matches = await getMatchHistory({
+            count: 60,
+            detailLimit: 0,
+            canFetchDetails: () => false,
+        });
+        if (token !== prematchStatsToken || !prematchLoading) return;
+        if (!lastChampSelectSelf || lastChampSelectSelf.championId !== championId) return;
+        prematchStats = computeLoadingStats(matches, championId);
+        sendFullOverlayUpdate(
+            prematchLoadingPayload(lcuSocket.phase, settingsForTick().pet, lastChampSelectSelf, prematchStats)
+        );
+    } catch {
+        // Offline or a fresh account: the card simply never appears.
+    }
+}
+
+/**
  * Enter the pre-match loading state once per load: clear a hide carried over
  * from the last match, raise the overlay and send the loading payload through
  * sendFullOverlayUpdate so lastSentOverlayPayload can replay it.
@@ -1136,6 +1224,8 @@ function handleOverlayPageReady(): void {
 function enterPrematchLoading(phase: string | null): void {
     if (prematchLoading) return;
     prematchLoading = true;
+    prematchStats = null;
+    prematchStatsToken += 1;
     const previousHide = isOverlayUserHidden();
     overlayLog('prematch-loading enter', {
         phase: phase ?? 'none',
@@ -1149,7 +1239,8 @@ function enterPrematchLoading(phase: string | null): void {
     syncScalesFromLeague();
     createOverlayWindow();
     showOverlay();
-    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet));
+    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, lastChampSelectSelf, prematchStats));
+    void loadPrematchStats(lastChampSelectSelf?.championId ?? null);
 }
 
 /**
@@ -1160,6 +1251,9 @@ function enterPrematchLoading(phase: string | null): void {
 function exitPrematchLoading(reason: string, hide: boolean): void {
     if (!prematchLoading) return;
     prematchLoading = false;
+    // Invalidate an in-flight stats fetch: it belongs to the load we just left.
+    prematchStats = null;
+    prematchStatsToken += 1;
     overlayLog('prematch-loading exit', { reason });
     if (!hide) return;
     hideOverlay();

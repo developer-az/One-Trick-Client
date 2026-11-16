@@ -104,6 +104,7 @@ export const OverlayPet: React.FC<{ preference: PetSettings }> = ({ preference }
   return (
     <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2" style={{ width: PET_LOGICAL_W, height: PET_LOGICAL_H }} aria-hidden>
       <canvas ref={canvasRef} width={PET_LOGICAL_W} height={PET_LOGICAL_H} className="block" />
+      <span className="ov-pet-ground" />
     </div>
   );
 };

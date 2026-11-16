@@ -65,6 +65,9 @@ import {
 import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
+import { LoadingCard } from './LoadingCard';
+import { DEFAULT_ACCENT, accentSoft, resolveChampionAccent } from './champAccent';
+import { resolveChampionRef } from '../data/championCatalog';
 import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
 
 const mayhemBundle = bundledMayhem as MayhemBundle;
@@ -267,7 +270,7 @@ function OverlayChromePanel({
   className?: string;
 }) {
   return (
-    <div className={`hud-overlay-panel hud-overlay-panel--rail overflow-hidden ${className}`}>
+    <div className={`hud-overlay-panel ov-panel ov-panel-accent hud-overlay-panel--rail overflow-hidden ${className}`}>
       <span className="hud-corner hud-corner-tl" aria-hidden />
       <span className="hud-corner hud-corner-br" aria-hidden />
       <span className="hud-rail hud-rail-top" aria-hidden />
@@ -1234,10 +1237,50 @@ export const OverlayApp: React.FC = () => {
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
 
+  // Champion accent: one vivid color from the champion's square art, resolved
+  // once per match (cached by champion id in champAccent.ts) and applied to the
+  // overlay root so every panel reads the same `--ov-champ`.
+  const accentSource = useMemo(
+    () => ({
+      key: state.championId ?? null,
+      name: state.localPlayer?.championName || state.championName || '',
+    }),
+    [state.championId, state.localPlayer?.championName, state.championName]
+  );
+  useEffect(() => {
+    const root = document.documentElement;
+    let cancelled = false;
+    if (accentSource.key == null && !accentSource.name) {
+      root.style.setProperty('--ov-champ', DEFAULT_ACCENT);
+      root.style.setProperty('--ov-champ-soft', accentSoft(DEFAULT_ACCENT));
+      return;
+    }
+    void resolveChampionAccent(accentSource).then((hex) => {
+      if (cancelled) return;
+      root.style.setProperty('--ov-champ', hex);
+      root.style.setProperty('--ov-champ-soft', accentSoft(hex));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accentSource]);
+
+  // Loading-card champion name: payload name first, else resolve the numeric
+  // key through the champion catalog the overlay already ingested.
+  const loadingChampionName = useMemo(() => {
+    const payloadName = (state.championName || '').trim();
+    if (payloadName) return payloadName;
+    if (state.championId == null) return '';
+    return resolveChampionRef({ key: state.championId })?.name || '';
+  }, [state.championName, state.championId]);
+
   if (state.loading) {
     return (
       <div className="w-screen h-screen pointer-events-none bg-transparent">
         <OverlayPet preference={activePet} />
+        {state.loadingStats ? (
+          <LoadingCard championName={loadingChampionName} stats={state.loadingStats} />
+        ) : null}
       </div>
     );
   }

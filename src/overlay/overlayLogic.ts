@@ -26,6 +26,7 @@ import {
 } from '../logic/purchasePlan';
 import type { ObjectiveTimers } from '../logic/gameState';
 import type { PetSettings } from '../app/pixelPetLogic';
+import type { LoadingStats } from './loadingStats';
 
 export interface OverlayEnemy {
   championName: string;
@@ -131,6 +132,11 @@ export interface OverlayState {
   inGame: boolean;
   /** Loading screen only — pet overlay, no HUD rails. */
   loading?: boolean;
+  /** Champion you are loading in as (numeric LCU key + display name). */
+  championId?: number | null;
+  championName?: string | null;
+  /** Recent form on that champion, fetched once per load (see loadingStats.ts). */
+  loadingStats?: LoadingStats | null;
   objectiveTimers?: ObjectiveTimers | null;
   pet?: PetSettings;
   trustedGameTime?: number;
