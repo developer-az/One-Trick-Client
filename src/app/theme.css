@@ -2767,6 +2767,19 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   height: 0;
   min-height: 0;
 }
+/* Narrow tiers: the disk is a small half-disc behind the hub, centred — never
+   a stray arc in the top-left corner (brief L). */
+.ot-disk.is-bar,
+.ot-disk.is-icons {
+  width: 100%;
+  padding: 0;
+}
+.ot-disk.is-bar .ot-disk-circle,
+.ot-disk.is-icons .ot-disk-circle {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .ot-disk-bar {
   position: absolute;
   left: 50%;
@@ -3060,4 +3073,103 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   .ot-shell[data-ot-view='home'] .ot-pet-area {
     display: none;
   }
+}
+
+/* ---- Profile pin chips (brief L): portrait + full name, own actions ---- */
+.ot-pin-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.ot-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--ot-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+}
+.ot-pin-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 4px 0 0;
+  border-radius: 999px;
+  color: var(--ot-text-2);
+  transition: color 0.12s ease;
+}
+.ot-pin-chip-main:hover,
+.ot-pin-chip-main.is-active {
+  color: var(--ot-text);
+}
+.ot-pin-chip-main.is-active .ot-pin-portrait {
+  border-color: var(--ot-champ);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 45%, transparent);
+}
+.ot-pin-chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 132px;
+}
+.ot-pin-chip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ot-pin-chip-btn {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: var(--ot-text-3);
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.ot-pin-chip-btn:hover:not(:disabled),
+.ot-pin-chip-btn:focus-visible {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+.ot-pin-chip-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.ot-pin-chip-btn.is-remove:hover {
+  color: var(--ot-blood);
+}
+.ot-pin-chip.is-add {
+  padding: 3px;
+}
+.ot-pin-chip .ot-pin-add-wrap,
+.ot-pin-chip .ot-pin-add {
+  width: 26px;
+  height: 26px;
+  border-width: 1px;
+  font-size: 14px;
+}
+.ot-pin-row.is-manage {
+  display: block;
+  min-width: 0;
+}
+.ot-pin-row.is-manage .ot-pin-manage-hint {
+  display: block;
+  margin-top: 8px;
 }

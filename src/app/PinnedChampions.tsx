@@ -199,8 +199,12 @@ export const PinAdd: React.FC<{
 };
 
 /**
- * Pin rail for the bar / icon tiers and the Profile view: a row of dots plus
- * the "+" slot. `manage` adds the reorder hint.
+ * Pin rail for the bar / icon tiers and the Profile view.
+ *
+ * Without `manage` it is a row of round portraits (the disk's narrow tiers).
+ * With `manage` it is a wrapped list of pin chips — portrait, full champion
+ * name, and its own reorder/unpin buttons — plus the "+" chip, so names are
+ * never cramped or truncated and nothing collides.
  */
 export const PinRail: React.FC<
   PinActions & {
@@ -212,8 +216,84 @@ export const PinRail: React.FC<
   }
 > = ({ pins, champions, activeId, onPick, onUnpin, onReorder, onPin, manage = false }) => {
   const resolved = resolvePins(pins, champions);
+  if (manage) {
+    return (
+      <div className="ot-pin-row is-manage" role="group" aria-label="Pinned champions">
+        <ul className="ot-pin-list">
+          {resolved.map((champion, index) => {
+            const id = String(champion.id || '');
+            const name = champion.name || id;
+            const isActive = champion.id === activeId;
+            return (
+              <li key={id} className="ot-pin-chip" data-ot-geo="pin">
+                <button
+                  type="button"
+                  className={'ot-pin-chip-main' + (isActive ? ' is-active' : '')}
+                  onClick={() => onPick(id)}
+                  onKeyDown={(e) => {
+                    if (!e.altKey) return;
+                    if (e.key === 'ArrowLeft') {
+                      e.preventDefault();
+                      onReorder(index, index - 1);
+                    } else if (e.key === 'ArrowRight') {
+                      e.preventDefault();
+                      onReorder(index, index + 1);
+                    }
+                  }}
+                  aria-label={isActive ? name + ' (active champion)' : 'Make ' + name + ' the active champion'}
+                  aria-pressed={isActive}
+                  title={name}
+                >
+                  <Portrait champion={champion} size={26} />
+                  <span className="ot-pin-chip-name" data-ot-text="pin-name">
+                    {name}
+                  </span>
+                </button>
+                <span className="ot-pin-chip-actions">
+                  <button
+                    type="button"
+                    className="ot-pin-chip-btn"
+                    aria-label={'Move ' + name + ' left'}
+                    disabled={index === 0}
+                    onClick={() => onReorder(index, index - 1)}
+                  >
+                    {'<'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ot-pin-chip-btn"
+                    aria-label={'Move ' + name + ' right'}
+                    disabled={index === resolved.length - 1}
+                    onClick={() => onReorder(index, index + 1)}
+                  >
+                    {'>'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ot-pin-chip-btn is-remove"
+                    aria-label={'Unpin ' + name}
+                    onClick={() => onUnpin(id)}
+                  >
+                    {'\u00d7'}
+                  </button>
+                </span>
+              </li>
+            );
+          })}
+          {pins.length < PIN_LIMIT ? (
+            <li className="ot-pin-chip is-add" data-ot-geo="pin">
+              <PinAdd champions={champions} pins={pins} onPin={onPin} label="Pin a champion" />
+            </li>
+          ) : null}
+        </ul>
+        {resolved.length ? (
+          <p className="ot-pin-manage-hint">Drag a pin on the disk to reorder · Alt+← → moves · × unpins</p>
+        ) : null}
+      </div>
+    );
+  }
   return (
-    <div className={`ot-pin-row ${manage ? 'is-manage' : ''}`} role="group" aria-label="Pinned champions">
+    <div className="ot-pin-row" role="group" aria-label="Pinned champions">
       {resolved.map((champion, index) => (
         <PinDot
           key={String(champion.id)}
@@ -224,13 +304,9 @@ export const PinRail: React.FC<
           onPick={onPick}
           onUnpin={onUnpin}
           onReorder={onReorder}
-          labelled={manage}
         />
       ))}
       {pins.length < PIN_LIMIT ? <PinAdd champions={champions} pins={pins} onPin={onPin} /> : null}
-      {manage && resolved.length ? (
-        <span className="ot-pin-manage-hint">Drag to reorder · Alt+← → moves · × unpins</span>
-      ) : null}
     </div>
   );
 };
