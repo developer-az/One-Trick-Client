@@ -1,15 +1,25 @@
-import React, { useState } from 'react';
+/**
+ * Home (brief J) — champion-first landing screen.
+ *
+ * Left: the champion you main, named in Cinzel on one ink plate with a single
+ * line of facts. Right: the actions that actually exist (open the build, open
+ * the draft board) — never a fake "find match". Bottom: four dense info cards
+ * from data the app already has (recent form, core build, matchup focus, last
+ * game). Numbers are tabular; nothing here animates.
+ */
+import React from 'react';
 import type { CatalogRole } from '../../catalog/types';
-import { championSplashUrl } from '../../data/ddragonAssets';
 import type { Champion } from '../../logic/pykeLogic';
+import type { Build } from '../../logic/pykeLogic';
 import { AUTHORED_PROFILES, isAuthoredProfileId, type ChampionProfile, type ProfileId } from '../../logic/profiles';
+import { byChampion, pct, record } from '../../logic/stats';
 import type { ViewId } from '../App';
 import { ROLES, isDesktop, useAppSettings, type DraftState, type LeagueState } from '../hooks';
-import { IconArrowRight } from '../icons';
+import { IconArrowRight, IconDraft, IconLoadout } from '../icons';
 import { SpellTimers } from '../SpellTimers';
 import type { LeagueStatus } from '../status';
-import { Badge, Card, CardHeader, ChampionCombobox, Pill, Portrait, SettingRow, Switch } from '../ui';
-import { CrestMark, Filigree, type BannerChampion } from '../ornaments';
+import { Badge, Button, Card, CardHeader, ChampionCombobox, Item, Pill, Portrait, SettingRow, Switch } from '../ui';
+import { CrestMark, type BannerChampion } from '../ornaments';
 import { OneTrickCard } from './OneTrickCard';
 
 const STAGE_TITLE: Record<LeagueStatus['stage'], string> = {
@@ -24,6 +34,13 @@ const STAGE_TITLE: Record<LeagueStatus['stage'], string> = {
   post: 'Match over',
 };
 
+type HomeLoadout = {
+  build: Build;
+  analysis: { winCondition?: string; aggressionLevel?: string; majorThreats?: string[] };
+} | null;
+
+const FORM_GAMES = 10;
+
 export const HomeView: React.FC<{
   league: LeagueState;
   status: LeagueStatus;
@@ -32,12 +49,16 @@ export const HomeView: React.FC<{
   champions: Champion[];
   /** Resolved main champion (explicit or most-played); null = no banner identity. */
   mainChampion?: BannerChampion | null;
+  games: MatchSummary[] | null;
+  loadout: HomeLoadout;
+  /** Baseline plan when no enemy team is known yet. */
+  plan?: Build | null;
   onSelectChampion: (champion: Champion, role: CatalogRole) => void;
   onSelectProfile: (id: ProfileId) => void;
   onNavigate: (view: ViewId) => void;
-}> = ({ league, status, draft, profile, champions, mainChampion, onSelectChampion, onSelectProfile, onNavigate }) => {
+}> = ({ league, status, draft, profile, champions, mainChampion, games, loadout, plan, onSelectChampion, onSelectProfile, onNavigate }) => {
   const { settings, update } = useAppSettings();
-  const [role, setRole] = useState<CatalogRole>(profile.role);
+  const [role, setRole] = React.useState<CatalogRole>(profile.role);
   const profileChampion = champions.find((c) => c.id === profile.championId) || {
     id: profile.championId,
     name: profile.shortLabel,
@@ -45,95 +66,184 @@ export const HomeView: React.FC<{
     tags: [],
   };
   const authored = isAuthoredProfileId(profile.id);
-  // The hero art follows the chosen main champion, then the active profile.
   const bannerChampion = mainChampion || profileChampion;
-  const bannerId = bannerChampion.id || profile.championId;
+  const bannerName = bannerChampion.name || bannerChampion.id || profile.shortLabel;
 
-  const cta =
-    status.stage === 'draft' ? (
-      <button type="button" className="ot-btn ot-btn-primary" onClick={() => onNavigate('draft')}>
-        Open champ select <IconArrowRight />
-      </button>
-    ) : status.stage === 'preview' ? (
-      <button type="button" className="ot-btn" onClick={() => onNavigate('draft')}>
-        Try the draft board <IconArrowRight />
-      </button>
-    ) : null;
+  const history = React.useMemo(() => games || [], [games]);
+  const championKey = Number(profile.championKey);
+  const championRow = React.useMemo(
+    () => byChampion(history).find((row) => row.championId === championKey) || null,
+    [history, championKey]
+  );
+  const overall = React.useMemo(() => record(history), [history]);
+  const form = history.slice(0, FORM_GAMES);
+  const lastGame = history[0] || null;
+  const lastChampion = lastGame ? champions.find((c) => Number(c.key) === lastGame.championId) || null : null;
+  const enemyFocus = draft.enemy[profile.primaryEnemyRole]?.champion || null;
+
+  const planBuild = loadout?.build || plan || null;
+  const coreItems = planBuild?.core?.slice(0, 3) || [];
+  const boots = planBuild?.boots || null;
+  const actions = (
+    <div className="ot-home-cta">
+      <Button variant="primary" icon={<IconLoadout />} onClick={() => onNavigate('loadout')}>
+        {status.stage === 'draft' ? 'Open your loadout' : 'Open build'}
+      </Button>
+      <Button
+        variant="secondary"
+        icon={status.stage === 'draft' ? <IconDraft /> : <IconArrowRight />}
+        onClick={() => onNavigate('draft')}
+      >
+        {status.stage === 'draft' ? 'Champ select' : 'Draft helper'}
+      </Button>
+    </div>
+  );
 
   return (
-    <div className="ot-page">
-      <Card className="ot-hero">
-        <div className="ot-splash" aria-hidden>
-          <img
-            src={championSplashUrl(bannerId)}
-            alt=""
-            decoding="async"
-            onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-          />
-        </div>
-        <div className="ot-orn-hero-scrim" aria-hidden />
-        <div className="flex flex-wrap items-end justify-between gap-4 py-2">
-          <div className="min-w-0 max-w-xl">
-            {mainChampion ? (
-              <div className="ot-orn-hero-crest">
-                <CrestMark size={22} />
-                <div className="min-w-0">
-                  <div className="ot-orn-eyebrow">Main champion</div>
-                  <div className="ot-orn-hero-name truncate">{mainChampion.name || mainChampion.id}</div>
-                </div>
-              </div>
-            ) : null}
-            <Pill tone={status.tone}>{status.short}</Pill>
-            <h1 className="ot-page-title ot-orn-title mt-3">{STAGE_TITLE[status.stage]}</h1>
-            <p className="mt-2 ot-muted leading-relaxed">{status.detail}</p>
-            {status.next ? (
-              <p className="mt-3 text-sm">
-                <span className="ot-faint">Next: </span>
-                {status.next}
-              </p>
-            ) : null}
+    <div className="ot-page ot-home">
+      <div className="ot-home-top">
+        <section className="ot-home-title" aria-labelledby="ot-home-champion">
+          <div className="ot-home-eyebrow">
+            <CrestMark size={14} />
+            <span>Your main</span>
           </div>
-          {cta}
-        </div>
-      </Card>
-      <Filigree className="my-2" />
+          <h1 id="ot-home-champion" className="ot-home-champion ot-orn-title truncate">
+            {bannerName}
+          </h1>
+          <p className="ot-home-facts ot-num">
+            <span>{profile.role}</span>
+            <span className="ot-home-sep" aria-hidden="true">
+              ·
+            </span>
+            <span>{championRow ? `${championRow.games} games` : `${overall.games} games`}</span>
+            <span className="ot-home-sep" aria-hidden="true">
+              ·
+            </span>
+            <span>{championRow ? `KDA ${championRow.kda.toFixed(2)}` : 'KDA —'}</span>
+            <span className="ot-home-sep" aria-hidden="true">
+              ·
+            </span>
+            <span>{championRow ? `${pct(championRow.winRate)} of ${championRow.games}` : 'no record yet'}</span>
+          </p>
+          <div className="ot-home-status">
+            <Pill tone={status.tone}>{status.short}</Pill>
+            <span className="ot-home-status-text">{status.detail}</span>
+          </div>
+          {draft.live || league.inGame ? (
+            <div className="ot-home-live">
+              <Badge tone={league.inGame ? 'teal' : 'gold'}>{league.inGame ? 'In match' : 'Champ select'}</Badge>
+              <span className="ot-muted">
+                {league.inGame ? 'The overlay is live.' : STAGE_TITLE[status.stage]}
+              </span>
+            </div>
+          ) : null}
+        </section>
 
-      <div className="grid gap-4 lg:grid-cols-5 mb-4">
-        <Card className="lg:col-span-3">
-          <CardHeader
-            title="Your champion"
-            sub="Follows your champ select pick automatically. Set it here for practice or to plan ahead."
-          />
-          <div className="flex items-center gap-4 mb-4">
-            <Portrait champion={profileChampion} size={64} ring="gold" />
+        <section className="ot-home-side min-w-0" aria-label="Champion and actions">
+          <div className="ot-home-identity">
+            <Portrait champion={profileChampion} size={56} ring="gold" />
             <div className="min-w-0">
-              <div className="ot-card-heading truncate">{profile.label}</div>
-              <div className="mt-1 flex flex-wrap gap-1.5">
+              <div className="ot-home-identity-name truncate">{profile.label}</div>
+              <div className="ot-home-identity-tags">
                 <Badge tone="gold">{profile.role}</Badge>
-                {authored ? <Badge tone="teal">Hand-tuned doctrine</Badge> : <Badge>Catalog build</Badge>}
+                {authored ? <Badge tone="teal">Hand-tuned</Badge> : <Badge>Catalog build</Badge>}
               </div>
             </div>
           </div>
+          {actions}
+          <p className="ot-home-next">
+            {status.next || 'Nothing queued. Your build and matchups are ready when champ select starts.'}
+          </p>
+        </section>
+      </div>
 
-          <div className="ot-sidebar-label !px-0">Hand-tuned</div>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {AUTHORED_PROFILES.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`ot-btn ot-btn-sm ${profile.id === p.id ? '!border-[color:var(--ot-gold)]' : ''}`}
-                onClick={() => onSelectProfile(p.id)}
-                aria-pressed={profile.id === p.id}
-              >
-                <Portrait champion={champions.find((c) => c.id === p.championId) || { id: p.championId, name: p.shortLabel }} size={20} />
-                {p.label}
-              </button>
-            ))}
+      <div className="ot-home-dock grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <article className="ot-info-card" aria-labelledby="ot-home-form">
+          <div className="ot-info-card-head" id="ot-home-form">
+            Recent form
           </div>
+          <div className="ot-info-card-value ot-num">
+            {overall.wins}
+            <span className="ot-info-card-unit">W</span>
+            <span className="ot-info-card-sep">·</span>
+            {overall.losses}
+            <span className="ot-info-card-unit">L</span>
+          </div>
+          <div className="ot-form-bar" role="img" aria-label={`Last ${form.length} games: ${form.map((g) => (g.win ? 'win' : 'loss')).join(', ')}`}>
+            {form.length ? (
+              form.map((g) => <span key={g.gameId} className={`ot-form-pip ${g.win ? 'is-win' : 'is-loss'}`} />)
+            ) : (
+              <span className="ot-info-card-empty">No games read yet</span>
+            )}
+          </div>
+          <div className="ot-info-card-foot ot-num">
+            {overall.games ? `${pct(overall.winRate)} across ${overall.games} games` : 'Waiting for match history'}
+          </div>
+        </article>
 
-          <div className="ot-sidebar-label !px-0">Any champion</div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex-1 min-w-[220px]">
+        <article className="ot-info-card" aria-labelledby="ot-home-build">
+          <div className="ot-info-card-head" id="ot-home-build">
+            Build
+          </div>
+          {coreItems.length ? (
+            <div className="ot-info-card-items">
+              {coreItems.map((item) => (
+                <Item key={item.id} id={item.id} name={item.name} size={28} />
+              ))}
+              {boots ? <Item id={boots.id} name={boots.name} size={28} /> : null}
+            </div>
+          ) : (
+            <div className="ot-info-card-value">—</div>
+          )}
+          <div className="ot-info-card-foot">
+            {coreItems.length ? coreItems.map((item) => item.name).join(' · ') : 'Fills in when the enemy team is known'}
+          </div>
+        </article>
+
+        <article className="ot-info-card" aria-labelledby="ot-home-matchup">
+          <div className="ot-info-card-head" id="ot-home-matchup">
+            Matchups
+          </div>
+          <div className="ot-info-card-value truncate">{enemyFocus ? enemyFocus.name : profile.primaryEnemyRole}</div>
+          <div className="ot-info-card-foot">
+            {enemyFocus
+              ? loadout?.analysis?.winCondition || `${profile.primaryEnemyRole} is the lane that decides this one.`
+              : `Lane focus · waits on a ${profile.primaryEnemyRole.toLowerCase()} pick`}
+          </div>
+        </article>
+
+        <article className="ot-info-card" aria-labelledby="ot-home-last">
+          <div className="ot-info-card-head" id="ot-home-last">
+            Last game
+          </div>
+          {lastGame ? (
+            <>
+              <div className="ot-info-card-value ot-num">
+                {lastGame.kills}
+                <span className="ot-info-card-sep">/</span>
+                {lastGame.deaths}
+                <span className="ot-info-card-sep">/</span>
+                {lastGame.assists}
+              </div>
+              <div className="ot-info-card-foot">
+                <Badge tone={lastGame.win ? 'teal' : 'red'}>{lastGame.win ? 'Win' : 'Loss'}</Badge>
+                <span className="truncate">{lastChampion?.name || 'Champion'}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="ot-info-card-value">—</div>
+              <div className="ot-info-card-foot">No Summoner&apos;s Rift game read yet</div>
+            </>
+          )}
+        </article>
+      </div>
+
+      <div className="ot-home-lower">
+        <Card>
+          <CardHeader title="Your champion" sub="Follows your champ select pick. Pick one here to plan ahead." />
+          <div className="ot-home-pick">
+            <div className="flex-1 min-w-[200px]">
               <ChampionCombobox
                 champions={champions}
                 value={null}
@@ -150,9 +260,23 @@ export const HomeView: React.FC<{
               ))}
             </div>
           </div>
+          <div className="ot-home-authored">
+            {AUTHORED_PROFILES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`ot-home-authored-item ${profile.id === p.id ? 'is-active' : ''}`}
+                onClick={() => onSelectProfile(p.id)}
+                aria-pressed={profile.id === p.id}
+              >
+                <Portrait champion={champions.find((c) => c.id === p.championId) || { id: p.championId, name: p.shortLabel }} size={20} />
+                <span className="truncate">{p.label}</span>
+              </button>
+            ))}
+          </div>
         </Card>
 
-        <div className="lg:col-span-2 space-y-4">
+        <div className="ot-home-rail">
           <OneTrickCard champion={profileChampion as Champion} role={profile.role} />
 
           {league.inGame && league.enemySummoners.length ? (
@@ -163,7 +287,7 @@ export const HomeView: React.FC<{
           ) : null}
 
           <Card>
-            <CardHeader title="In-game overlay" />
+            <CardHeader title="Overlay" />
             {isDesktop ? (
               <SettingRow
                 title="Show the overlay in matches"
@@ -180,37 +304,31 @@ export const HomeView: React.FC<{
             ) : (
               <p className="text-sm ot-muted">Available in the desktop app.</p>
             )}
-            <button type="button" className="ot-btn ot-btn-ghost ot-btn-sm mt-2 -ml-2" onClick={() => onNavigate('overlay')}>
-              Customise overlay <IconArrowRight />
-            </button>
+            <div className="mt-2">
+              <Button variant="ghost" iconAfter={<IconArrowRight />} onClick={() => onNavigate('overlay')}>
+                Customise overlay
+              </Button>
+            </div>
           </Card>
-
-          <Card>
-            <CardHeader title="Hotkeys" sub="Work while League has focus." />
-            <dl className="space-y-2.5 text-sm">
-              <Hotkey keys={['Page Up']} alt="Num 9" label="Enemy ADC used Flash" />
-              <Hotkey keys={['Page Down']} alt="Num 3" label="Enemy support used Flash" />
-              <Hotkey keys={['Ctrl', 'Shift', 'H']} label="Show or hide overlay" />
-              <Hotkey keys={['Ctrl', 'Shift', 'U']} label="Unlock overlay to move it" />
-            </dl>
-          </Card>
-
-          {draft.live ? null : (
-            <p className="text-xs ot-faint px-1 leading-relaxed">
-              Builds and matchup notes are heuristics from champion classes and the authored doctrines, not
-              win-rate data.
-            </p>
-          )}
         </div>
+      </div>
+
+      <p className="ot-home-note text-xs ot-faint">
+        Builds and matchup notes are heuristics from champion classes and the authored doctrines, not win-rate data.
+      </p>
+      <div className="ot-home-hotkeys">
+        <Hotkey keys={['Page Up']} alt="Num 9" label="Enemy ADC used Flash" />
+        <Hotkey keys={['Page Down']} alt="Num 3" label="Enemy support used Flash" />
+        <Hotkey keys={['Ctrl', 'Shift', 'H']} label="Show or hide overlay" />
       </div>
     </div>
   );
 };
 
 const Hotkey: React.FC<{ keys: string[]; alt?: string; label: string }> = ({ keys, alt, label }) => (
-  <div className="flex items-center justify-between gap-4">
-    <dt className="ot-muted">{label}</dt>
-    <dd className="flex gap-1 flex-none">
+  <div className="ot-home-hotkey">
+    <span className="ot-muted">{label}</span>
+    <span className="flex gap-1 flex-none">
       {keys.map((k) => (
         <kbd key={k} className="ot-kbd">
           {k}
@@ -222,6 +340,6 @@ const Hotkey: React.FC<{ keys: string[]; alt?: string; label: string }> = ({ key
           <kbd className="ot-kbd">{alt}</kbd>
         </>
       ) : null}
-    </dd>
+    </span>
   </div>
 );

@@ -92,6 +92,27 @@
   --ot-font-display: 'Cinzel', 'Times New Roman', serif;
   --ot-font-mono: ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', monospace;
 
+  /* App typography (brief J): body 13px weight 500, labels/buttons 600, key
+     numbers 700, eyebrows 11px with wide tracking. Body copy never goes below
+     13px; 11px is reserved for eyebrows and metadata. */
+  --ot-fs-body: 13px;
+  --ot-fs-eyebrow: 11px;
+  --ot-track-eyebrow: 0.18em;
+  --ot-weight-body: 500;
+  --ot-weight-label: 600;
+  --ot-weight-strong: 700;
+  --ot-lh-body: 1.35;
+
+  /* App control set (the shared Button). `.ot-btn` stays the dense 32px
+     control used by the data views. */
+  --ot-btn-height: 36px;
+  --ot-btn-height-lg: 40px;
+  --ot-btn-radius: 6px;
+
+  /* Champion backdrop strength per view (set by [data-ot-view] in theme.css):
+     0 = no art, 1 = full strength. Dense views dial it down. */
+  --ot-bg-art: 0.58;
+
   /* Overlay readability: text scale independent of HUD scale. */
   --ov-text-scale: 1;
 }

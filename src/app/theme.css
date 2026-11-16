@@ -1,4 +1,4 @@
-﻿/*
+/*
  * One Trick — dashboard design system.
  *
  * Gothic chrome: ink-black surfaces, chrome silver for "yours", blood red as
@@ -13,12 +13,14 @@
 
 html:not(.overlay-root) {
   font-family: var(--ot-font);
-  font-weight: 450;
+  font-weight: var(--ot-weight-body);
   letter-spacing: -0.005em;
   color: var(--ot-text);
   background: var(--ot-bg);
   /* Appearance: rem-based type scales with the font-scale control. */
   font-size: calc(100% * var(--ot-font-scale));
+  line-height: var(--ot-lh-body);
+  text-rendering: optimizeLegibility;
 }
 
 html:not(.overlay-root) body {
@@ -26,6 +28,7 @@ html:not(.overlay-root) body {
   color: var(--ot-text);
   background: var(--ot-bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html:not(.overlay-root) ::-webkit-scrollbar {
@@ -53,10 +56,12 @@ html:not(.overlay-root) ::selection {
 
 .ot-shell {
   display: grid;
-  grid-template-rows: 44px 1fr;
-  grid-template-columns: 224px 1fr;
+  grid-template-rows: 44px auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+  position: relative;
+  background: var(--ot-bg);
 }
 
 .ot-titlebar {
@@ -66,9 +71,16 @@ html:not(.overlay-root) ::selection {
   gap: 14px;
   padding: 0 152px 0 16px; /* right: native window controls (titleBarOverlay) */
   border-bottom: 1px solid var(--ot-border);
-  background: var(--ot-bg);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
   -webkit-app-region: drag;
   user-select: none;
+}
+.ot-titlebar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .ot-titlebar .ot-no-drag {
   -webkit-app-region: no-drag;
@@ -148,10 +160,12 @@ html:not(.overlay-root) ::selection {
 }
 
 .ot-main {
+  position: relative;
+  z-index: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
   contain: paint;
-  background: var(--ot-bg-raised);
+  background: transparent;
 }
 .ot-page {
   max-width: 1180px;
@@ -758,12 +772,6 @@ html:not(.overlay-root) ::selection {
  * animation, nothing that repaints on its own.
  */
 
-.ot-main {
-  background:
-    radial-gradient(ellipse 80% 40% at 50% 0%, rgba(180, 36, 58, 0.07), transparent 70%),
-    var(--ot-bg-raised);
-}
-
 .ot-titlebar {
   border-bottom: 1px solid transparent;
   border-image: linear-gradient(90deg, transparent, rgba(212, 216, 222, 0.22) 20%, rgba(180, 36, 58, 0.5) 50%, rgba(212, 216, 222, 0.22) 80%, transparent) 1;
@@ -1148,7 +1156,7 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
 .ot-pet-area {
   position: fixed;
   right: 24px;
-  bottom: 18px;
+  bottom: 30px;
   z-index: 30;
   width: 128px;
   height: 72px;
@@ -1478,5 +1486,993 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   .ot-segment button,
   .ot-orn-strip {
     transition: none;
+  }
+}
+
+/* ===========================================================================
+ * Brief J — orbital client shell, champion backdrop, app typography.
+ *
+ * The shell is a grid: titlebar / disk / scroll area / footer, over a
+ * full-bleed champion splash masked with an ink vignette. Panels sit on ink
+ * >= 84% so copy never lands on raw art. Static geometry only: no filters, no
+ * blur, no loops; the one motion is a <= 120ms hover/active step.
+ * ========================================================================= */
+
+/* ---- Champion backdrop ---- */
+.ot-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ot-bg-art {
+  position: absolute;
+  inset: 0;
+  opacity: calc(0.62 * var(--ot-bg-art));
+}
+.ot-bg-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 18%;
+  -webkit-mask-image: radial-gradient(ellipse 82% 72% at 52% 14%, #000 18%, rgba(0, 0, 0, 0.55) 52%, transparent 78%);
+  mask-image: radial-gradient(ellipse 82% 72% at 52% 14%, #000 18%, rgba(0, 0, 0, 0.55) 52%, transparent 78%);
+}
+.ot-bg-ink {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 62% 46% at 50% 6%, transparent 12%, color-mix(in srgb, var(--ot-bg) 72%, transparent) 82%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ot-bg) 46%, transparent) 0%,
+      color-mix(in srgb, var(--ot-bg) 86%, transparent) 52%,
+      var(--ot-bg) 88%
+    );
+}
+/* Per-view art strength: Home strongest, dense reading views quieter. */
+.ot-shell[data-ot-view='home'] {
+  --ot-bg-art: 1;
+}
+.ot-shell[data-ot-view='profile'] {
+  --ot-bg-art: 0.8;
+}
+.ot-shell[data-ot-view='stats'],
+.ot-shell[data-ot-view='review'],
+.ot-shell[data-ot-view='draft'],
+.ot-shell[data-ot-view='performance'] {
+  --ot-bg-art: 0.34;
+}
+.ot-shell[data-ot-view='loadout'],
+.ot-shell[data-ot-view='overlay'],
+.ot-shell[data-ot-view='mayhem'] {
+  --ot-bg-art: 0.5;
+}
+
+/* ---- Footer: attribution + licence line (kept from the old sidebar) ---- */
+.ot-shell-foot {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 16px 6px;
+  border-top: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+}
+.ot-shell-foot-rule {
+  flex: none;
+  display: block;
+  width: 140px;
+  height: 6px;
+}
+.ot-shell-foot-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ot-text-3);
+}
+
+/* ---- Profile chip (titlebar, right) ---- */
+.ot-profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  max-width: 230px;
+  padding: 0 10px 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+  color: var(--ot-text);
+  text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.ot-profile-chip:hover {
+  background: var(--ot-surface-2);
+  border-color: var(--ot-border-bright);
+}
+.ot-profile-chip[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--ot-champ) 60%, transparent);
+}
+.ot-profile-chip-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  color: var(--ot-champ);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.ot-profile-chip-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ot-profile-chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ot-profile-chip-sub {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ot-text-3);
+}
+
+/* ---- The disk ---- */
+.ot-disk {
+  position: relative;
+  z-index: 3;
+  justify-self: center;
+  width: min(1040px, calc(100% - 20px));
+  height: var(--ot-disk-h, 184px);
+}
+.ot-disk-plate {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid var(--ot-border-strong);
+  border-top: 0;
+  border-radius: 0 0 50% 50% / 0 0 66% 66%;
+  background:
+    radial-gradient(120% 150% at 50% 0%, color-mix(in srgb, var(--ot-surface) 52%, transparent), transparent 68%),
+    color-mix(in srgb, var(--ot-bg) 90%, transparent);
+}
+.ot-disk-ring {
+  position: absolute;
+  top: 34px;
+  left: 50%;
+  width: 470px;
+  height: 470px;
+  transform: translateX(-50%);
+  border: 1px dashed var(--ot-border-strong);
+  border-radius: 999px;
+}
+.ot-disk-top {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: 260px;
+}
+.ot-disk-hub {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  transition: border-color 0.12s ease;
+}
+.ot-disk-hub-portrait {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ot-champ) 70%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 22%, transparent);
+}
+.ot-disk-hub:hover .ot-disk-hub-portrait {
+  border-color: var(--ot-champ);
+}
+.ot-disk-name {
+  font-family: var(--ot-font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  color: var(--ot-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+.ot-disk-filigree {
+  width: 120px;
+  height: 6px;
+}
+.ot-orbit {
+  position: absolute;
+  z-index: 2;
+  width: 0;
+  height: 0;
+}
+.ot-orbit-slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+}
+
+/* ---- Nav pills (shared by the arc, the bar and the icon rail) ---- */
+.ot-disk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 18px;
+  border: 1px solid var(--ot-border-strong);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ot-disk-pill.is-arc {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+.ot-disk-pill:hover {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-disk-pill.is-active {
+  color: var(--ot-text);
+  border-color: color-mix(in srgb, var(--ot-champ) 62%, transparent);
+  background: var(--ot-surface-2);
+  box-shadow: inset 0 -2px 0 var(--ot-champ);
+}
+.ot-disk-pill:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-disk-pill svg {
+  flex: none;
+  opacity: 0.9;
+}
+.ot-disk-pill.is-active svg {
+  color: var(--ot-champ);
+  opacity: 1;
+}
+.ot-disk-pill .ot-nav-badge {
+  margin-left: 2px;
+}
+
+/* Bar / icon tiers: hub, segmented bar and pins stack in the disk's flow. */
+.ot-disk.is-bar,
+.ot-disk.is-icons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(920px, calc(100% - 16px));
+  height: auto;
+  min-height: var(--ot-disk-h, 168px);
+  padding: 6px 12px 10px;
+}
+.ot-disk.is-bar .ot-disk-top,
+.ot-disk.is-icons .ot-disk-top {
+  position: static;
+  transform: none;
+  gap: 0;
+}
+.ot-disk.is-bar .ot-disk-plate,
+.ot-disk.is-icons .ot-disk-plate {
+  border-radius: 0 0 26px 26px;
+  border-top: 0;
+}
+.ot-disk.is-bar .ot-disk-filigree,
+.ot-disk.is-icons .ot-disk-filigree {
+  display: none;
+}
+.ot-disk.is-bar .ot-disk-ring,
+.ot-disk.is-icons .ot-disk-ring {
+  display: none;
+}
+.ot-disk-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.ot-disk-pill.is-icon {
+  width: 40px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 12px;
+}
+.ot-disk-pins {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- Pin slots ---- */
+.ot-pin {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+}
+.ot-pin.is-labelled {
+  width: auto;
+  gap: 6px;
+  padding-right: 6px;
+}
+.ot-pin-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  transition: transform 0.12s ease;
+}
+.ot-pin-dot:hover {
+  transform: translateY(-1px);
+}
+.ot-pin-portrait {
+  border-radius: 999px !important;
+}
+.ot-pin.is-active .ot-pin-portrait {
+  border-color: var(--ot-champ);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 55%, transparent);
+}
+.ot-pin.is-dragging {
+  opacity: 0.6;
+}
+.ot-pin-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ot-pin-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-3);
+  color: var(--ot-text-2);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.ot-pin:hover .ot-pin-remove,
+.ot-pin-remove:focus-visible {
+  opacity: 1;
+}
+.ot-pin-remove:hover {
+  color: var(--ot-text);
+}
+.ot-pin-add-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ot-pin-add {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px dashed var(--ot-border-bright);
+  background: transparent;
+  color: var(--ot-text-2);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.ot-pin-add:hover {
+  border-color: var(--ot-champ);
+  color: var(--ot-text);
+}
+.ot-pin-popover {
+  position: absolute;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  width: 264px;
+  padding: 10px;
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.ot-pin-popover-head {
+  font-family: var(--ot-font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+  margin-bottom: 6px;
+}
+.ot-pin-popover-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ot-text-3);
+}
+.ot-pin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ot-pin-manage-hint {
+  font-size: 11px;
+  color: var(--ot-text-3);
+}
+
+/* ---- Shared app Button (36/40px, weight 600, no filters) ---- */
+.ot-ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--ot-btn-height);
+  padding: 0 14px;
+  border-radius: var(--ot-btn-radius);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  font-family: var(--ot-font);
+  font-size: 13px;
+  font-weight: var(--ot-weight-label);
+  line-height: 1;
+  color: var(--ot-text);
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.ot-ui-btn-lg {
+  height: var(--ot-btn-height-lg);
+  padding: 0 18px;
+  font-size: 14px;
+}
+.ot-ui-btn:hover:not(:disabled) {
+  background: var(--ot-surface-3);
+  border-color: var(--ot-border-bright);
+}
+.ot-ui-btn-primary {
+  border-color: transparent;
+  background: var(--ot-chrome);
+  color: #0b0b0e;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.ot-ui-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
+}
+.ot-ui-btn-secondary {
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+}
+.ot-ui-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ot-text-2);
+}
+.ot-ui-btn-ghost:hover:not(:disabled) {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-ui-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ot-ui-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ot-ui-btn:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-ui-btn-icon {
+  display: inline-flex;
+  flex: none;
+}
+.ot-ui-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Numbers: tabular, open digits ---- */
+.ot-num,
+.ot-disk-facts,
+.ot-home-facts,
+.ot-info-card-value {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'ss01' 1;
+}
+
+/* ---- Home: champion title block + actions + 4-card dock ---- */
+.ot-home {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1360px;
+}
+.ot-home-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+  gap: 16px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+}
+.ot-home-title {
+  min-width: 0;
+}
+.ot-home-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+}
+.ot-home-champion {
+  margin: 2px 0 4px;
+  font-family: var(--ot-font-display);
+  font-size: 46px;
+  font-weight: var(--ot-weight-label);
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  color: var(--ot-text);
+}
+.ot-home-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: var(--ot-fs-body);
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+}
+.ot-home-sep {
+  color: var(--ot-text-3);
+}
+.ot-home-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.ot-home-status-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ot-home-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.ot-home-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ot-home-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ot-home-identity-name {
+  font-family: var(--ot-font-display);
+  font-size: 17px;
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.02em;
+  color: var(--ot-text);
+}
+.ot-home-identity-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ot-home-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ot-home-next {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius);
+  background: color-mix(in srgb, var(--ot-bg) 90%, transparent);
+}
+.ot-info-card-head {
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-info-card-value {
+  font-size: 22px;
+  font-weight: var(--ot-weight-strong);
+  line-height: 1.1;
+  color: var(--ot-text);
+}
+.ot-info-card-unit {
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+}
+.ot-info-card-sep {
+  margin: 0 4px;
+  color: var(--ot-text-3);
+}
+.ot-info-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-info-card-empty {
+  font-size: 11px;
+  color: var(--ot-text-3);
+}
+.ot-info-card-items {
+  display: flex;
+  gap: 4px;
+}
+.ot-form-bar {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+}
+.ot-form-pip {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--ot-surface-3);
+}
+.ot-form-pip.is-win {
+  background: var(--ot-teal);
+}
+.ot-form-pip.is-loss {
+  background: var(--ot-blood);
+}
+.ot-home-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+.ot-home-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.ot-home-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ot-home-authored {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ot-home-authored-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+  font-size: 12px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+  max-width: 210px;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ot-home-authored-item:hover {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-home-authored-item.is-active {
+  border-color: color-mix(in srgb, var(--ot-champ) 60%, transparent);
+  color: var(--ot-text);
+}
+.ot-home-hotkeys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.ot-home-hotkey {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.ot-home-note {
+  line-height: 1.35;
+}
+
+/* ---- Profile ---- */
+.ot-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1120px;
+}
+.ot-profile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ot-profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ot-profile-monogram {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  color: var(--ot-champ);
+  font-family: var(--ot-font-display);
+  font-size: 18px;
+  font-weight: var(--ot-weight-strong);
+  letter-spacing: 0.02em;
+}
+.ot-profile-name {
+  font-family: var(--ot-font-display);
+  font-size: 22px;
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: var(--ot-text);
+}
+.ot-profile-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, auto));
+  gap: 4px 20px;
+}
+.ot-profile-facts dt {
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-profile-facts dd {
+  font-size: 13px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text);
+}
+.ot-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+.ot-profile-empty p {
+  font-size: var(--ot-fs-body);
+  color: var(--ot-text-2);
+}
+.ot-profile-active {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ot-border);
+}
+.ot-profile-active-name {
+  font-size: 14px;
+  font-weight: var(--ot-weight-label);
+}
+.ot-profile-active-sub {
+  font-size: 11px;
+  color: var(--ot-text-2);
+}
+.ot-profile-active .ot-ui-btn {
+  margin-left: auto;
+}
+.ot-profile-field {
+  display: block;
+  margin-bottom: 10px;
+}
+.ot-profile-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-profile-key {
+  font-family: var(--ot-font-mono);
+  letter-spacing: 0.08em;
+}
+.ot-profile-note {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius-sm);
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+  color: var(--ot-text-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.ot-profile-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ot-champ);
+}
+
+/* ---- Appearance: pinned-champion rows ---- */
+.ot-appearance-pin {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--ot-border);
+  border-radius: 999px;
+  background: var(--ot-bg);
+}
+.ot-appearance-pin-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--ot-text-2);
+  font-size: 13px;
+  line-height: 1;
+}
+.ot-appearance-pin-x:hover {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+.ot-appearance-pin-move {
+  display: inline-flex;
+  gap: 2px;
+}
+.ot-appearance-pin-move button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--ot-border);
+  color: var(--ot-text-2);
+  font-size: 12px;
+  line-height: 1;
+}
+.ot-appearance-pin-move button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.ot-appearance-pin-move button:hover:not(:disabled) {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+
+/* ---- Reduced motion: no hover/active stepping ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ot-ui-btn,
+  .ot-disk-pill,
+  .ot-pin-dot,
+  .ot-pin-remove,
+  .ot-pin-add,
+  .ot-profile-chip,
+  .ot-home-authored-item {
+    transition: none;
+  }
+  .ot-ui-btn:active:not(:disabled),
+  .ot-pin-dot:hover {
+    transform: none;
+  }
+}
+
+/* ---- Narrow windows: stack the Home / Profile columns ---- */
+@media (max-width: 1099px) {
+  .ot-home-top,
+  .ot-home-lower,
+  .ot-profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ot-home-champion {
+    font-size: 38px;
+  }
+  .ot-home-side {
+    align-items: flex-start;
+  }
+  .ot-profile-facts {
+    grid-template-columns: repeat(2, minmax(0, auto));
   }
 }

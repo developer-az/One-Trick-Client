@@ -92,6 +92,40 @@ export function normalizeMainChampion(raw: unknown): string {
     return /^[A-Za-z0-9]+$/.test(value) ? value : '';
 }
 
+/* ----------------------------------------------------- pinned champions */
+
+/** Most pins the orbit rail (and the Profile list) holds. */
+export const PINNED_CHAMPIONS_MAX = 6;
+/** Longest pinned-champion id accepted from disk (same rule as the main champion). */
+export const PINNED_CHAMPION_MAX_LENGTH = MAIN_CHAMPION_MAX_LENGTH;
+
+/**
+ * Validate a persisted pin list: Data Dragon ids only, trimmed, de-duplicated
+ * and capped at PINNED_CHAMPIONS_MAX, order preserved. Old settings files have
+ * no `pinnedChampions`; those migrate from the previously chosen main champion
+ * so a user who had a main keeps exactly one pin instead of losing it.
+ */
+export function normalizePinnedChampions(raw: unknown, mainChampion?: unknown): string[] {
+    const source = Array.isArray(raw) ? raw : [];
+    const out: string[] = [];
+    for (const entry of source) {
+        if (typeof entry !== 'string') continue;
+        const value = entry.trim();
+        if (!value || value.length > PINNED_CHAMPION_MAX_LENGTH) continue;
+        if (!/^[A-Za-z0-9]+$/.test(value)) continue;
+        if (out.includes(value)) continue;
+        out.push(value);
+        if (out.length >= PINNED_CHAMPIONS_MAX) break;
+    }
+    // Seed the migration only when the field is absent (an explicitly empty
+    // list means the user unpinned everything and must stay empty).
+    if (!Array.isArray(raw)) {
+        const seed = normalizeMainChampion(mainChampion);
+        if (seed) out.push(seed);
+    }
+    return out;
+}
+
 /* ---------------------------------------------------------------- pet */
 
 /** Dashboard pixel pet species. */
@@ -217,6 +251,11 @@ export interface AppSettings {
     autoClip: boolean;
     /** Dashboard appearance (theme/accent/density/radius/glass/type scale). */
     appearance: AppearanceSettings;
+    /**
+     * Champions pinned on the orbit rail, in display order (Data Dragon ids,
+     * max PINNED_CHAMPIONS_MAX). Clicking one makes it the main champion.
+     */
+    pinnedChampions: string[];
     /** Dashboard pixel pet (species + color). */
     pet: PetSettings;
 }
@@ -231,6 +270,7 @@ const DEFAULTS: AppSettings = {
     autoSpells: false,
     autoClip: false,
     appearance: APPEARANCE_DEFAULTS,
+    pinnedChampions: [],
     pet: PET_DEFAULTS,
 };
 
@@ -253,6 +293,8 @@ function normalize(raw: unknown): AppSettings {
     // Old settings files (or a partially-written one) have no `appearance`;
     // missing or invalid values fall back to safe defaults (migration).
     out.appearance = normalizeAppearance(src.appearance);
+    // Pins migrate from the old single main champion when absent.
+    out.pinnedChampions = normalizePinnedChampions(src.pinnedChampions, out.appearance.mainChampion);
     out.pet = normalizePet(src.pet);
     return out;
 }

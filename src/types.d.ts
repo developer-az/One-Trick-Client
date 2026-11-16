@@ -54,6 +54,8 @@ declare global {
         autoClip: boolean;
     /** Dashboard appearance (theme/accent/density/radius/glass/type scale). */
     appearance: AppearanceSettings;
+        /** Champions pinned on the orbit rail, in display order (max 6). */
+        pinnedChampions: string[];
         /** Dashboard pixel pet (species + color). Persisted like appearance. */
         pet: PetSettings;
     }
