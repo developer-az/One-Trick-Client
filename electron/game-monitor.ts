@@ -63,11 +63,19 @@ import { getMatchHistorySummaries } from './match-history';
 import {
     createOverlayDestroyGate,
     createPrematchStatsCache,
+    loadingSlotFromChampSelect,
+    loadingSlotFromGameflowSession,
+    queueMetadataFromGameflowSession,
     resolveLoadingChampion,
     shouldRefreshLoadingStats,
     type LocalSummonerIdentity,
 } from './prematch-loading';
-import type { LoadingStats } from '../src/overlay/loadingStats';
+import {
+    computeLoadingStats,
+    type LoadingMatchLike,
+    type LoadingStats,
+} from '../src/overlay/loadingStats';
+import type { LoadingSlot } from '../src/overlay/loadingScreenGeometry';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
@@ -168,12 +176,28 @@ let champSelectSession = 0;
 /** The load the current loading overlay belongs to; 0 outside a load. */
 let loadingSessionToken = 0;
 /**
+ * Your loading-screen slot: side + index among your team. The champ-select
+ * fallback fills the order at entry; the gameflow session refines it with the
+ * side (the only thing that can, so it is what the overlay places from).
+ */
+let loadingSlot: LoadingSlot | null = null;
+/** Champ-select fallback (myTeam order by cellId), consumed at load entry. */
+let champSelectSlot: LoadingSlot | null = null;
+/** Queue + map for this game, captured at load entry and kept all match (Step H). */
+let matchQueueId: number | null = null;
+let matchMapId: number | null = null;
+/** Load token whose one reconnect summaries prefetch already ran (0 = none). */
+let reconnectSummaryPrefetched = 0;
+/**
  * Summaries fetched during champ select so the loading path can fold them
  * without issuing a single LCU request. Empty cache ≠ zero games: only a loaded
  * cache may claim "First game on this champion".
  */
 const prematchHistoryCache = createPrematchStatsCache({
-    fetchHistory: () => getMatchHistorySummaries({ count: 60 }),
+    // The session id travels with the request: a new champ select must never
+    // join the previous one's in-flight page (match-history keeps one slot per
+    // session and starts a fresh request instead).
+    fetchHistory: () => getMatchHistorySummaries({ count: 60, session: champSelectSession }),
 });
 /** Finished-match overlay destroy, delayed so a phase blip cannot kill it. */
 const overlayDestroyGate = createOverlayDestroyGate({
@@ -245,7 +269,9 @@ export function prematchLoadingPayload(
     phase: string | null,
     pet: AppSettings['pet'],
     champion?: { championId: number; championName?: string } | null,
-    stats?: LoadingStats | null
+    stats?: LoadingStats | null,
+    slot?: LoadingSlot | null,
+    queue?: { queueId?: number | null; mapId?: number | null }
 ): Record<string, unknown> {
     return {
         inGame: true,
@@ -256,7 +282,12 @@ export function prematchLoadingPayload(
         pet,
         championId: champion?.championId ?? null,
         championName: champion?.championName ?? null,
-        ...(stats ? { loadingStats: stats } : {}),
+        // Always present (null when unknown): the page replaces its state
+        // wholesale, so an omitted field would blank a card that already drew.
+        loadingStats: stats ?? null,
+        loadingSlot: slot ?? null,
+        queueId: queue?.queueId ?? null,
+        mapId: queue?.mapId ?? null,
         timestamp: Date.now(),
     };
 }
@@ -356,14 +387,51 @@ function prematchStatsFromCache(championId: number | null | undefined): LoadingS
 /** Send the loading payload for the champion currently known (if any). */
 function sendPrematchLoadingPayload(): void {
     sendFullOverlayUpdate(
-        prematchLoadingPayload(lcuSocket.phase, settingsForTick().pet, loadingChampion, prematchStats)
+        prematchLoadingPayload(
+            lcuSocket.phase,
+            settingsForTick().pet,
+            loadingChampion,
+            prematchStats,
+            loadingSlot,
+            { queueId: matchQueueId, mapId: matchMapId }
+        )
     );
+}
+
+/**
+ * Store the loading slot and log it in one readable line:
+ * `loading-slot side=… index=… size=… source=…`.
+ */
+function applyLoadingSlot(next: LoadingSlot | null): void {
+    if (!next) return;
+    const same =
+        !!loadingSlot &&
+        loadingSlot.side === next.side &&
+        loadingSlot.index === next.index &&
+        loadingSlot.teamSize === next.teamSize &&
+        loadingSlot.source === next.source;
+    if (same) return;
+    loadingSlot = next;
+    overlayLog('loading-slot', {
+        side: next.side ?? 'unknown',
+        index: next.index,
+        size: next.teamSize,
+        source: next.source,
+    });
+}
+
+/** Queue id + map id from the same session read; kept for the whole match. */
+function applyQueueMetadata(session: unknown): void {
+    const meta = queueMetadataFromGameflowSession(session);
+    if (meta.queueId != null) matchQueueId = meta.queueId;
+    if (meta.mapId != null) matchMapId = meta.mapId;
 }
 
 /**
  * Reconnect straight into InProgress: no champ-select event ever ran, so the
  * pick is unknown. One gameflow-session read is allowed for this case only;
- * every other loading tick reads the cache.
+ * every other loading tick reads the cache. The same response carries the
+ * loading slot and the queue/map ids, so a reconnect still spends just one GET.
  */
 async function resolvePrematchChampionFromSession(): Promise<void> {
     if (!prematchLoading || loadingChampion) return;
@@ -372,12 +440,22 @@ async function resolvePrematchChampionFromSession(): Promise<void> {
     // event instead of spending a second request on identity.
     const identity = await waitForLocalSummoner(1500);
     if (!identity) return;
+    let session: unknown = null;
     const champion = await resolveLoadingChampion({
         getIdentity: () => identity,
-        fetchSession: () => makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000),
+        fetchSession: async () => {
+            session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+            return session;
+        },
     });
-    if (!champion) return;
-    if (token !== prematchStatsToken || !prematchLoading || loadingChampion) return;
+    if (token !== prematchStatsToken || !prematchLoading || !session) return;
+    applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
+    applyQueueMetadata(session);
+    if (!champion || loadingChampion) {
+        // The slot/queue ids alone are worth a refinement payload.
+        sendPrematchLoadingPayload();
+        return;
+    }
     loadingChampion = champion;
     prematchStats = prematchStatsFromCache(champion.championId);
     overlayLog('prematch-loading champion', {
@@ -386,6 +464,59 @@ async function resolvePrematchChampionFromSession(): Promise<void> {
         stats: prematchStats ? 'cache' : 'none',
     });
     sendPrematchLoadingPayload();
+    // No champ-select prefetch ever ran for a reconnect: the card would stay
+    // "Reading…" for the whole load. One summaries-only request, this load only.
+    void prefetchHistoryForReconnect(token, champion.championId);
+}
+
+/**
+ * Champ-select path: the pick is already known, so this load's one session read
+ * is spent on the slot (side + index) and the queue ids. Deliberately async —
+ * the pet and card are already on screen and get refined when it lands.
+ */
+async function resolveLoadingSlotFromSession(): Promise<void> {
+    if (!prematchLoading) return;
+    const token = prematchStatsToken;
+    const identity = await waitForLocalSummoner(1500);
+    if (!identity) return;
+    let session: unknown = null;
+    try {
+        session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+    } catch {
+        return;
+    }
+    if (token !== prematchStatsToken || !prematchLoading || !session) return;
+    applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
+    applyQueueMetadata(session);
+    sendPrematchLoadingPayload();
+}
+
+/**
+ * A reconnect's single summaries prefetch (count 60, no details). It does not
+ * touch the champ-select cache — no champ select happened — and is folded only
+ * for the load and champion it was started for.
+ */
+async function prefetchHistoryForReconnect(token: number, championId: number): Promise<void> {
+    if (reconnectSummaryPrefetched === token) return;
+    reconnectSummaryPrefetched = token;
+    let matches: LoadingMatchLike[] | null = null;
+    try {
+        matches = await getMatchHistorySummaries({ count: 60 });
+    } catch {
+        return;
+    }
+    if (!matches || token !== prematchStatsToken || !prematchLoading) return;
+    const refresh = shouldRefreshLoadingStats({
+        loading: prematchLoading,
+        loadToken: loadingSessionToken,
+        activeToken: prematchStatsToken,
+        championId,
+        loadingChampionId: loadingChampion?.championId ?? null,
+    });
+    if (!refresh) return;
+    prematchStats = computeLoadingStats(matches, championId);
+    sendPrematchLoadingPayload();
+    overlayLog('prematch-loading stats', { source: 'reconnect-prefetch', championId });
 }
 
 /**
@@ -494,6 +625,7 @@ function rememberChampSelectSelf(
     );
     if (locked.length === 0) {
         lastChampSelectSelf = null;
+        champSelectSlot = null;
         return;
     }
     const self =
@@ -504,6 +636,10 @@ function rememberChampSelectSelf(
               : undefined;
     if (!self?.championId) return;
     lastChampSelectSelf = { championId: self.championId, championName: self.championName };
+    // Your slot inside your own team, ordered by cellId exactly as the client
+    // numbers it. The side only exists in the gameflow session, so this is a
+    // fallback the overlay never places from on its own.
+    champSelectSlot = loadingSlotFromChampSelect(myTeam, localPlayerCellId);
     // Champ select already carries the identity the reconnect path needs, so
     // the gameflow-session read never has to fetch it separately.
     if (typeof self.summonerId === 'number' || self.puuid) rememberLocalSummoner(self);
@@ -760,6 +896,10 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         gameMode: live?.gameData?.gameMode || null,
         gameTime,
         trustedGameTime,
+        // Captured at load entry from the gameflow session, kept all match for
+        // the steps that branch on the exact queue (Step H).
+        queueId: matchQueueId,
+        mapId: matchMapId,
         objectiveTimers: getObjectiveTimers() ?? undefined,
         pet: settingsForTick().pet,
         mapName: live?.gameData?.mapName || null,
@@ -1163,6 +1303,10 @@ function resetMatchCaches(): void {
     lastChampSelectEnemies = [];
     lastChampSelectSelf = null;
     loadingChampion = null;
+    loadingSlot = null;
+    champSelectSlot = null;
+    matchQueueId = null;
+    matchMapId = null;
     prematchStats = null;
     prematchStatsToken += 1;
     loadingSessionToken = 0;
@@ -1408,6 +1552,13 @@ function enterPrematchLoading(phase: string | null): void {
         ? { championId: lastChampSelectSelf.championId, championName: lastChampSelectSelf.championName }
         : null;
     prematchStats = prematchStatsFromCache(loadingChampion?.championId ?? null);
+    // The champ-select order is known at entry; only the gameflow session can
+    // add your side, and it lands asynchronously below (never delaying this
+    // first payload).
+    loadingSlot = null;
+    applyLoadingSlot(champSelectSlot);
+    matchQueueId = null;
+    matchMapId = null;
     const previousHide = isOverlayUserHidden();
     overlayLog('prematch-loading enter', {
         phase: phase ?? 'none',
@@ -1423,8 +1574,11 @@ function enterPrematchLoading(phase: string | null): void {
     syncScalesFromLeague();
     createOverlayWindow();
     showOverlay();
-    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, loadingChampion, prematchStats));
+    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, loadingChampion, prematchStats, loadingSlot, { queueId: matchQueueId, mapId: matchMapId }));
+    // One session GET per load, whichever path needs it: a reconnect resolves
+    // the pick with it, a champ-select load only learns the side from it.
     if (!loadingChampion) void resolvePrematchChampionFromSession();
+    else void resolveLoadingSlotFromSession();
 }
 
 /**
@@ -1438,6 +1592,7 @@ function exitPrematchLoading(reason: string, hide: boolean): void {
     // Invalidate an in-flight resolution: it belongs to the load we just left.
     prematchStats = null;
     loadingChampion = null;
+    loadingSlot = null;
     prematchStatsToken += 1;
     loadingSessionToken = 0;
     overlayLog('prematch-loading exit', { reason });

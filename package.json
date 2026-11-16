@@ -163,6 +163,7 @@
     "verify:pixel-pet": "npx --yes tsx verify_pixel_pet.ts",
     "verify:loading-pet": "npx --yes tsx verify_loading_pet.ts",
     "verify:loading-card": "npx --yes tsx verify_loading_card.ts",
+    "verify:loading-roam": "npx --yes tsx verify_loading_roam.ts",
     "verify:champ-accent": "npx --yes tsx verify_champ_accent.ts",
     "verify:prematch-loading": "npx --yes tsx verify_prematch_loading.ts",
     "verify:prematch-lifecycle": "npx --yes tsx verify_prematch_lifecycle.ts",

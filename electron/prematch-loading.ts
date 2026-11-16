@@ -8,6 +8,7 @@
  * the callers own the timers, windows and LCU transport.
  */
 import { computeLoadingStats, type LoadingStats, type LoadingMatchLike } from '../src/overlay/loadingStats';
+import type { LoadingSide, LoadingSlot } from '../src/overlay/loadingScreenGeometry';
 
 /** How long the finished match's overlay window is kept before it is destroyed. */
 export const PREMATCH_DESTROY_DELAY_MS = 12_000;
@@ -138,6 +139,8 @@ interface GameflowSessionLike {
         playerChampionSelections?: SessionMember[];
         teamOne?: SessionMember[];
         teamTwo?: SessionMember[];
+        queue?: { id?: number };
+        mapId?: number;
     };
 }
 
@@ -198,6 +201,71 @@ export async function resolveLoadingChampion(deps: {
         return null;
     }
     return championFromGameflowSession(session, identity);
+}
+
+/* ---------------------------------------------------------- loading slot */
+/*
+ * Where your portrait sits on the loading screen. The gameflow session is the
+ * only source that knows your side (teamOne is blue/ORDER, teamTwo is
+ * red/CHAOS) and both arrays are already in the order League draws. Champ
+ * select can only say where you sit inside your own team, so its fallback has
+ * no side — the overlay never places anything from that alone.
+ */
+
+/**
+ * Your loading-screen slot from `/lol-gameflow/v1/session`. Null unless both
+ * the side and the index come from the session's team arrays.
+ */
+export function loadingSlotFromGameflowSession(
+    session: unknown,
+    local: LocalSummonerIdentity | null
+): LoadingSlot | null {
+    if (!session || typeof session !== 'object' || !local) return null;
+    if (!local.puuid && typeof local.summonerId !== 'number') return null;
+    const data = (session as GameflowSessionLike).gameData;
+    if (!data) return null;
+    const rows: Array<[LoadingSide, SessionMember[] | undefined]> = [
+        ['ORDER', data.teamOne],
+        ['CHAOS', data.teamTwo],
+    ];
+    for (const [side, team] of rows) {
+        if (!Array.isArray(team) || team.length === 0) continue;
+        const index = team.findIndex((member) => !!member && sameSummoner(member, local));
+        if (index < 0) continue;
+        return { side, index, teamSize: team.length, source: 'gameflow-session' };
+    }
+    return null;
+}
+
+/**
+ * Champ-select fallback: your index inside myTeam, ordered by cellId exactly
+ * as the client numbers the slots. No side is known before the gameflow
+ * session exists, so `side` stays null.
+ */
+export function loadingSlotFromChampSelect(
+    myTeam: Array<{ cellId?: number }> | undefined,
+    localPlayerCellId: number | undefined
+): LoadingSlot | null {
+    if (!Array.isArray(myTeam) || myTeam.length === 0) return null;
+    if (typeof localPlayerCellId !== 'number' || localPlayerCellId < 0) return null;
+    const ordered = myTeam
+        .filter((member) => !!member && typeof member.cellId === 'number')
+        .sort((a, b) => (a.cellId as number) - (b.cellId as number));
+    const index = ordered.findIndex((member) => member.cellId === localPlayerCellId);
+    if (index < 0) return null;
+    return { side: null, index, teamSize: ordered.length, source: 'champ-select' };
+}
+
+/** Queue id + map id from the same session read (kept for the whole match). */
+export function queueMetadataFromGameflowSession(session: unknown): {
+    queueId: number | null;
+    mapId: number | null;
+} {
+    if (!session || typeof session !== 'object') return { queueId: null, mapId: null };
+    const data = (session as GameflowSessionLike).gameData;
+    const queueId = typeof data?.queue?.id === 'number' ? data.queue.id : null;
+    const mapId = typeof data?.mapId === 'number' ? data.mapId : null;
+    return { queueId, mapId };
 }
 
 export interface PrematchStatsCache {

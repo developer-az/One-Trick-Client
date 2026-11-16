@@ -568,8 +568,9 @@ html.overlay-root .hud-rail-card .truncate {
 
 /* ---------- Pre-match loading card ----------
  * Pet + your recent form on the champion you are loading in with. Static:
- * one paint, then nothing moves or pulses. Sits bottom-right, above the pet's
- * hairline ground line. No blur, no glow, no animation.
+ * one paint, then nothing moves or pulses. Sits beside your loading-screen
+ * portrait when the slot is known, otherwise bottom-right. No blur, no glow,
+ * no animation.
  */
 html.overlay-root .ov-loading-card {
   position: fixed;
@@ -586,6 +587,28 @@ html.overlay-root .ov-loading-card {
   pointer-events: none;
   /* Static screen, flat ink: no elevation blur under the card either. */
   box-shadow: none;
+}
+/* Anchored beside your loading-screen portrait: inline left/top take over. */
+html.overlay-root .ov-loading-card--placed {
+  right: auto;
+  bottom: auto;
+}
+
+/* Full-viewport pet layer: the sprite is a small fixed-size canvas moved by a
+   transform, so a moving pet repaints its own rect and nothing else. */
+html.overlay-root .ov-pet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  overflow: hidden;
+}
+html.overlay-root .ov-pet-body {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform;
 }
 html.overlay-root .ov-loading-eyebrow {
   font-size: calc(9.5px * var(--ov-fs));

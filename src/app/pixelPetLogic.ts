@@ -369,3 +369,272 @@ export function stepPet(prev: PetState, input: PetStepInput): PetState {
   s = { ...s, phase: reducedMotion ? 0 : (s.phase + dt / PET_TIMING.cycleMs) % 1 };
   return s;
 }
+
+/* ---------------------------------------------------------------- roaming */
+/*
+ * The overlay's companion roams a 2D viewport instead of a one-row box: a
+ * home rect (your loading-screen portrait) is the anchor, most goals stay in
+ * an ellipse around it, and the rest of the screen is fair game inside the
+ * safe margins. Pure and clock-injected like the rest of this module, so the
+ * verifier can sample a thousand goals and step the walk deterministically.
+ */
+
+export interface RoamPoint {
+  x: number;
+  y: number;
+}
+
+/** Home card rect in viewport pixels (structurally an overlay Rect). */
+export interface RoamRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface RoamSpace {
+  width: number;
+  height: number;
+  /** Your loading-screen card; null/absent = the bottom third of the screen. */
+  home?: RoamRect | null;
+}
+
+export const PET_ROAM = {
+  /** Walking speed; the pet eases out over the last few pixels. */
+  speedPxPerSec: 40,
+  /** Pause between goals. */
+  idleMinMs: 1500,
+  idleMaxMs: 4000,
+  /** Share of goals that stay near the home card, not across the screen. */
+  nearHomeChance: 0.7,
+  /** The screen's top/bottom 6% is never walked into. */
+  safeMarginYRatio: 0.06,
+  safeMarginXRatio: 0.02,
+  /** Without a home card: wander the bottom third. */
+  bandRatio: 1 / 3,
+  /** Share of near-home goals that stay below/beside the card (rest: the top). */
+  lowerBiasChance: 0.8,
+  /** Home ellipse: centre and radii as fractions of the card rect. */
+  ellipseCxRatio: 0.5,
+  ellipseCyRatio: 0.45,
+  ellipseRxRatio: 0.75,
+  ellipseRyRatio: 0.55,
+  /** Radial range of a near-home goal (fractions of the ellipse). */
+  nearRadiusMin: 0.55,
+  nearRadiusMax: 1,
+  /** Slow down inside this distance so the stop is not a snap. */
+  easeDistancePx: 32,
+  /** One step never integrates more than this much time (tab wakes). */
+  maxStepMs: 250,
+} as const;
+
+export interface RoamState {
+  x: number;
+  y: number;
+  /** Facing, from the horizontal direction of travel. */
+  dir: 1 | -1;
+  target: RoamPoint;
+  /** Idle time left before the next goal is chosen. */
+  idleLeftMs: number;
+  /** Walking to `target` (true) or waiting (false). */
+  moving: boolean;
+  /** Last clock value seen. */
+  lastNow: number;
+  /** LCG state, so the wander is reproducible from a seed. */
+  seed: number;
+}
+
+/** Screen area the pet may occupy (excludes the top/bottom 6%). */
+export function roamSafeArea(
+  width: number,
+  height: number
+): { minX: number; maxX: number; minY: number; maxY: number } {
+  const w = Math.max(1, Number.isFinite(width) ? width : 1);
+  const h = Math.max(1, Number.isFinite(height) ? height : 1);
+  return {
+    minX: w * PET_ROAM.safeMarginXRatio,
+    maxX: w * (1 - PET_ROAM.safeMarginXRatio),
+    minY: h * PET_ROAM.safeMarginYRatio,
+    maxY: h * (1 - PET_ROAM.safeMarginYRatio),
+  };
+}
+
+/** The ellipse around the home card that most goals land in. */
+export function homeEllipse(home: RoamRect): { cx: number; cy: number; rx: number; ry: number } {
+  return {
+    cx: home.x + home.w * PET_ROAM.ellipseCxRatio,
+    cy: home.y + home.h * PET_ROAM.ellipseCyRatio,
+    rx: Math.max(1, home.w * PET_ROAM.ellipseRxRatio),
+    ry: Math.max(1, home.h * PET_ROAM.ellipseRyRatio),
+  };
+}
+
+export function insideHomeEllipse(home: RoamRect, x: number, y: number): boolean {
+  const e = homeEllipse(home);
+  const dx = (x - e.cx) / e.rx;
+  const dy = (y - e.cy) / e.ry;
+  return dx * dx + dy * dy <= 1;
+}
+
+/** One LCG draw: value in [0,1) plus the next seed. */
+function randomOf(seed: number): { value: number; seed: number } {
+  const next = (Math.imul(seed >>> 0, 1664525) + 1013904223) >>> 0;
+  return { value: next / 4294967296, seed: next };
+}
+
+function clampToSafe(point: RoamPoint, space: RoamSpace): RoamPoint {
+  const safe = roamSafeArea(space.width, space.height);
+  return {
+    x: Math.min(safe.maxX, Math.max(safe.minX, point.x)),
+    y: Math.min(safe.maxY, Math.max(safe.minY, point.y)),
+  };
+}
+
+/** Where the pet sits when it is not walking: the home card's bottom edge. */
+export function roamAnchor(space: RoamSpace): RoamPoint {
+  const safe = roamSafeArea(space.width, space.height);
+  const home = space.home ?? null;
+  if (home) {
+    return {
+      x: Math.min(safe.maxX, Math.max(safe.minX, home.x + home.w / 2)),
+      y: Math.min(safe.maxY, Math.max(safe.minY, home.y + home.h)),
+    };
+  }
+  return { x: (safe.minX + safe.maxX) / 2, y: safe.maxY - 8 };
+}
+
+/**
+ * One goal, drawn from the seeded stream. Near the home card: 70% of goals in
+ * the ellipse (mostly its lower arc, sometimes the card face/top); otherwise
+ * anywhere inside the safe margins. No home: the bottom third only.
+ */
+export function pickRoamTarget(space: RoamSpace, seed: number): { target: RoamPoint; seed: number } {
+  let s = seed;
+  const draw = (): number => {
+    const r = randomOf(s);
+    s = r.seed;
+    return r.value;
+  };
+  const safe = roamSafeArea(space.width, space.height);
+  const home = space.home ?? null;
+
+  if (home && draw() < PET_ROAM.nearHomeChance) {
+    const e = homeEllipse(home);
+    // 0..π is the lower half (screen y grows downwards); 80% of goals hang
+    // below or beside the card, the rest may hop onto its face/top.
+    const theta =
+      draw() < PET_ROAM.lowerBiasChance
+        ? Math.PI * (0.08 + 0.84 * draw())
+        : Math.PI * 2 * draw();
+    const radius = PET_ROAM.nearRadiusMin + (PET_ROAM.nearRadiusMax - PET_ROAM.nearRadiusMin) * draw();
+    return {
+      target: clampToSafe(
+        { x: e.cx + Math.cos(theta) * e.rx * radius, y: e.cy + Math.sin(theta) * e.ry * radius },
+        space
+      ),
+      seed: s,
+    };
+  }
+
+  if (!home) {
+    const minY = Math.max(safe.minY, space.height * (1 - PET_ROAM.bandRatio));
+    return {
+      target: {
+        x: safe.minX + draw() * (safe.maxX - safe.minX),
+        y: minY + draw() * (safe.maxY - minY),
+      },
+      seed: s,
+    };
+  }
+
+  return {
+    target: {
+      x: safe.minX + draw() * (safe.maxX - safe.minX),
+      y: safe.minY + draw() * (safe.maxY - safe.minY),
+    },
+    seed: s,
+  };
+}
+
+export function createRoamState(now: number, space: RoamSpace, seed = 0x9e3779b9): RoamState {
+  const anchor = roamAnchor(space);
+  const picked = pickRoamTarget(space, seed);
+  return {
+    x: anchor.x,
+    y: anchor.y,
+    dir: picked.target.x >= anchor.x ? 1 : -1,
+    target: picked.target,
+    // Settle for a beat before the first walk: the pet appears with the card.
+    idleLeftMs: PET_ROAM.idleMinMs,
+    moving: false,
+    lastNow: now,
+    seed: picked.seed,
+  };
+}
+
+export interface RoamStepInput {
+  now: number;
+  width: number;
+  height: number;
+  home?: RoamRect | null;
+  /** prefers-reduced-motion: stay put at the anchor. */
+  reducedMotion: boolean;
+}
+
+/**
+ * Advance the roam. Movement is bounded by `speedPxPerSec` (a step never
+ * integrates more than `maxStepMs`, so a background tab wake cannot teleport
+ * the pet), and the fast-forwarded clock is never counted as walked time.
+ */
+export function stepRoam(prev: RoamState, input: RoamStepInput): RoamState {
+  const space: RoamSpace = { width: input.width, height: input.height, home: input.home ?? null };
+  if (input.reducedMotion) {
+    const anchor = roamAnchor(space);
+    return {
+      ...prev,
+      x: anchor.x,
+      y: anchor.y,
+      moving: false,
+      idleLeftMs: 0,
+      lastNow: Math.max(prev.lastNow, input.now),
+    };
+  }
+
+  const dt = Math.max(0, Math.min(PET_ROAM.maxStepMs, input.now - prev.lastNow));
+  const s: RoamState = { ...prev, lastNow: Math.max(prev.lastNow, input.now) };
+  if (dt <= 0) return s;
+
+  if (!s.moving) {
+    const left = s.idleLeftMs - dt;
+    if (left > 0) return { ...s, idleLeftMs: left };
+    const picked = pickRoamTarget(space, s.seed);
+    return {
+      ...s,
+      idleLeftMs: 0,
+      moving: true,
+      target: picked.target,
+      seed: picked.seed,
+      dir: picked.target.x >= s.x ? 1 : -1,
+    };
+  }
+
+  const dx = s.target.x - s.x;
+  const dy = s.target.y - s.y;
+  const dist = Math.hypot(dx, dy);
+  const stride = PET_ROAM.speedPxPerSec * (dt / 1000);
+
+  if (dist <= Math.max(stride, 0.5)) {
+    const r = randomOf(s.seed);
+    const idle = PET_ROAM.idleMinMs + r.value * (PET_ROAM.idleMaxMs - PET_ROAM.idleMinMs);
+    return { ...s, x: s.target.x, y: s.target.y, moving: false, idleLeftMs: idle, seed: r.seed };
+  }
+
+  const ease = Math.min(1, dist / PET_ROAM.easeDistancePx);
+  const stepLen = Math.min(dist, stride * (0.35 + 0.65 * ease));
+  const next = clampToSafe(
+    { x: s.x + (dx / dist) * stepLen, y: s.y + (dy / dist) * stepLen },
+    space
+  );
+  return { ...s, x: next.x, y: next.y, dir: dx === 0 ? s.dir : dx > 0 ? 1 : -1 };
+}
+

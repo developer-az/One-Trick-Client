@@ -66,6 +66,8 @@ import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
+import { cardRect, type Rect } from './loadingScreenGeometry';
+import { mergeLoadingPayload } from './loadingStats';
 import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveChampionAccent } from './champAccent';
 import { resolveChampionRef } from '../data/championCatalog';
 import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
@@ -593,7 +595,9 @@ export const OverlayApp: React.FC = () => {
         ) {
           return prev;
         }
-        return next;
+        // The card's champion and stats stay put for the whole load even when a
+        // later payload omits them (payloads replace state wholesale).
+        return mergeLoadingPayload(prev, next);
       });
       const resolved = resolveProfileId(next);
       if (isProfileId(resolved)) {
@@ -1285,12 +1289,34 @@ export const OverlayApp: React.FC = () => {
   }, [state.championName, state.championId]);
 
   if (state.loading) {
+    // Your loading-screen portrait, only when the side AND the index came from
+    // the gameflow session: a champ-select-only slot has no side, so the pet
+    // stays in the bottom third and the card bottom-right.
+    const loadingSlot = state.loadingSlot ?? null;
+    const loadingHome: Rect | null =
+      loadingSlot && loadingSlot.source === 'gameflow-session' && loadingSlot.side
+        ? cardRect(loadingSlot.side, loadingSlot.index, loadingSlot.teamSize, viewport.vw, viewport.vh)
+        : null;
     return (
       <div className="w-screen h-screen pointer-events-none bg-transparent">
-        <OverlayPet preference={activePet} />
+        <OverlayPet preference={activePet} home={loadingHome} />
+        {/* Present for the whole load: numbers when this load's history has
+            landed, a pending/neutral line until then. */}
         {state.loadingStats ? (
-          <LoadingCard championName={loadingChampionName} stats={state.loadingStats} />
-        ) : null}
+          <LoadingCard
+            championName={loadingChampionName}
+            stats={state.loadingStats}
+            home={loadingHome}
+            viewport={viewport}
+          />
+        ) : (
+          <LoadingCard
+            championName={loadingChampionName}
+            stats={null}
+            home={loadingHome}
+            viewport={viewport}
+          />
+        )}
       </div>
     );
   }

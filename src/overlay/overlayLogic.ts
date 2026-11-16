@@ -27,6 +27,7 @@ import {
 import type { ObjectiveTimers } from '../logic/gameState';
 import type { PetSettings } from '../app/pixelPetLogic';
 import type { LoadingStats } from './loadingStats';
+import type { LoadingSlot } from './loadingScreenGeometry';
 
 export interface OverlayEnemy {
   championName: string;
@@ -137,6 +138,11 @@ export interface OverlayState {
   championName?: string | null;
   /** Recent form on that champion, fetched once per load (see loadingStats.ts). */
   loadingStats?: LoadingStats | null;
+  /** Your loading-screen slot (side + index among your team), when known. */
+  loadingSlot?: LoadingSlot | null;
+  /** Queue id + map id, captured at load entry and kept for the whole match. */
+  queueId?: number | null;
+  mapId?: number | null;
   objectiveTimers?: ObjectiveTimers | null;
   pet?: PetSettings;
   trustedGameTime?: number;

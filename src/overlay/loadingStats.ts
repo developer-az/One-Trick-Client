@@ -107,3 +107,59 @@ export function computeLoadingStats(
     scope,
   };
 }
+
+/* ------------------------------------------------------- the loading card */
+/*
+ * The card is present for the whole load, so its content has four states and
+ * the overlay needs one decision, not four conditionals in JSX.
+ */
+
+export type LoadingCardState = 'ready' | 'first' | 'pending' | 'neutral';
+
+/**
+ * What the card shows right now:
+ *  - ready:   games on this champion in the current scope;
+ *  - first:   the history loaded and holds no game on this champion;
+ *  - pending: the champion is known but its history has not landed yet;
+ *  - neutral: nothing is known at all (no pick, no history).
+ */
+export function loadingCardState(
+  championName: string | null | undefined,
+  stats: LoadingStats | null | undefined
+): LoadingCardState {
+  const named = typeof championName === 'string' && championName.trim().length > 0;
+  if (stats) return stats.games > 0 ? 'ready' : 'first';
+  return named ? 'pending' : 'neutral';
+}
+
+/** Fields the overlay must not lose while one load is drawing. */
+export interface LoadingCarryOver {
+  loading?: boolean;
+  championId?: number | null;
+  championName?: string | null;
+  loadingStats?: LoadingStats | null;
+}
+
+/**
+ * Keep the champion and its stats for the duration of one load. Payloads
+ * replace the overlay state wholesale, so a later payload that omits the stats
+ * (a partial send, a replay of an older tick) would blank the card mid-load.
+ * Only a completed pick swap drops the old numbers, and leaving the load
+ * (`loading` false) drops everything as before.
+ */
+export function mergeLoadingPayload<T extends LoadingCarryOver>(
+  prev: T | null | undefined,
+  next: T
+): T {
+  if (!next.loading || !prev || !prev.loading) return next;
+  const nextId = typeof next.championId === 'number' ? next.championId : null;
+  const prevId = typeof prev.championId === 'number' ? prev.championId : null;
+  const samePick = nextId === null || prevId === null || nextId === prevId;
+  const championId = nextId ?? prev.championId ?? null;
+  const championName =
+    typeof next.championName === 'string' && next.championName.trim().length > 0
+      ? next.championName
+      : prev.championName ?? null;
+  const loadingStats = next.loadingStats ?? (samePick ? prev.loadingStats ?? null : null);
+  return { ...next, championId, championName, loadingStats };
+}

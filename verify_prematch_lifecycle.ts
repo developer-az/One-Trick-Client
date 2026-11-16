@@ -28,7 +28,7 @@ import {
     shouldRefreshLoadingStats,
     type OverlayPageBeat,
 } from './electron/prematch-loading';
-import { shouldReplayOverlayState } from './electron/game-monitor';
+import { prematchLoadingPayload, shouldReplayOverlayState } from './electron/game-monitor';
 import { computeLoadingStats } from './src/overlay/loadingStats';
 import { accentCacheKey, accentTransition } from './src/overlay/champAccent';
 
@@ -628,6 +628,70 @@ console.log('--- verify:prematch-lifecycle: production wiring ---');
         'the summaries path can never fetch details'
     );
     ok(!!summaries && summaries.includes('summariesInFlight'), 'summaries never join a detail in-flight slot');
+}
+
+console.log('--- verify:prematch-lifecycle: session-scoped prefetch + loading slot ---');
+{
+    const monitor = code('electron/game-monitor.ts');
+    ok(
+        monitor.includes('getMatchHistorySummaries({ count: 60, session: champSelectSession })'),
+        'the champ-select prefetch carries its session id (a new session never joins an old page)'
+    );
+    const reconnect = bodyOf(monitor, 'prefetchHistoryForReconnect');
+    ok(!!reconnect, 'the reconnect path has its own single prefetch');
+    ok(
+        !!reconnect && reconnect.includes('getMatchHistorySummaries({ count: 60 })'),
+        'the reconnect prefetch asks for 60 summaries and no details'
+    );
+    ok(
+        !!reconnect && reconnect.includes('reconnectSummaryPrefetched === token'),
+        'the reconnect prefetch runs at most once per load token'
+    );
+    ok(
+        !!reconnect && reconnect.includes('shouldRefreshLoadingStats('),
+        'a reconnect prefetch is folded only for its own load and champion'
+    );
+
+    const enter = bodyOf(monitor, 'enterPrematchLoading');
+    ok(
+        !!enter &&
+            enter.indexOf('sendFullOverlayUpdate(') < enter.indexOf('resolveLoadingSlotFromSession()'),
+        'the first loading payload is sent before the session read (the slot never delays the pet)'
+    );
+    ok(
+        !!enter && enter.includes('applyLoadingSlot(champSelectSlot)'),
+        'entry seeds the slot from the champ-select order as a fallback'
+    );
+    ok(
+        !!enter && /if \(!loadingChampion\) void resolvePrematchChampionFromSession\(\)/.test(enter) &&
+            enter.includes('else void resolveLoadingSlotFromSession()'),
+        'exactly one session read per load: reconnect resolves the pick, champ select only the slot'
+    );
+
+    const slotLogger = bodyOf(monitor, 'applyLoadingSlot');
+    ok(
+        !!slotLogger &&
+            slotLogger.includes('loading-slot') &&
+            slotLogger.includes('side:') &&
+            slotLogger.includes('index:') &&
+            slotLogger.includes('size:') &&
+            slotLogger.includes('source:'),
+        'the captured slot is logged as loading-slot side=… index=… size=… source=…'
+    );
+
+    const payload = prematchLoadingPayload('GameStart', {
+        species: 'imp',
+        color: 'teal',
+    });
+    ok('loadingStats' in payload, 'the loading payload always carries loadingStats (null clears nothing)');
+    ok('loadingSlot' in payload, 'the loading payload carries the loading slot');
+    ok('queueId' in payload && 'mapId' in payload, 'the loading payload carries queueId + mapId');
+
+    const live = bodyOf(monitor, 'buildOverlayPayload');
+    ok(
+        !!live && live.includes('queueId: matchQueueId') && live.includes('mapId: matchMapId'),
+        'the live in-game payload keeps queueId + mapId for the whole match'
+    );
 }
 
 if (failures) {
