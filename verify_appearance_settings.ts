@@ -65,6 +65,9 @@ async function main(): Promise<void> {
     radius: 6,
     glass: 0,
     fontScale: 1,
+    mainChampion: '',
+    layoutPreset: 'compact',
+    ornament: 50,
   };
 
   /* 1. Defaults + migration from an old (no-appearance) settings file. */
@@ -85,7 +88,17 @@ async function main(): Promise<void> {
   check('fontScale clamped to min 0.85', afterInvalid.fontScale === 0.85);
 
   /* 3. Valid, bounded choices apply whole-appearance. */
-  const target: AppearanceSettings = { theme: 'ember', accent: 'teal', density: 'compact', radius: 14, glass: 40, fontScale: 1.1 };
+  const target: AppearanceSettings = {
+    theme: 'ember',
+    accent: 'teal',
+    density: 'compact',
+    radius: 14,
+    glass: 40,
+    fontScale: 1.1,
+    mainChampion: 'Pyke',
+    layoutPreset: 'showcase',
+    ornament: 80,
+  };
   updateAppSettings({ appearance: target });
   deepEqual('valid bounded appearance round-trips', getAppSettings().appearance, target);
 
@@ -98,6 +111,9 @@ async function main(): Promise<void> {
   check('partial patch keeps radius', merged.radius === 14);
   check('partial patch applies glass', merged.glass === 60);
   check('partial patch keeps fontScale', merged.fontScale === 1.1);
+  check('partial patch keeps mainChampion', merged.mainChampion === 'Pyke');
+  check('partial patch keeps layoutPreset', merged.layoutPreset === 'showcase');
+  check('partial patch keeps ornament', merged.ornament === 80);
   check('partial patch preserves unrelated booleans', getAppSettings().overlayEnabled === false);
 
   const finalAppearance: AppearanceSettings = { ...target, glass: 60 };
@@ -138,7 +154,7 @@ async function main(): Promise<void> {
 
   /* 7. No raw colors / arbitrary CSS in the persisted contract — only enum ids + numbers. */
   const disk = onDisk.appearance as Record<string, unknown>;
-  const allowedKeys = ['theme', 'accent', 'density', 'radius', 'glass', 'fontScale'];
+  const allowedKeys = ['theme', 'accent', 'density', 'radius', 'glass', 'fontScale', 'mainChampion', 'layoutPreset', 'ornament'];
   check('persisted appearance keys are exactly the enum/range set', allowedKeys.every((k) => Object.prototype.hasOwnProperty.call(disk, k)) && Object.keys(disk).length === allowedKeys.length);
   const rawLeak = JSON.stringify(disk).match(/#[0-9a-f]{3,8}\b|rgb|linear-gradient|backdrop/i);
   check('no raw CSS/color strings are persisted', !rawLeak);
@@ -149,11 +165,14 @@ async function main(): Promise<void> {
     'data-ot-theme': 'ember',
     'data-ot-accent': 'teal',
     'data-ot-density': 'compact',
+    'data-ot-layout': 'showcase',
+    'data-ot-ornament': 'full',
   });
   deepEqual('mapping: css custom properties', css.vars, {
     '--ot-radius-set': '14px',
     '--ot-glass': '60',
     '--ot-font-scale': '1.1',
+    '--ot-ornament': '0.8',
   });
 
   /* 9. Every enum value maps (no theme/accent/density left dangling). */
@@ -164,9 +183,13 @@ async function main(): Promise<void> {
     radius: 0,
     glass: 100,
     fontScale: 1.2,
+    mainChampion: 'Ahri',
+    layoutPreset: 'compact',
+    ornament: 0,
   };
   const css2 = appearanceToCss(enumTest);
   check('enum extremes map to attributes/vars', css2.attributes['data-ot-theme'] === 'azure' && css2.attributes['data-ot-density'] === 'spacious' && css2.vars['--ot-glass'] === '100' && css2.vars['--ot-font-scale'] === '1.2');
+  check('ornament 0 maps to the none bucket and a 0 var', css2.attributes['data-ot-ornament'] === 'none' && css2.vars['--ot-ornament'] === '0');
 
   fs.rmSync(dir, { recursive: true, force: true });
 

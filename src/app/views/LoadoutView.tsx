@@ -30,7 +30,7 @@ export const LoadoutView: React.FC<{
       <div className="ot-page">
         <div className="ot-page-header">
           <div>
-            <h1 className="ot-page-title">Build & runes</h1>
+            <h1 className="ot-page-title ot-orn-title">Build & runes</h1>
             <p className="ot-page-sub">{profile.label}</p>
           </div>
         </div>
@@ -66,7 +66,7 @@ export const LoadoutView: React.FC<{
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Build & runes</h1>
+          <h1 className="ot-page-title ot-orn-title">Build & runes</h1>
           <p className="ot-page-sub">
             {profile.label} into this enemy team. Hover anything to see why it was picked.
           </p>

@@ -9,6 +9,7 @@ import { IconArrowRight } from '../icons';
 import { SpellTimers } from '../SpellTimers';
 import type { LeagueStatus } from '../status';
 import { Badge, Card, CardHeader, ChampionCombobox, Pill, Portrait, SettingRow, Switch } from '../ui';
+import { CrestMark, Filigree, type BannerChampion } from '../ornaments';
 import { OneTrickCard } from './OneTrickCard';
 
 const STAGE_TITLE: Record<LeagueStatus['stage'], string> = {
@@ -29,10 +30,12 @@ export const HomeView: React.FC<{
   draft: DraftState;
   profile: ChampionProfile;
   champions: Champion[];
+  /** Resolved main champion (explicit or most-played); null = no banner identity. */
+  mainChampion?: BannerChampion | null;
   onSelectChampion: (champion: Champion, role: CatalogRole) => void;
   onSelectProfile: (id: ProfileId) => void;
   onNavigate: (view: ViewId) => void;
-}> = ({ league, status, draft, profile, champions, onSelectChampion, onSelectProfile, onNavigate }) => {
+}> = ({ league, status, draft, profile, champions, mainChampion, onSelectChampion, onSelectProfile, onNavigate }) => {
   const { settings, update } = useAppSettings();
   const [role, setRole] = useState<CatalogRole>(profile.role);
   const profileChampion = champions.find((c) => c.id === profile.championId) || {
@@ -42,6 +45,9 @@ export const HomeView: React.FC<{
     tags: [],
   };
   const authored = isAuthoredProfileId(profile.id);
+  // The hero art follows the chosen main champion, then the active profile.
+  const bannerChampion = mainChampion || profileChampion;
+  const bannerId = bannerChampion.id || profile.championId;
 
   const cta =
     status.stage === 'draft' ? (
@@ -56,18 +62,29 @@ export const HomeView: React.FC<{
 
   return (
     <div className="ot-page">
-      <Card className="ot-hero mb-4">
+      <Card className="ot-hero">
         <div className="ot-splash" aria-hidden>
           <img
-            src={championSplashUrl(profile.championId)}
+            src={championSplashUrl(bannerId)}
             alt=""
+            decoding="async"
             onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
           />
         </div>
+        <div className="ot-orn-hero-scrim" aria-hidden />
         <div className="flex flex-wrap items-end justify-between gap-4 py-2">
           <div className="min-w-0 max-w-xl">
+            {mainChampion ? (
+              <div className="ot-orn-hero-crest">
+                <CrestMark size={22} />
+                <div className="min-w-0">
+                  <div className="ot-orn-eyebrow">Main champion</div>
+                  <div className="ot-orn-hero-name truncate">{mainChampion.name || mainChampion.id}</div>
+                </div>
+              </div>
+            ) : null}
             <Pill tone={status.tone}>{status.short}</Pill>
-            <h1 className="ot-page-title mt-3">{STAGE_TITLE[status.stage]}</h1>
+            <h1 className="ot-page-title ot-orn-title mt-3">{STAGE_TITLE[status.stage]}</h1>
             <p className="mt-2 ot-muted leading-relaxed">{status.detail}</p>
             {status.next ? (
               <p className="mt-3 text-sm">
@@ -79,6 +96,7 @@ export const HomeView: React.FC<{
           {cta}
         </div>
       </Card>
+      <Filigree className="my-2" />
 
       <div className="grid gap-4 lg:grid-cols-5 mb-4">
         <Card className="lg:col-span-3">

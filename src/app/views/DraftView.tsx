@@ -50,7 +50,7 @@ export const DraftView: React.FC<{
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Champ select</h1>
+          <h1 className="ot-page-title ot-orn-title">Champ select</h1>
           <p className="ot-page-sub">
             {draft.live
               ? `Live from the client${draft.timerPhase ? ` · ${PHASE_LABEL[draft.timerPhase] || draft.timerPhase}` : ''}. Click any slot to correct it.`

@@ -59,8 +59,10 @@ declare global {
     }
 
     type AppearanceTheme = 'gothic' | 'ember' | 'azure' | 'phantom' | 'ivory';
-    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal';
+    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal' | 'champion';
     type AppearanceDensity = 'compact' | 'comfortable' | 'spacious';
+    type AppearanceLayout = 'compact' | 'showcase';
+    type OrnamentLevel = 'none' | 'light' | 'full';
 
     interface AppearanceSettings {
         /** Surface / type / line palette. */
@@ -75,6 +77,12 @@ declare global {
         glass: number;
         /** Dashboard font scale multiplier, 0.85-1.2. */
         fontScale: number;
+        /** Main champion (Data Dragon id). Empty = follow your most-played champion. */
+        mainChampion: string;
+        /** Compact (current shell) or showcase (larger champion hero). */
+        layoutPreset: AppearanceLayout;
+        /** Ornament intensity, 0-100. 0 = plain chrome, 50 = default, 100 = full filigree. */
+        ornament: number;
     }
 
     type PetSpecies = 'imp' | 'pup' | 'wyrm' | 'blob';

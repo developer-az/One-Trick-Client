@@ -7,9 +7,13 @@ import path from 'path';
 /** Dashboard color theme. Gothic = the default ink-black chrome look. */
 export type AppearanceTheme = 'gothic' | 'ember' | 'azure' | 'phantom' | 'ivory';
 /** Dashboard accent palette (the "yours" / primary signal color). */
-export type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal';
+export type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal' | 'champion';
 /** Dashboard spacing rhythm. */
 export type AppearanceDensity = 'compact' | 'comfortable' | 'spacious';
+/** Dashboard layout preset: today's density or a showcase hero. */
+export type AppearanceLayout = 'compact' | 'showcase';
+/** Ornament bucket derived from the 0–100 intensity. */
+export type OrnamentLevel = 'none' | 'light' | 'full';
 
 export interface AppearanceSettings {
     /** Surface / type / line palette. */
@@ -24,11 +28,18 @@ export interface AppearanceSettings {
     glass: number;
     /** Dashboard font scale multiplier, 0.85–1.2. */
     fontScale: number;
+    /** Main champion (Data Dragon id). Empty = follow your most-played champion. */
+    mainChampion: string;
+    /** Compact (current shell) or showcase (larger champion hero). */
+    layoutPreset: AppearanceLayout;
+    /** Ornament intensity, 0–100. 0 = plain chrome, 50 = default, 100 = full filigree. */
+    ornament: number;
 }
 
 export const APPEARANCE_THEMES: AppearanceTheme[] = ['gothic', 'ember', 'azure', 'phantom', 'ivory'];
-export const APPEARANCE_ACCENTS: AppearanceAccent[] = ['chrome', 'gold', 'blood', 'teal', 'royal'];
+export const APPEARANCE_ACCENTS: AppearanceAccent[] = ['chrome', 'gold', 'blood', 'teal', 'royal', 'champion'];
 export const APPEARANCE_DENSITIES: AppearanceDensity[] = ['compact', 'comfortable', 'spacious'];
+export const APPEARANCE_LAYOUTS: AppearanceLayout[] = ['compact', 'showcase'];
 
 export const APPEARANCE_RADIUS_MIN = 0;
 export const APPEARANCE_RADIUS_MAX = 24;
@@ -37,6 +48,13 @@ export const APPEARANCE_GLASS_MIN = 0;
 export const APPEARANCE_GLASS_MAX = 100;
 export const APPEARANCE_FONT_MIN = 0.85;
 export const APPEARANCE_FONT_MAX = 1.2;
+export const APPEARANCE_ORNAMENT_MIN = 0;
+export const APPEARANCE_ORNAMENT_MAX = 100;
+export const APPEARANCE_ORNAMENT_DEFAULT = 50;
+/** Ornament values below this stay "light"; at/above it the full layer renders. */
+export const APPEARANCE_ORNAMENT_FULL_AT = 75;
+/** Longest main-champion id accepted from disk (Data Dragon ids are short). */
+export const MAIN_CHAMPION_MAX_LENGTH = 40;
 
 export const APPEARANCE_DEFAULTS: AppearanceSettings = {
     theme: 'gothic',
@@ -45,7 +63,34 @@ export const APPEARANCE_DEFAULTS: AppearanceSettings = {
     radius: APPEARANCE_RADIUS_DEFAULT,
     glass: 0,
     fontScale: 1,
+    mainChampion: '',
+    layoutPreset: 'compact',
+    ornament: APPEARANCE_ORNAMENT_DEFAULT,
 };
+
+/** Clamp any ornament input onto the integer 0–100 scale (invalid → default). */
+export function clampOrnament(value: number): number {
+    if (!Number.isFinite(value)) return APPEARANCE_ORNAMENT_DEFAULT;
+    return Math.round(Math.min(APPEARANCE_ORNAMENT_MAX, Math.max(APPEARANCE_ORNAMENT_MIN, value)));
+}
+
+/**
+ * Bucket the intensity so CSS can show/hide ornament layers without animating:
+ * 0 = plain current look, 1–74 = light, 75–100 = full filigree + crest.
+ */
+export function ornamentLevel(value: number): OrnamentLevel {
+    const orn = clampOrnament(value);
+    if (orn <= 0) return 'none';
+    return orn < APPEARANCE_ORNAMENT_FULL_AT ? 'light' : 'full';
+}
+
+/** Trim + validate a persisted main-champion id (Data Dragon ids only). */
+export function normalizeMainChampion(raw: unknown): string {
+    if (typeof raw !== 'string') return '';
+    const value = raw.trim();
+    if (!value || value.length > MAIN_CHAMPION_MAX_LENGTH) return '';
+    return /^[A-Za-z0-9]+$/.test(value) ? value : '';
+}
 
 /* ---------------------------------------------------------------- pet */
 
@@ -98,11 +143,14 @@ export function appearanceToCss(app: AppearanceSettings): {
             'data-ot-theme': app.theme,
             'data-ot-accent': app.accent,
             'data-ot-density': app.density,
+            'data-ot-layout': app.layoutPreset === 'showcase' ? 'showcase' : 'compact',
+            'data-ot-ornament': ornamentLevel(app.ornament),
         },
         vars: {
             '--ot-radius-set': `${app.radius}px`,
             '--ot-glass': `${app.glass}`,
             '--ot-font-scale': `${app.fontScale}`,
+            '--ot-ornament': `${clampOrnament(app.ornament) / 100}`,
         },
     };
 }
@@ -117,6 +165,9 @@ function normalizeAppearance(raw: unknown): AppearanceSettings {
     if (APPEARANCE_ACCENTS.includes(accent)) out.accent = accent;
     const density = src.density as AppearanceDensity;
     if (APPEARANCE_DENSITIES.includes(density)) out.density = density;
+    const layoutPreset = src.layoutPreset as AppearanceLayout;
+    if (APPEARANCE_LAYOUTS.includes(layoutPreset)) out.layoutPreset = layoutPreset;
+    out.mainChampion = normalizeMainChampion(src.mainChampion);
 
     const radius = Number(src.radius);
     if (Number.isFinite(radius)) {
@@ -129,6 +180,10 @@ function normalizeAppearance(raw: unknown): AppearanceSettings {
     const fontScale = Number(src.fontScale);
     if (Number.isFinite(fontScale)) {
         out.fontScale = Math.round(Math.min(APPEARANCE_FONT_MAX, Math.max(APPEARANCE_FONT_MIN, fontScale)) * 100) / 100;
+    }
+    const ornament = Number(src.ornament);
+    if (src.ornament !== undefined && src.ornament !== null && Number.isFinite(ornament)) {
+        out.ornament = clampOrnament(ornament);
     }
     return out;
 }

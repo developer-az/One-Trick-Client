@@ -76,6 +76,16 @@
      before). Given + data-ot-* attributes in theme.css. */
   --ot-glass: 0;
   --ot-font-scale: 1;
+  /* Ornament intensity 0..1 from the Appearance control; the matching
+     data-ot-ornament="none|light|full" bucket lives in theme.css. */
+  --ot-ornament: 0.5;
+
+  /* Champion accent — the resolved main-champion color (sampled from the
+     champion icon by the renderer) and its wash. Ornaments, the active nav
+     marker, focus rings and selected states read these; chrome is the
+     disciplined default when no champion is known. */
+  --ot-champ: #d6dae0;
+  --ot-champ-soft: rgba(214, 218, 224, 0.12);
 
   /* Type */
   --ot-font: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
