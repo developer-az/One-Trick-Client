@@ -64,6 +64,7 @@ import {
     createOverlayDestroyGate,
     createPrematchStatsCache,
     resolveLoadingChampion,
+    shouldRefreshLoadingStats,
     type LocalSummonerIdentity,
 } from './prematch-loading';
 import type { LoadingStats } from '../src/overlay/loadingStats';
@@ -162,6 +163,10 @@ let identityWaiters: Array<(value: LocalSummonerIdentity | null) => void> = [];
 /** True once this champ select has started its one history prefetch. */
 let champSelectHistoryPrefetched = false;
 let lastPrefetchPhase: string | null = null;
+/** Bumped per champ select so an older prefetch can never fill the cache. */
+let champSelectSession = 0;
+/** The load the current loading overlay belongs to; 0 outside a load. */
+let loadingSessionToken = 0;
 /**
  * Summaries fetched during champ select so the loading path can fold them
  * without issuing a single LCU request. Empty cache ≠ zero games: only a loaded
@@ -303,11 +308,44 @@ function waitForLocalSummoner(timeoutMs: number): Promise<LocalSummonerIdentity 
     });
 }
 
-/** Mark that this champ select already asked for its history. */
+/**
+ * A new ChampSelect owns a fresh history snapshot. Bumping the session both
+ * resets the cache and invalidates a prefetch from the previous champ select,
+ * so a hot requeue never shows last game's games (or an old page's results).
+ */
+function beginChampSelectSession(): void {
+    champSelectSession += 1;
+    champSelectHistoryPrefetched = false;
+    prematchHistoryCache.reset();
+}
+
+/**
+ * Mark that this champ select already asked for its history. If that prefetch
+ * is still in flight when GameStart arrives, fold it when it lands — for this
+ * load and this champion only — and refresh the loading payload. Nothing here
+ * starts an LCU request from the loading path.
+ */
 function prefetchHistoryForChampSelect(): void {
     if (champSelectHistoryPrefetched || inGame || prematchLoading) return;
     champSelectHistoryPrefetched = true;
-    void prematchHistoryCache.prefetch();
+    const session = champSelectSession;
+    void prematchHistoryCache.prefetch().then(() => {
+        if (session !== champSelectSession) return;
+        const championId = loadingChampion?.championId ?? null;
+        const refresh = shouldRefreshLoadingStats({
+            loading: prematchLoading,
+            loadToken: loadingSessionToken,
+            activeToken: prematchStatsToken,
+            championId,
+            loadingChampionId: loadingChampion?.championId ?? null,
+        });
+        if (!refresh || championId == null) return;
+        const stats = prematchStatsFromCache(championId);
+        if (!stats) return;
+        prematchStats = stats;
+        sendPrematchLoadingPayload();
+        overlayLog('prematch-loading stats', { source: 'champ-select-cache', championId });
+    });
 }
 
 /** Cache-only fold: no LCU request, and null stays "unknown" (pet only). */
@@ -1127,7 +1165,11 @@ function resetMatchCaches(): void {
     loadingChampion = null;
     prematchStats = null;
     prematchStatsToken += 1;
+    loadingSessionToken = 0;
     champSelectHistoryPrefetched = false;
+    // Drop the history snapshot too: the next champ select loads a fresh one.
+    champSelectSession += 1;
+    prematchHistoryCache.reset();
     lastOverlayFingerprint = '';
     lastSentOverlayPayload = null;
     lastGoodPayload = null;
@@ -1361,6 +1403,7 @@ function enterPrematchLoading(phase: string | null): void {
     prematchLoading = true;
     prematchStats = null;
     prematchStatsToken += 1;
+    loadingSessionToken = prematchStatsToken;
     loadingChampion = lastChampSelectSelf
         ? { championId: lastChampSelectSelf.championId, championName: lastChampSelectSelf.championName }
         : null;
@@ -1396,6 +1439,7 @@ function exitPrematchLoading(reason: string, hide: boolean): void {
     prematchStats = null;
     loadingChampion = null;
     prematchStatsToken += 1;
+    loadingSessionToken = 0;
     overlayLog('prematch-loading exit', { reason });
     if (!hide) return;
     // A dodge/cancel leaves no pick for the next game: drop the stale one so a
@@ -1403,6 +1447,9 @@ function exitPrematchLoading(reason: string, hide: boolean): void {
     // still reads the pick for the accent and match list).
     lastChampSelectSelf = null;
     hideOverlay();
+    // Nothing will draw into the hidden window: give it the same delayed
+    // teardown as a finished match. A new load or match start cancels it.
+    overlayDestroyGate.schedule();
     sendFullOverlayUpdate({
         inGame: false,
         loading: false,
@@ -1665,7 +1712,7 @@ function onPhase(phase: string | null): void {
     // through ingestChampSelectSession if the client was still walking in.
     if (phase === 'ChampSelect') {
         if (lastPrefetchPhase !== 'ChampSelect') {
-            champSelectHistoryPrefetched = false;
+            beginChampSelectSession();
             prefetchHistoryForChampSelect();
         }
     } else {

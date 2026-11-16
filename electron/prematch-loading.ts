@@ -213,6 +213,32 @@ export interface PrematchStatsCache {
     reset(): void;
 }
 
+export interface LoadingStatsRefreshState {
+    /** The loading overlay is still drawing. */
+    loading: boolean;
+    /** Token of the load the pending prefetch was started for. */
+    loadToken: number;
+    /** Token of the load that is active now. */
+    activeToken: number;
+    /** Champion the fetched cache would be folded for. */
+    championId: number | null;
+    /** Champion the loading payload currently shows. */
+    loadingChampionId: number | null;
+}
+
+/**
+ * A champ-select prefetch can land after GameStart (the client is slow, the
+ * requeue is fast). It may fill the card then — but only for the load and
+ * champion it was started for. A newer load (different token) or a completed
+ * pick swap must never be restatted by it.
+ */
+export function shouldRefreshLoadingStats(state: LoadingStatsRefreshState): boolean {
+    if (!state.loading) return false;
+    if (state.loadToken !== state.activeToken) return false;
+    if (state.championId == null) return false;
+    return state.championId === state.loadingChampionId;
+}
+
 /**
  * Champ-select prefetch → loading read. The loading path never fetches: it
  * returns the cached fold or null. Only prefetch() touches the LCU, and it is

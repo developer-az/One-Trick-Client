@@ -25,6 +25,7 @@ import {
     pageReadyAfterBeat,
     resetPageReadiness,
     resolveLoadingChampion,
+    shouldRefreshLoadingStats,
     type OverlayPageBeat,
 } from './electron/prematch-loading';
 import { shouldReplayOverlayState } from './electron/game-monitor';
@@ -118,6 +119,15 @@ class FakeClock {
     }
 }
 
+/** A promise plus its resolver, for "fetch still in flight" cases. */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((settle) => {
+        resolve = settle;
+    });
+    return { promise, resolve };
+}
+
 async function main(): Promise<void> {
 console.log('--- verify:prematch-lifecycle: requeue cancels the delayed destroy ---');
 {
@@ -166,6 +176,36 @@ console.log('--- verify:prematch-lifecycle: requeue cancels the delayed destroy 
     gate.schedule();
     clock.advance(12_000);
     ok(destroyed === 2, 'a live match is never destroyed by a stale gate');
+}
+
+console.log('--- verify:prematch-lifecycle: a dodged load tears the hidden window down ---');
+{
+    const clock = new FakeClock();
+    let inGame = false;
+    let destroyed = 0;
+    const gate = createOverlayDestroyGate({
+        setTimeout: clock.setTimeout,
+        clearTimeout: clock.clearTimeout,
+        isInGame: () => inGame,
+        destroy: () => {
+            destroyed += 1;
+        },
+    });
+    // A finished match armed it, the requeue cancelled it, then the requeue was
+    // dodged: nothing will ever draw into the hidden window again.
+    gate.schedule();
+    gate.cancel();
+    gate.schedule();
+    clock.advance(11_999);
+    ok(destroyed === 0, 'a dodged load keeps the hidden window for the 12 s grace');
+    clock.advance(1);
+    ok(destroyed === 1, 'a dodged load tears the hidden window down after 12 s');
+    // A new load cancels the teardown and must not destroy the pet window.
+    gate.schedule();
+    inGame = true;
+    gate.cancel();
+    clock.advance(20_000);
+    ok(destroyed === 1, 'a new load cancels the dodge teardown');
 }
 
 console.log('--- verify:prematch-lifecycle: page reload gets another replay ---');
@@ -343,6 +383,88 @@ console.log('--- verify:prematch-lifecycle: loading path issues no history reque
     ok(empty.loaded(), 'empty history is still "loaded", unlike a missing cache');
 }
 
+console.log('--- verify:prematch-lifecycle: a late prefetch refreshes the active load ---');
+{
+    // The fetch is still in flight when GameStart arrives: the cache is unknown
+    // then, and the card must appear when it lands — no new request from loading.
+    const pending = deferred<Array<{ championId: number; win: boolean; kills: number; deaths: number; assists: number; queueId?: number }>>();
+    let fetches = 0;
+    const cache = createPrematchStatsCache({
+        fetchHistory: () => {
+            fetches += 1;
+            return pending.promise;
+        },
+    });
+    const prefetch = cache.prefetch();
+    ok(!cache.loaded() && cache.statsFor(64) === null, 'GameStart with the prefetch in flight has no card yet');
+    const loading = true;
+    const loadToken = 1;
+    ok(
+        cache.statsFor(64) === null && fetches === 1,
+        'the loading read neither waits nor issues a second history request'
+    );
+    pending.resolve([{ championId: 64, win: true, kills: 5, deaths: 1, assists: 8, queueId: 420 }]);
+    await prefetch;
+    ok(cache.loaded() && cache.statsFor(64)?.games === 1, 'the in-flight prefetch still fills the card when it lands');
+    ok(fetches === 1, 'the late card costs no extra history request');
+    ok(
+        shouldRefreshLoadingStats({
+            loading,
+            loadToken,
+            activeToken: loadToken,
+            championId: 64,
+            loadingChampionId: 64,
+        }),
+        'the monitor may resend the payload for the same load and champion'
+    );
+
+    const refresh = shouldRefreshLoadingStats;
+    ok(
+        !refresh({ loading: false, loadToken: 1, activeToken: 1, championId: 64, loadingChampionId: 64 }),
+        'a prefetch landing after the load exited never resends'
+    );
+    ok(
+        !refresh({ loading: true, loadToken: 1, activeToken: 2, championId: 64, loadingChampionId: 64 }),
+        'a prefetch from an older load never restats a newer one'
+    );
+    ok(
+        !refresh({ loading: true, loadToken: 2, activeToken: 2, championId: 64, loadingChampionId: 246 }),
+        'a prefetch for a swapped-away champion never restats the new pick'
+    );
+    ok(
+        !refresh({ loading: true, loadToken: 2, activeToken: 2, championId: null, loadingChampionId: null }),
+        'an unknown champion cannot fold a card'
+    );
+}
+
+console.log('--- verify:prematch-lifecycle: cache resets per champ select ---');
+{
+    const oldFetch = deferred<Array<{ championId: number; win: boolean; kills: number; deaths: number; assists: number; queueId?: number }>>();
+    const newFetch = deferred<Array<{ championId: number; win: boolean; kills: number; deaths: number; assists: number; queueId?: number }>>();
+    let fetches = 0;
+    const cache = createPrematchStatsCache({
+        fetchHistory: () => {
+            fetches += 1;
+            return fetches === 1 ? oldFetch.promise : newFetch.promise;
+        },
+    });
+    const first = cache.prefetch();
+    ok(fetches === 1, 'the first champ select starts a prefetch');
+    // A new champ select starts before the old request answers.
+    cache.reset();
+    ok(!cache.loaded() && cache.statsFor(64) === null, 'a new champ-select session starts with an unknown cache');
+    const second = cache.prefetch();
+    ok(fetches === 2, 'the new champ select fetches again instead of reusing stale games');
+    oldFetch.resolve([{ championId: 64, win: true, kills: 1, deaths: 1, assists: 1, queueId: 420 }]);
+    await first;
+    ok(cache.statsFor(64) === null, 'an older in-flight prefetch can never repopulate the reset cache');
+    newFetch.resolve([{ championId: 64, win: false, kills: 0, deaths: 5, assists: 2, queueId: 420 }]);
+    await second;
+    ok(cache.statsFor(64)?.games === 1, 'the current prefetch fills the cache');
+    ok(cache.statsFor(64)?.winRate === 0, 'the cache holds the new games, not the stale page');
+    ok(fetches === 2, 'the stale request never started a third fetch');
+}
+
 console.log('--- verify:prematch-lifecycle: ranked card label ---');
 {
     const ranked = computeLoadingStats(
@@ -414,6 +536,10 @@ console.log('--- verify:prematch-lifecycle: production wiring ---');
         'the loading entry folds the champ-select cache only'
     );
     ok(
+        !!enter && !/prematchHistoryCache\.prefetch\(/.test(enter),
+        'the loading entry never starts a history request'
+    );
+    ok(
         !!enter && /if \(!loadingChampion\) void resolvePrematchChampionFromSession\(\)/.test(enter),
         'the session read runs only when no champ-select pick is known'
     );
@@ -427,10 +553,44 @@ console.log('--- verify:prematch-lifecycle: production wiring ---');
     );
     const prefetch = bodyOf(monitor, 'prefetchHistoryForChampSelect');
     ok(!!prefetch && prefetch.includes('prematchHistoryCache.prefetch()'), 'champ select starts the prefetch');
+    ok(
+        !!prefetch && prefetch.includes('shouldRefreshLoadingStats('),
+        'a prefetch that lands mid-load is checked against the active load/champion'
+    );
+    ok(
+        !!prefetch && prefetch.includes('sendPrematchLoadingPayload()'),
+        'a valid late prefetch resends the loading payload'
+    );
+    const beginSession = bodyOf(monitor, 'beginChampSelectSession');
+    ok(!!beginSession, 'a new champ select has its own session start');
+    ok(
+        !!beginSession && beginSession.includes('prematchHistoryCache.reset()'),
+        'a new champ select drops the previous history snapshot'
+    );
+    ok(
+        !!beginSession && /champSelectSession \+= 1/.test(beginSession),
+        'the session token advances so older prefetches cannot repopulate'
+    );
     const onPhase = bodyOf(monitor, 'onPhase');
     ok(
-        !!onPhase && /phase === 'ChampSelect'/.test(onPhase) && onPhase.includes('prefetchHistoryForChampSelect()'),
+        !!onPhase && /phase === 'ChampSelect'/.test(onPhase) && onPhase.includes('beginChampSelectSession()'),
+        'onPhase starts a fresh session on champ-select entry'
+    );
+    ok(
+        !!onPhase && onPhase.includes('prefetchHistoryForChampSelect()'),
         'onPhase prefetches on champ-select entry'
+    );
+    const exit = bodyOf(monitor, 'exitPrematchLoading');
+    ok(!!exit, 'exitPrematchLoading exists');
+    ok(
+        !!exit && exit.includes('overlayDestroyGate.schedule()'),
+        'a dodged load schedules the hidden window teardown'
+    );
+    ok(
+        !!exit &&
+            exit.indexOf('overlayDestroyGate.schedule()') > exit.indexOf('hideOverlay()') &&
+            exit.indexOf('if (!hide) return;') < exit.indexOf('overlayDestroyGate.schedule()'),
+        'only the no-match (hide) exit schedules the teardown, after hiding'
     );
     const resolveSession = bodyOf(monitor, 'resolvePrematchChampionFromSession');
     ok(
