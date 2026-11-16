@@ -28,7 +28,7 @@ import {
   observeMayhemPickScan,
   type MayhemPickCounterState,
 } from './pickCount';
-import { isMayhemAugmentHudVisible } from './visibility';
+import { isMayhemAugmentHudVisible, MIN_SINGLE_OFFER_SCANS } from './visibility';
 
 /** Bounded discovery: at most one scan per this window (foreground-only). */
 export const MAYHEM_DISCOVERY_INTERVAL_MS = 10_000;
@@ -46,6 +46,8 @@ export const MAYHEM_DISCOVERY_MIN_OFFERS = 2;
 export interface MayhemMonitorRead {
   /** Display ids: current matches or the retained roll while the HUD is open. */
   ids: string[];
+  /** A single high-confidence match waiting for a consecutive scan. */
+  candidateIds: string[];
   /** Ids matched on this frame only; the pick counter reads nothing else. */
   frameIds: string[];
   fresh: boolean;
@@ -76,6 +78,9 @@ export interface MayhemMonitorState {
   fuzzyScore: number;
   /** Ids the HUD may draw (retained rolls included). */
   displayIds: string[];
+  /** The pending single offer and how many consecutive frames agreed on it. */
+  candidateIds: string[];
+  candidateScans: number;
   discovery: MayhemDiscoveryState;
 }
 
@@ -85,6 +90,8 @@ export function createMayhemMonitorState(): MayhemMonitorState {
     scanStreak: 0,
     fuzzyScore: 0,
     displayIds: [],
+    candidateIds: [],
+    candidateScans: 0,
     discovery: { burstStartedAt: null, lastScanAt: 0, latched: false, levelBurst: 0, wasDead: false },
   };
 }
@@ -279,8 +286,20 @@ export async function runMayhemMonitorScan(
         blackFrame: read.blackFrame,
         liveAugmentIds: input.liveAugmentIds,
       });
+      // A single high-confidence offer is pending, not displayable: promote it
+      // only after the same id was read on consecutive qualifying frames.
+      if (read.ids.length === 0 && read.candidateIds.length === 1) {
+        const id = read.candidateIds[0];
+        const same = next.candidateIds.length === 1 && next.candidateIds[0] === id;
+        next.candidateIds = [id];
+        next.candidateScans = same ? next.candidateScans + 1 : 1;
+        next.displayIds = next.candidateScans >= MIN_SINGLE_OFFER_SCANS ? [id] : [];
+      } else {
+        next.candidateIds = [];
+        next.candidateScans = 0;
+        next.displayIds = read.ids;
+      }
     }
-    next.displayIds = read.ids;
     if (discovery && trusted && offers >= MAYHEM_DISCOVERY_MIN_OFFERS) {
       next.discovery.latched = true;
       next.discovery.burstStartedAt = null;

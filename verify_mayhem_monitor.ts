@@ -7,8 +7,8 @@
  *   1. unknown-queue ARAM discovery: 90 s bursts around level 3/7/11/15 or a
  *      death classify the match from offers (classic ARAM 450 never scans);
  *   2. a manual PageDown scan classifies an unknown queue, never 450;
- *   3. a single high-confidence offer is kept across scans until it becomes
- *      visible or a confirmed empty frame purges it;
+ *   3. a single high-confidence offer is kept across scans through the real
+ *      adapter acceptance and promoted only after two consecutive frames;
  *   4. two offer frames followed by two empty frames count exactly one pick,
  *      even though the OCR adapter returns the retained roll as display ids;
  *   5. a failed capture / missing game window frame in the middle neither
@@ -31,6 +31,8 @@ import {
   type MayhemMonitorState,
 } from './src/logic/mayhem/monitor';
 import { isMayhemAugmentHudVisible } from './src/logic/mayhem/visibility';
+import { acceptMayhemOfferFrame } from './src/logic/mayhem/offerAcceptance';
+import { MAYHEM_HIGH_CONFIDENCE_SCORE } from './src/logic/mayhem/match';
 import type { MayhemModeSignals } from './src/logic/mayhem/mode';
 import fs from 'node:fs';
 
@@ -47,6 +49,7 @@ function ok(cond: boolean, msg: string): void {
 function frame(frameIds: string[], extra: Partial<MayhemMonitorRead> = {}): MayhemMonitorRead {
   return {
     ids: extra.ids ?? frameIds,
+    candidateIds: extra.candidateIds ?? [],
     frameIds,
     fresh: true,
     valid: true,
@@ -54,6 +57,37 @@ function frame(frameIds: string[], extra: Partial<MayhemMonitorRead> = {}): Mayh
     blackFrame: false,
     foreground: true,
     ...extra,
+  };
+}
+
+/**
+ * One automatic-scan frame through the real adapter acceptance (minMatches 2).
+ * `ids` is what the adapter would display, `candidateIds` the pending single
+ * high-confidence match; they are not hand-made from `frameIds`.
+ */
+function adapterRead(
+  matched: string[],
+  fuzzyScore: number,
+  opts: { previousIds?: string[]; retain?: boolean; minMatches?: number } = {}
+): MayhemMonitorRead {
+  const accepted = acceptMayhemOfferFrame({
+    text: '',
+    matched,
+    minMatches: opts.minMatches ?? 2,
+    fuzzyScore,
+    previousIds: opts.previousIds ?? [],
+    retain: opts.retain ?? false,
+    stability: { rerollPending: false },
+  });
+  return {
+    ids: accepted.ids,
+    candidateIds: accepted.candidateIds,
+    frameIds: accepted.frameIds,
+    fresh: true,
+    valid: true,
+    fuzzyScore,
+    blackFrame: false,
+    foreground: true,
   };
 }
 
@@ -354,18 +388,64 @@ async function main(): Promise<void> {
     );
   }
 
-  console.log('--- single-offer candidates survive scans ---');
+  console.log('--- real adapter: single high-confidence offer across scans ---');
   {
-    const single = () => frame(['twin_fire'], { fuzzyScore: 0.99 });
+    // The adapter asks for two matches, so a one-card frame yields no display
+    // ids; it becomes a candidate instead. The monitor promotes it after the
+    // same id on a second consecutive qualifying frame.
+    const direct = acceptMayhemOfferFrame({
+      text: '',
+      matched: ['twin_fire'],
+      minMatches: 2,
+      fuzzyScore: 0.95,
+      previousIds: [],
+      retain: false,
+      stability: { rerollPending: false },
+    });
+    ok(direct.ids.length === 0, 'the adapter does not display a single match directly');
+    ok(direct.candidateIds.join(',') === 'twin_fire', 'the adapter returns the single high-confidence match as a candidate');
+    ok(direct.frameIds.join(',') === 'twin_fire', 'the adapter still reports the frame match');
+    const low = acceptMayhemOfferFrame({
+      text: '',
+      matched: ['twin_fire'],
+      minMatches: 2,
+      fuzzyScore: MAYHEM_HIGH_CONFIDENCE_SCORE - 0.01,
+      previousIds: [],
+      retain: false,
+      stability: { rerollPending: false },
+    });
+    ok(low.ids.length === 0 && low.candidateIds.length === 0, 'a low-confidence single match is not a candidate');
+    const relaxed = acceptMayhemOfferFrame({
+      text: '',
+      matched: ['twin_fire'],
+      minMatches: 1,
+      fuzzyScore: 0.95,
+      previousIds: [],
+      retain: false,
+      stability: { rerollPending: false },
+    });
+    ok(relaxed.ids.join(',') === 'twin_fire' && relaxed.candidateIds.length === 0, 'a relaxed minMatches=1 read displays the match directly');
+    const pair = acceptMayhemOfferFrame({
+      text: '',
+      matched: ['a', 'b'],
+      minMatches: 2,
+      fuzzyScore: 0.95,
+      previousIds: [],
+      retain: false,
+      stability: { rerollPending: false },
+    });
+    ok(pair.ids.length === 2 && pair.candidateIds.length === 0, 'two matches display directly with no candidate');
+
     const state = createMayhemMonitorState();
     const first = await runMayhemMonitorScan(
       state,
       input(MAYHEM, 1_000_000),
-      async () => single()
+      async () => adapterRead(['twin_fire'], 0.95)
     );
-    ok(first.hudAction === 'keep', 'the first single offer is kept, not purged');
-    ok(first.state.scanStreak === 1, 'the first single offer starts the scan streak');
-    ok(first.state.displayIds.length === 1, 'the single offer stays as the display candidate');
+    ok(first.hudAction === 'keep', 'the first adapter single offer is kept, not purged');
+    ok(first.state.scanStreak === 1, 'the first qualifying single offer starts the scan streak');
+    ok(first.state.displayIds.length === 0, 'the single offer is not displayed on the first scan');
+    ok(first.state.candidateIds.join(',') === 'twin_fire' && first.state.candidateScans === 1, 'the adapter candidate is pending');
     ok(
       !isMayhemAugmentHudVisible(first.state.displayIds, false, {
         consecutiveScans: first.state.scanStreak,
@@ -376,33 +456,116 @@ async function main(): Promise<void> {
     const second = await runMayhemMonitorScan(
       first.state,
       input(MAYHEM, 1_010_000),
-      async () => single()
+      async () => adapterRead(['twin_fire'], 0.95)
     );
-    ok(second.hudAction === 'show', 'the same offer on the next valid frame becomes visible');
+    ok(second.hudAction === 'show', 'the same adapter candidate on the next frame becomes visible');
     ok(second.state.scanStreak === 2, 'the candidate reaches two consecutive scans');
+    ok(second.state.displayIds.join(',') === 'twin_fire', 'the monitor promotes the candidate to display ids');
     ok(
       isMayhemAugmentHudVisible(second.state.displayIds, false, {
         consecutiveScans: second.state.scanStreak,
         fuzzyScore: second.state.fuzzyScore,
       }),
-      'two consecutive single-offer scans open the HUD'
+      'two consecutive single-offer adapter frames open the HUD'
     );
   }
 
   {
+    // A different single offer on the next frame is not the same candidate:
+    // the streak resets and nothing shows.
     const state = createMayhemMonitorState();
     const first = await runMayhemMonitorScan(
       state,
       input(MAYHEM, 1_000_000),
-      async () => frame(['twin_fire'], { fuzzyScore: 0.99 })
+      async () => adapterRead(['twin_fire'], 0.95)
+    );
+    const other = await runMayhemMonitorScan(
+      first.state,
+      input(MAYHEM, 1_010_000),
+      async () => adapterRead(['recursion'], 0.95)
+    );
+    ok(other.state.displayIds.length === 0, 'a different single offer is not displayed');
+    ok(other.state.candidateIds.join(',') === 'recursion' && other.state.candidateScans === 1, 'the different offer starts its own candidate streak');
+    ok(other.hudAction === 'keep', 'the different single offer is kept, not shown');
+    ok(
+      !isMayhemAugmentHudVisible(other.state.displayIds, false, {
+        consecutiveScans: other.state.scanStreak,
+        fuzzyScore: other.state.fuzzyScore,
+      }),
+      'one match then a different match never becomes visible'
+    );
+  }
+
+  {
+    // A failed capture between two identical single offers must not reset the
+    // candidate streak.
+    const failedRead = frame([], {
+      valid: false,
+      foreground: false,
+      ids: [],
+      candidateIds: [],
+    });
+    const state = createMayhemMonitorState();
+    const first = await runMayhemMonitorScan(
+      state,
+      input(MAYHEM, 1_000_000),
+      async () => adapterRead(['twin_fire'], 0.95)
+    );
+    const invalid = await runMayhemMonitorScan(
+      first.state,
+      input(MAYHEM, 1_005_000),
+      async () => failedRead
+    );
+    ok(invalid.hudAction === 'keep', 'an invalid frame keeps the pending adapter candidate');
+    ok(invalid.state.candidateScans === 1 && invalid.state.scanStreak === 1, 'an invalid frame resets neither streak');
+    const second = await runMayhemMonitorScan(
+      invalid.state,
+      input(MAYHEM, 1_010_000),
+      async () => adapterRead(['twin_fire'], 0.95)
+    );
+    ok(second.hudAction === 'show' && second.state.scanStreak === 2, 'the adapter candidate still reaches two scans across an invalid frame');
+    ok(second.state.displayIds.join(',') === 'twin_fire', 'the invalid frame did not drop the adapter candidate');
+  }
+
+  {
+    // Low confidence never qualifies, even after two scans.
+    const state = createMayhemMonitorState();
+    const first = await runMayhemMonitorScan(
+      state,
+      input(MAYHEM, 1_000_000),
+      async () => adapterRead(['twin_fire'], 0.7)
+    );
+    const second = await runMayhemMonitorScan(
+      first.state,
+      input(MAYHEM, 1_010_000),
+      async () => adapterRead(['twin_fire'], 0.7)
+    );
+    ok(second.state.displayIds.length === 0 && second.state.candidateIds.length === 0, 'a low-confidence single offer never becomes a candidate');
+    ok(
+      !isMayhemAugmentHudVisible(second.state.displayIds, false, {
+        consecutiveScans: second.state.scanStreak,
+        fuzzyScore: second.state.fuzzyScore,
+      }),
+      'two low-confidence single-offer scans do not open the HUD'
+    );
+  }
+
+  {
+    // Single candidate then a confirmed empty frame: purge, nothing visible.
+    const state = createMayhemMonitorState();
+    const first = await runMayhemMonitorScan(
+      state,
+      input(MAYHEM, 1_000_000),
+      async () => adapterRead(['twin_fire'], 0.95)
     );
     const empty = await runMayhemMonitorScan(
       first.state,
       input(MAYHEM, 1_010_000),
-      async () => frame([])
+      async () => adapterRead([], 0.95)
     );
-    ok(empty.hudAction === 'purge', 'a confirmed empty frame purges the single-offer candidate');
+    ok(empty.hudAction === 'purge', 'a confirmed empty frame purges the pending adapter candidate');
     ok(empty.state.scanStreak === 0 && empty.state.displayIds.length === 0, 'the purged candidate leaves no streak or ids');
+    ok(empty.state.candidateIds.length === 0 && empty.state.candidateScans === 0, 'the purge also clears the candidate');
     ok(
       !isMayhemAugmentHudVisible(empty.state.displayIds, false, {
         consecutiveScans: empty.state.scanStreak,
@@ -410,34 +573,6 @@ async function main(): Promise<void> {
       }),
       'a single offer followed by an empty frame stays hidden'
     );
-  }
-
-  {
-    const failedRead = frame([], {
-      valid: false,
-      foreground: false,
-      ids: ['twin_fire'],
-    });
-    const state = createMayhemMonitorState();
-    const first = await runMayhemMonitorScan(
-      state,
-      input(MAYHEM, 1_000_000),
-      async () => frame(['twin_fire'], { fuzzyScore: 0.99 })
-    );
-    const invalid = await runMayhemMonitorScan(
-      first.state,
-      input(MAYHEM, 1_005_000),
-      async () => failedRead
-    );
-    ok(invalid.hudAction === 'keep', 'an invalid frame keeps the candidate instead of purging');
-    ok(invalid.state.scanStreak === 1, 'an invalid frame does not reset the single-offer streak');
-    const second = await runMayhemMonitorScan(
-      invalid.state,
-      input(MAYHEM, 1_010_000),
-      async () => frame(['twin_fire'], { fuzzyScore: 0.99 })
-    );
-    ok(second.hudAction === 'show' && second.state.scanStreak === 2, 'the candidate still reaches two scans across an invalid frame');
-    ok(second.state.displayIds.length === 1, 'the invalid frame did not drop the candidate');
   }
 
   console.log('--- frame-accurate pick counting ---');

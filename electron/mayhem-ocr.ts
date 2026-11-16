@@ -16,9 +16,9 @@ import {
   resolveOcrScriptPath,
 } from '../src/logic/mayhem/ocrScriptPath';
 import {
-  stabilizeMayhemOffers,
-  type MayhemOfferStabilityState,
-} from '../src/logic/mayhem/offerStability';
+  acceptMayhemOfferFrame,
+} from '../src/logic/mayhem/offerAcceptance';
+import type { MayhemOfferStabilityState } from '../src/logic/mayhem/offerStability';
 import { runMayhemOcrOnImageFile } from '../src/logic/mayhem/ocrRunner';
 import type { MayhemAugment } from '../src/logic/mayhem/types';
 import { overlayLog } from './overlay-log';
@@ -42,6 +42,11 @@ let loggedTargetSignature = '';
 export interface MayhemOcrRead {
   /** Display ids: this frame's matches, or the retained roll while a pick session is open. */
   ids: string[];
+  /**
+   * One high-confidence match that is not display-worthy yet. The monitor
+   * promotes it after the same id appears on consecutive scans.
+   */
+  candidateIds: string[];
   /**
    * Offer ids matched on THIS frame only. Never the retained/display set, so a
    * blank frame reads as zero even while the HUD keeps the previous roll up.
@@ -249,6 +254,7 @@ export async function detectMayhemOffers(
   const minMatches = opts.minMatches ?? 1;
   const idle: MayhemOcrRead = {
     ids: lastOfferIds,
+    candidateIds: [],
     frameIds: [],
     fresh: false,
     valid: false,
@@ -275,6 +281,7 @@ export async function detectMayhemOffers(
     const foreground = parsed.target ? parsed.target.foreground !== false : false;
     const base: MayhemOcrRead = {
       ids: lastOfferIds,
+      candidateIds: [],
       frameIds: [],
       fresh: true,
       valid: true,
@@ -300,11 +307,11 @@ export async function detectMayhemOffers(
     });
     const matched = matchAugmentsFromOcr(parsed.text, augments);
     lastFuzzyScore = fuzzyScore;
-    const frameIds = matched.slice(0, 3);
-    const ids = applyMatchedOffers(parsed.text, matched, effectiveMin);
+    const accepted = applyMatchedOffers(parsed.text, matched, effectiveMin, fuzzyScore);
     return {
-      ids,
-      frameIds,
+      ids: accepted.ids,
+      candidateIds: accepted.candidateIds,
+      frameIds: accepted.frameIds,
       fresh: true,
       valid: true,
       fuzzyScore,
@@ -351,28 +358,21 @@ export function resetMayhemOcrCache(): void {
   offerStability.rerollPending = false;
 }
 
-function applyMatchedOffers(text: string, matched: string[], minMatches: number): string[] {
-  const previous = lastOfferIds;
-  let next = matched.slice(0, 3);
-
-  if (matched.length >= minMatches) {
-    next = matched.slice(0, 3);
-  } else if (matched.length === 0) {
-    if (!retainOffersOnEmptyMatch) {
-      lastOfferIds = [];
-      return lastOfferIds;
-    }
-    next = previous;
-  } else if (minMatches <= 1 && matched.length >= 1) {
-    next = matched.slice(0, 3);
-  } else {
-    next = previous;
-  }
-
-  if (retainOffersOnEmptyMatch) {
-    lastOfferIds = stabilizeMayhemOffers(previous, next, text, true, offerStability);
-  } else {
-    lastOfferIds = next;
-  }
-  return lastOfferIds;
+function applyMatchedOffers(
+  text: string,
+  matched: string[],
+  minMatches: number,
+  fuzzyScore: number
+): { ids: string[]; candidateIds: string[]; frameIds: string[] } {
+  const accepted = acceptMayhemOfferFrame({
+    text,
+    matched,
+    minMatches,
+    fuzzyScore,
+    previousIds: lastOfferIds,
+    retain: retainOffersOnEmptyMatch,
+    stability: offerStability,
+  });
+  lastOfferIds = accepted.ids;
+  return accepted;
 }

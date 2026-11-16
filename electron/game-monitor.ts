@@ -595,6 +595,10 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
     mayhemOfferIds = ids;
     mayhemMonitorState.displayIds = [...ids];
     mayhemMonitorState.fuzzyScore = read.fuzzyScore;
+    // A manual scan is a fresh authoritative frame: drop any pending auto
+    // candidate so it cannot overwrite the manual roll.
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
     noteMayhemManualScan(mayhemMonitorState, signals, read);
     if (ids.length >= 1) {
         mayhemManualScanUntilMs = Date.now() + 60_000;
@@ -1150,6 +1154,8 @@ function clearMayhemLiveOffers(): void {
     mayhemMonitorState.displayIds = [];
     mayhemMonitorState.scanStreak = 0;
     mayhemMonitorState.fuzzyScore = 0;
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
     mayhemOfferScanStreak = 0;
     mayhemOfferFuzzyScore = 0;
     resetMayhemOcrCache();
@@ -1173,6 +1179,8 @@ function purgeMayhemOffersFromScreen(): void {
     mayhemMonitorState.displayIds = [];
     mayhemMonitorState.scanStreak = 0;
     mayhemMonitorState.fuzzyScore = 0;
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
     mayhemOfferScanStreak = 0;
     mayhemOfferFuzzyScore = 0;
     if (mayhemPickSessionActive) {
@@ -1349,6 +1357,8 @@ function startMayhemPoll(): void {
         mayhemMonitorState.displayIds = [...previous.displayIds];
         mayhemMonitorState.scanStreak = previous.scanStreak;
         mayhemMonitorState.fuzzyScore = previous.fuzzyScore;
+        mayhemMonitorState.candidateIds = [...previous.candidateIds];
+        mayhemMonitorState.candidateScans = previous.candidateScans;
         mayhemPickSessionActive = false;
         mayhemManualScanUntilMs = 0;
         mayhemUserDismissedUntilMs = 0;
