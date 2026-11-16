@@ -28,11 +28,17 @@ import {
   observeMayhemPickScan,
   type MayhemPickCounterState,
 } from './pickCount';
+import { isMayhemAugmentHudVisible } from './visibility';
 
 /** Bounded discovery: at most one scan per this window (foreground-only). */
 export const MAYHEM_DISCOVERY_INTERVAL_MS = 10_000;
-/** Give up discovery after three minutes without an offer read. */
-export const MAYHEM_DISCOVERY_WINDOW_MS = 180_000;
+/**
+ * A discovery burst around a plausible augment window. Bursts are opened by
+ * reaching level 3/7/11/15 or dying, so a late first augment is still found.
+ */
+export const MAYHEM_DISCOVERY_BURST_MS = 90_000;
+/** Champion levels that can open the augment shop. */
+export const MAYHEM_DISCOVERY_LEVELS: readonly number[] = [3, 7, 11, 15];
 /** Two cards on the same frame are required to classify an unknown queue. */
 export const MAYHEM_DISCOVERY_MIN_OFFERS = 2;
 
@@ -50,12 +56,16 @@ export interface MayhemMonitorRead {
 }
 
 export interface MayhemDiscoveryState {
-  /** First discovery scan of this match; null before the first / after expiry. */
-  startedAt: number | null;
+  /** Start of the current 90 s burst; null when no burst is active. */
+  burstStartedAt: number | null;
   /** Last discovery scan attempt (rate limit: one per interval). */
   lastScanAt: number;
   /** An unknown-queue game showed augment offers: it is Mayhem for this match. */
   latched: boolean;
+  /** Highest augment level that already opened a burst this match. */
+  levelBurst: number;
+  /** Previous frame's death state, so a death starts one burst on its edge. */
+  wasDead: boolean;
 }
 
 export interface MayhemMonitorState {
@@ -75,7 +85,7 @@ export function createMayhemMonitorState(): MayhemMonitorState {
     scanStreak: 0,
     fuzzyScore: 0,
     displayIds: [],
-    discovery: { startedAt: null, lastScanAt: 0, latched: false },
+    discovery: { burstStartedAt: null, lastScanAt: 0, latched: false, levelBurst: 0, wasDead: false },
   };
 }
 
@@ -94,10 +104,52 @@ export function isUnknownQueueAram(signals: MayhemModeSignals): boolean {
   return !MAYHEM_QUEUE_IDS.includes(queue) && !ARAM_QUEUE_IDS.includes(queue);
 }
 
-/** Discovery is live until three minutes after its first scan. */
+/** Discovery is live for 90 s after its burst was opened. */
 export function mayhemDiscoveryLive(discovery: MayhemDiscoveryState, now: number): boolean {
-  if (discovery.startedAt == null) return false;
-  return now - discovery.startedAt < MAYHEM_DISCOVERY_WINDOW_MS;
+  if (discovery.burstStartedAt == null) return false;
+  return now - discovery.burstStartedAt < MAYHEM_DISCOVERY_BURST_MS;
+}
+
+/**
+ * Open a discovery burst around a plausible augment window: reaching level
+ * 3/7/11/15, or a rising death edge (augments are usually chosen dead or at
+ * spawn). Unknown-queue ARAM only; classic ARAM (450) never gets a burst.
+ * Returns true while a burst is active after this call.
+ */
+export function noteMayhemDiscoveryTrigger(
+  state: MayhemMonitorState,
+  input: { now: number; level: number; isDead: boolean; signals: MayhemModeSignals }
+): boolean {
+  const discovery = state.discovery;
+  if (!discovery.latched && isUnknownQueueAram(input.signals)) {
+    const levelHit = MAYHEM_DISCOVERY_LEVELS.find(
+      (level) => input.level >= level && level > discovery.levelBurst
+    );
+    const deathEdge = input.isDead && !discovery.wasDead;
+    if (levelHit != null) discovery.levelBurst = levelHit;
+    if (levelHit != null || deathEdge) discovery.burstStartedAt = input.now;
+  }
+  discovery.wasDead = input.isDead;
+  return !discovery.latched && mayhemDiscoveryLive(discovery, input.now);
+}
+
+/**
+ * A manual PageDown read. Any ARAM-family game may scan (the caller gates on
+ * that), but only an unknown-queue match may be classified from it: classic
+ * ARAM 450 must stay ARAM even when augment cards are on screen.
+ */
+export function noteMayhemManualScan(
+  state: MayhemMonitorState,
+  signals: MayhemModeSignals,
+  read: MayhemMonitorRead
+): boolean {
+  const trusted = read.fresh && read.valid && read.foreground && !read.blackFrame;
+  if (!isUnknownQueueAram(signals) || !trusted || read.frameIds.length < MAYHEM_DISCOVERY_MIN_OFFERS) {
+    return false;
+  }
+  state.discovery.latched = true;
+  state.discovery.burstStartedAt = null;
+  return true;
 }
 
 /** Classify with this match's latch (once discovered, it stays Mayhem all game). */
@@ -128,7 +180,7 @@ export function mayhemMonitorWantsScan(
 ): 'mayhem' | 'discovery' | 'none' {
   if (mayhemMonitorMode(state, signals) === 'mayhem') return 'mayhem';
   if (!isUnknownQueueAram(signals)) return 'none';
-  if (state.discovery.startedAt != null && !mayhemDiscoveryLive(state.discovery, now)) return 'none';
+  if (!mayhemDiscoveryLive(state.discovery, now)) return 'none';
   return 'discovery';
 }
 
@@ -140,7 +192,12 @@ export interface MayhemMonitorInput {
   liveAugmentIds: string[];
   /** The in-match level gate / user dismissal. Discovery ignores it. */
   autoOcrAllowed: boolean;
+  /** A PageDown manual scan keeps a single offer visible. */
+  manualScanActive?: boolean;
 }
+
+/** What the HUD should do with the frame just folded in. */
+export type MayhemHudAction = 'show' | 'keep' | 'purge';
 
 export interface MayhemMonitorResult {
   state: MayhemMonitorState;
@@ -151,6 +208,12 @@ export interface MayhemMonitorResult {
   mode: MayhemMode;
   /** This scan ran as bounded discovery (unknown-queue ARAM). */
   discovery: boolean;
+  /**
+   * `show` opens/keeps the augment HUD; `keep` retains an unshown single-offer
+   * candidate for the next scan; `purge` clears on a confirmed valid empty
+   * frame. Invalid frames always return `keep`.
+   */
+  hudAction: MayhemHudAction;
 }
 
 /**
@@ -169,20 +232,34 @@ export async function runMayhemMonitorScan(
     displayIds: [...state.displayIds],
     discovery: { ...state.discovery },
   };
+  // Level/death triggers can open a burst even when this call starts before
+  // the caller scheduled a poll (the live tick also calls this).
+  noteMayhemDiscoveryTrigger(next, {
+    now: input.now,
+    level: input.level,
+    isDead: input.isDead,
+    signals: input.signals,
+  });
   const wanted = mayhemMonitorWantsScan(next, input.signals, input.now);
   if (wanted === 'none') {
-    return { state: next, scanned: false, counted: 0, mode: mayhemMonitorMode(next, input.signals), discovery: false };
+    return {
+      state: next,
+      scanned: false,
+      counted: 0,
+      mode: mayhemMonitorMode(next, input.signals),
+      discovery: false,
+      hudAction: 'keep',
+    };
   }
   const discovery = wanted === 'discovery';
   if (discovery) {
-    if (next.discovery.startedAt == null) next.discovery.startedAt = input.now;
     if (!mayhemDiscoveryDue(next, input.now)) {
-      return { state: next, scanned: false, counted: 0, mode: 'aram', discovery: true };
+      return { state: next, scanned: false, counted: 0, mode: 'aram', discovery: true, hudAction: 'keep' };
     }
     // Every attempt (successful or not) consumes the 10 s slot.
     next.discovery.lastScanAt = input.now;
   } else if (!input.autoOcrAllowed) {
-    return { state: next, scanned: false, counted: 0, mode: 'mayhem', discovery: false };
+    return { state: next, scanned: false, counted: 0, mode: 'mayhem', discovery: false, hudAction: 'keep' };
   }
 
   const read = await runOcr(MAYHEM_DISCOVERY_MIN_OFFERS);
@@ -190,12 +267,13 @@ export async function runMayhemMonitorScan(
   // A failed capture / missing game window / OCR exception is not a frame at
   // all: it must not advance or reset either streak.
   const trusted = read.fresh && read.valid && read.foreground && !read.blackFrame;
+  const offers = read.frameIds.length;
   if (read.fresh) {
     next.fuzzyScore = read.fuzzyScore;
     if (trusted) {
-      next.scanStreak = read.frameIds.length > 0 ? next.scanStreak + 1 : 0;
+      next.scanStreak = offers > 0 ? next.scanStreak + 1 : 0;
       next.counter = observeMayhemPickScan(next.counter, {
-        offerCount: read.frameIds.length,
+        offerCount: offers,
         isDead: input.isDead,
         foreground: read.foreground,
         blackFrame: read.blackFrame,
@@ -203,11 +281,19 @@ export async function runMayhemMonitorScan(
       });
     }
     next.displayIds = read.ids;
-    if (discovery && trusted && read.frameIds.length >= MAYHEM_DISCOVERY_MIN_OFFERS) {
+    if (discovery && trusted && offers >= MAYHEM_DISCOVERY_MIN_OFFERS) {
       next.discovery.latched = true;
-      next.discovery.startedAt = null;
+      next.discovery.burstStartedAt = null;
     }
   }
+
+  // A single high-confidence offer is not visible yet; keep it so the next
+  // scan can make it consecutive. Only a confirmed empty frame purges.
+  const visible = isMayhemAugmentHudVisible(next.displayIds, input.manualScanActive === true, {
+    consecutiveScans: next.scanStreak,
+    fuzzyScore: next.fuzzyScore,
+  });
+  const hudAction: MayhemHudAction = visible ? 'show' : trusted && offers === 0 ? 'purge' : 'keep';
 
   let mode: MayhemMode = 'aram';
   if (next.discovery.latched) mode = 'mayhem';
@@ -219,5 +305,6 @@ export async function runMayhemMonitorScan(
     counted: next.counter.picksTaken - before,
     mode,
     discovery,
+    hudAction,
   };
 }
