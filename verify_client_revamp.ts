@@ -235,6 +235,9 @@ async function main(): Promise<void> {
   const appTsx = read('src/app/App.tsx');
   const homeView = read('src/app/views/HomeView.tsx');
   const ui = read('src/app/ui.tsx');
+  // Brief J shell pieces the superceded shell checks now read.
+  const orbitNav = read('src/app/OrbitNav.tsx');
+  const pinnedChampions = read('src/app/PinnedChampions.tsx');
 
   check('tokens.css defines --ot-champ', !!tokenValue(tokens, '--ot-champ'));
   check('tokens.css defines --ot-champ-soft', !!tokenValue(tokens, '--ot-champ-soft'));
@@ -302,21 +305,56 @@ async function main(): Promise<void> {
   check('hooks import the overlay accent resolver', /from '\.\.\/overlay\/champAccent'/.test(hooksSrc) && /resolveChampionAccent/.test(hooksSrc) && /accentSoft/.test(hooksSrc));
   check('no duplicated pickAccent / pixel reading in the client', !/function pickAccent|getImageData|createImageBitmap/.test(ornaments) && !/function pickAccent|getImageData|createImageBitmap/.test(hooksSrc));
   check('banner splash uses championSplashUrl', /championSplashUrl\(id\)/.test(ornaments));
-  check('champion splash images use the masked .ot-splash', /className="ot-splash"/.test(ornaments) && /className="ot-splash"/.test(homeView));
+  check(
+    'shell owns one masked full-bleed champion image',
+    /className="ot-bg"/.test(appTsx) &&
+      /className="ot-bg-art"[\s\S]{0,400}?src=\{championSplashUrl\(mainChampionKey\)\}/.test(appTsx) &&
+      /\.ot-bg-art img\s*\{[^}]*-webkit-mask-image:\s*radial-gradient/.test(theme)
+  );
 
   // Shell wiring.
-  check('App renders the slim strip on non-Home views', /view !== 'home' && mainChampion \? <ChampionStrip/.test(appTsx));
+  check(
+    'champion backdrop replaces the strip on every view',
+    /<div className="ot-shell" data-ot-view=\{view\}>/.test(appTsx) &&
+      /className="ot-bg-ink"/.test(appTsx) &&
+      /\.ot-shell\[data-ot-view='home'\]\s*\{\s*--ot-bg-art:\s*1;/.test(theme) &&
+      /\.ot-shell\[data-ot-view='stats'\][\s\S]{0,200}--ot-bg-art:\s*0\.34;/.test(theme) &&
+      !/<ChampionStrip/.test(appTsx)
+  );
   check('App resolves the main champion and applies the accent', /mainChampionId\(ap, history\.games, catalog\.champions\)/.test(appTsx) && /useChampionAccent\(mainChampion, ap\.accent === 'champion'\)/.test(appTsx));
-  check('Home hero shows the crest block for a main champion', /ot-orn-hero-crest/.test(homeView) && /Main champion/.test(homeView));
+  check(
+    'Home names your main champion on its own plate',
+    /ot-home-champion ot-orn-title/.test(homeView) &&
+      /<span>Your main<\/span>/.test(homeView) &&
+      /const bannerName = bannerChampion\.name \|\| bannerChampion\.id/.test(homeView) &&
+      /\{bannerName\}/.test(homeView)
+  );
   check('shell has a sidebar filigree divider', /<Filigree \/>/.test(appTsx));
 
   // Appearance controls.
-  check('Appearance has a Main champion picker with the catalog', /aria-label="Main champion"/.test(appTsx) && /<ChampionCombobox[\s\S]*?champions=\{champions\}/.test(appTsx));
-  check('picking a champion opts into the champion palette', /accent: c && ap\.accent === 'chrome' \? 'champion' : ap\.accent/.test(appTsx));
+  check(
+    'pins replace the Appearance main-champion picker',
+    !/aria-label="Main champion"/.test(appTsx) &&
+      /aria-label="Pinned champions"/.test(appTsx) &&
+      /<OrbitNav\b[\s\S]{0,400}?pins=\{pinnedChampions\}/.test(appTsx) &&
+      /className="ot-pin-add"/.test(pinnedChampions)
+  );
+  check(
+    'picking a champion opts into the champion palette',
+    (appTsx.match(/accent: ap\.accent === 'chrome' \? 'champion' : ap\.accent/g) || []).length >= 2 &&
+      /const selectChampion = \(champion: Champion, role: CatalogRole\) => \{[\s\S]{0,300}?accent: ap\.accent === 'chrome' \? 'champion' : ap\.accent/.test(appTsx) &&
+      /setActive: \(id: string\) =>[\s\S]{0,300}?accent: ap\.accent === 'chrome' \? 'champion' : ap\.accent/.test(appTsx)
+  );
   check('Appearance has the layout preset control', /aria-label="Layout preset"/.test(appTsx) && /APPEARANCE_LAYOUT_OPTIONS/.test(appTsx));
   check('Appearance has the ornament intensity slider', /Ornament intensity/.test(appTsx) && /min=\{0\}[\s\S]*?max=\{100\}[\s\S]*?ornament: Number\(e\.target\.value\)/.test(appTsx));
   check('champion picker keeps combobox keyboard handling', /role="listbox"/.test(ui) && /ArrowDown/.test(ui) && /ArrowUp/.test(ui) && /Enter/.test(ui));
-  check('champion picker shows the champion icon', /Portrait champion=\{mainChampionEntry\}/.test(appTsx));
+  check(
+    'pin slots show the champion portrait',
+    /<Portrait champion=\{champion\} size=\{40\} className="ot-pin-portrait" \/>/.test(pinnedChampions) &&
+      /\.ot-pin\.is-active \.ot-pin-portrait\s*\{[^}]*border-color:\s*var\(--ot-champ\)/.test(theme) &&
+      /data-ot-geo="pin"/.test(orbitNav) &&
+      /<PinDot\b/.test(orbitNav)
+  );
 
   // Every view adopts the engraved title class.
   const views = ['HomeView', 'DraftView', 'LoadoutView', 'OverlayView', 'PerformanceView', 'StatsView', 'ReviewView', 'MayhemView'];
