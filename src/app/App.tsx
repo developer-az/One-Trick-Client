@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogRole } from '../catalog/types';
 import { championSplashUrl } from '../data/ddragonAssets';
 import type { Champion } from '../logic/pykeLogic';
@@ -278,9 +278,50 @@ export const App: React.FC = () => {
   // Room for the fan on ordinary views (the arc pills sit under the disk).
   const mainPad = tier === 'arc' ? Math.round(disk / 2 + 120) : Math.round(disk / 2 + 170);
 
+  // Non-Home views: the disk fan is a reserved header band. Measure the
+  // lowest nav/pin/hub node and hand its bottom to `.ot-main`, whose top edge
+  // becomes the scroll container's top — so scrolled content is clipped below
+  // the band and can never slide under the pills, pins or hub. The value is
+  // written straight to the shell (layout effect, before paint); it is layout
+  // state owned by the DOM, not React render state.
+  const shellRef = useRef<HTMLDivElement | null>(null);
+  const pinsKey = pinnedChampions.join('|');
+  useLayoutEffect(() => {
+    let raf = 0;
+    const apply = () => {
+      const shell = shellRef.current;
+      if (!shell) return;
+      if (view === 'home') {
+        shell.style.removeProperty('--ot-shell-band');
+        return;
+      }
+      const nodes = document.querySelectorAll<HTMLElement>(
+        '.ot-disk [data-ot-geo="nav"], .ot-disk [data-ot-geo="pin"], .ot-disk [data-ot-geo="hub"], .ot-disk [data-ot-geo="hub-name"]'
+      );
+      let bottom = 0;
+      nodes.forEach((node) => {
+        const rect = node.getBoundingClientRect();
+        if (rect.height > 0 && rect.width > 0) bottom = Math.max(bottom, rect.bottom);
+      });
+      const next = bottom > 0 ? Math.ceil(bottom + 12) : mainPad;
+      shell.style.setProperty('--ot-shell-band', `${next}px`);
+    };
+    apply();
+    // OrbitNav measures its pills in a layout effect and re-renders once with
+    // exact widths; one frame later the fan geometry is final.
+    raf = window.requestAnimationFrame(apply);
+    window.addEventListener('resize', apply);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener('resize', apply);
+    };
+    // Font scale and the pin set change pill widths/heights; the fan re-solves.
+  }, [view, tier, disk, mainPad, pinsKey, ap.fontScale, ap.density]);
+
   return (
     <div
       className="ot-shell"
+      ref={shellRef}
       data-ot-view={view}
       style={{
         ['--ot-disk-size' as string]: `${disk}px`,

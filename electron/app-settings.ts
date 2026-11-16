@@ -288,7 +288,11 @@ function normalize(raw: unknown): AppSettings {
     const out = { ...DEFAULTS };
     for (const key of Object.keys(DEFAULTS) as Array<keyof AppSettings>) {
         if (key === 'appearance' || key === 'pet') continue; // handled below
-        if (typeof src[key] === 'boolean') out[key] = src[key] as boolean;
+        const value = src[key];
+        if (typeof value !== 'boolean' || typeof out[key] !== 'boolean') continue;
+        // Boolean settings only; non-boolean keys (pinnedChampions) are
+        // normalized below. The guard keeps the indexed write type-safe.
+        (out as unknown as Record<keyof AppSettings, unknown>)[key] = value;
     }
     // Old settings files (or a partially-written one) have no `appearance`;
     // missing or invalid values fall back to safe defaults (migration).

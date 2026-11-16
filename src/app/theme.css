@@ -2827,6 +2827,16 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   padding-top: 0;
 }
 
+/* Non-Home views: the orbit fan is a reserved header band. The scroll
+ * container's top edge sits at the band's bottom (measured from the lowest
+ * nav/pin/hub node in App.tsx), so content scrolls inside it and is clipped at
+ * that edge — nothing can render under the pills, pins or hub. Home keeps its
+ * full-bleed, non-scrolling composition. */
+.ot-shell:not([data-ot-view='home']) .ot-main {
+  top: var(--ot-shell-band, var(--ot-main-pad, 240px));
+  padding-top: 0;
+}
+
 /* ---- Home: exactly the mockup's composition ---- */
 .ot-home {
   position: relative;
