@@ -1173,3 +1173,310 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   background: var(--ot-bg);
   pointer-events: none;
 }
+
+/* ===========================================================================
+ * Client revamp (G) — ornate gothic framing + champion-driven shell.
+ *
+ * Static ornament only: engraved titles, hairline rules with a centered
+ * diamond, filigree dividers, crest marks, card corner flourishes. Every mark
+ * is drawn with currentColor or a token (--ot-champ) so it tints with the
+ * champion accent. No images, no filters, no blur, no animation loops; the
+ * one motion is a <=200ms splash fade that reduced-motion disables.
+ *
+ * Ornament intensity: --ot-ornament (0..1) scales line weight/opacity and the
+ * data-ot-ornament bucket hides whole layers:
+ *   none  = today's plain chrome (0)
+ *   light = engraved titles + hairline rule (1–74, default 50)
+ *   full  = + crest, filigree, card corner flourishes (75–100)
+ * ========================================================================= */
+
+/* ---- Champion accent: opt-in "champion" palette. ---- */
+[data-ot-accent='champion'] {
+  --ot-gold: var(--ot-champ);
+  --ot-gold-soft: var(--ot-champ-soft);
+  --ot-chrome: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ot-champ) 45%, #ffffff) 0%,
+    var(--ot-champ) 46%,
+    color-mix(in srgb, var(--ot-champ) 62%, #000000) 54%,
+    color-mix(in srgb, var(--ot-champ) 78%, #ffffff) 100%
+  );
+}
+
+/* The champion mark owns active/selected states and focus rings. */
+.ot-nav.is-active {
+  box-shadow: inset 2px 0 0 var(--ot-champ);
+}
+.ot-btn:focus-visible,
+.ot-nav:focus-visible,
+.ot-input:focus-visible,
+.ot-switch:focus-visible,
+.ot-chip-btn:focus-visible {
+  outline-color: var(--ot-champ);
+}
+.ot-segment button.is-active {
+  box-shadow: inset 0 -2px 0 var(--ot-champ);
+}
+.ot-combobox-option.is-active,
+.ot-combobox-option:hover {
+  background: var(--ot-surface-3);
+  box-shadow: inset 2px 0 0 var(--ot-champ);
+}
+.ot-slot.is-local {
+  border-color: color-mix(in srgb, var(--ot-champ) 55%, transparent);
+  background: linear-gradient(90deg, var(--ot-champ-soft), var(--ot-surface-2) 70%);
+}
+.ot-range {
+  accent-color: var(--ot-champ);
+}
+
+/* ---- Engraved page title: Cinzel, small-caps tracking, chrome rule. ---- */
+.ot-orn-title {
+  font-variant-caps: small-caps;
+  letter-spacing: calc(0.04em + var(--ot-ornament) * 0.05em);
+}
+.ot-page-header::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -2.5px;
+  width: 5px;
+  height: 5px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--ot-champ);
+  opacity: calc(0.35 + var(--ot-ornament) * 0.65);
+  pointer-events: none;
+}
+.ot-page-header::after {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ot-champ) 70%, transparent) 0%,
+    color-mix(in srgb, var(--ot-champ) 30%, transparent) 26%,
+    var(--ot-border) 68%,
+    transparent 100%
+  );
+}
+.ot-card-title {
+  font-variant-caps: small-caps;
+  letter-spacing: calc(0.12em + var(--ot-ornament) * 0.04em);
+}
+.ot-card-title::before {
+  background: var(--ot-champ);
+}
+.ot-card-heading {
+  letter-spacing: calc(0.02em + var(--ot-ornament) * 0.02em);
+}
+
+/* Card bracket corners: tint with the champion and add a hairline fillet
+   inside each L at the full level. */
+[data-ot-ornament='light'] .ot-card::before,
+[data-ot-ornament='full'] .ot-card::before,
+[data-ot-ornament='light'] .ot-card::after,
+[data-ot-ornament='full'] .ot-card::after {
+  border-color: color-mix(in srgb, var(--ot-champ) 45%, transparent);
+}
+[data-ot-ornament='full'] .ot-card::before {
+  background-image: linear-gradient(
+    135deg,
+    transparent calc(50% - 0.5px),
+    var(--ot-champ) calc(50% - 0.5px),
+    var(--ot-champ) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: 6px 6px;
+  background-position: right bottom;
+  background-repeat: no-repeat;
+}
+[data-ot-ornament='full'] .ot-card::after {
+  background-image: linear-gradient(
+    315deg,
+    transparent calc(50% - 0.5px),
+    var(--ot-champ) calc(50% - 0.5px),
+    var(--ot-champ) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: 6px 6px;
+  background-position: left top;
+  background-repeat: no-repeat;
+}
+/* Full level: every card eyebrow grows a tapering hairline rule. */
+[data-ot-ornament='full'] .ot-card-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-left: 4px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ot-champ) 42%, transparent), transparent);
+}
+
+/* ---- Ornament primitives (shared, never per-view). ---- */
+.ot-orn-crest {
+  flex: none;
+  color: var(--ot-champ);
+  opacity: calc(0.55 + var(--ot-ornament) * 0.45);
+}
+.ot-orn-filigree {
+  display: block;
+  width: 100%;
+  height: 8px;
+  color: var(--ot-champ);
+  opacity: calc(0.2 + var(--ot-ornament) * 0.6);
+}
+.ot-orn-eyebrow {
+  font-family: var(--ot-font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+}
+
+/* ---- Champion banner: Home hero art + the slim strip on other views.
+   Art rides the existing masked .ot-splash; copy sits on an ink scrim. ---- */
+.ot-orn-hero-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--ot-bg) 0%,
+    color-mix(in srgb, var(--ot-bg) 78%, transparent) 46%,
+    transparent 82%
+  );
+}
+.ot-hero > .ot-orn-hero-scrim {
+  position: absolute;
+}
+.ot-orn-hero-crest {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  padding: 2px 9px 2px 7px;
+  width: fit-content;
+  max-width: 100%;
+  border-left: 1px solid var(--ot-champ);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+}
+.ot-orn-hero-name {
+  font-family: var(--ot-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ot-text);
+  line-height: 1.2;
+}
+
+.ot-orn-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 6px 24px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ot-border);
+  background: var(--ot-bg);
+  contain: layout paint;
+}
+.ot-orn-strip > * {
+  position: relative;
+}
+.ot-orn-strip .ot-splash img {
+  width: 52%;
+  right: 0;
+  top: 50%;
+  transform: translateY(-44%);
+  opacity: 0.42;
+}
+.ot-orn-strip-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    var(--ot-bg) 0%,
+    color-mix(in srgb, var(--ot-bg) 82%, transparent) 40%,
+    transparent 88%
+  );
+}
+.ot-orn-strip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 3px 10px;
+  border-left: 1px solid var(--ot-champ);
+  background: color-mix(in srgb, var(--ot-bg) 88%, transparent);
+}
+.ot-orn-strip-name {
+  font-family: var(--ot-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ot-text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ot-orn-strip .ot-orn-filigree {
+  margin-left: auto;
+  width: min(280px, 34vw);
+  opacity: calc(0.2 + var(--ot-ornament) * 0.5);
+}
+
+/* ---- Layout presets. Showcase grows the hero art (still <= 1/3 viewport)
+   and the strip; compact keeps today's shell untouched. Density stays its own
+   control so the two settings never fight. ---- */
+[data-ot-layout='showcase'] .ot-hero .ot-splash img {
+  width: 82%;
+  opacity: 0.44;
+}
+[data-ot-layout='showcase'] .ot-hero > .flex {
+  padding-top: 8px;
+  padding-bottom: 12px;
+}
+[data-ot-layout='showcase'] .ot-orn-strip {
+  min-height: 58px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+[data-ot-layout='showcase'] .ot-orn-strip .ot-orn-strip-name {
+  font-size: 15px;
+}
+[data-ot-layout='compact'] .ot-orn-strip {
+  min-height: 40px;
+}
+
+/* Short windows: keep the hero inside R7's one-third rule by dropping the
+   crest plate first; the splash art still identifies the champion. */
+@media (max-height: 649px) {
+  .ot-orn-hero-crest {
+    display: none;
+  }
+}
+
+/* ---- Ornament bucket: hide whole layers at 0, full layer at 75+. ---- */
+[data-ot-ornament='none'] .ot-orn-crest,
+[data-ot-ornament='none'] .ot-orn-filigree,
+[data-ot-ornament='none'] .ot-orn-hero-crest,
+[data-ot-ornament='none'] .ot-page-header::before {
+  display: none;
+}
+[data-ot-ornament='light'] .ot-orn-filigree {
+  opacity: calc(0.16 + var(--ot-ornament) * 0.4);
+}
+[data-ot-ornament='full'] .ot-orn-filigree {
+  opacity: calc(0.3 + var(--ot-ornament) * 0.5);
+}
+
+/* ---- Motion: nothing loops and there is no ambient animation. The banner
+   art is static; loaded images paint once. ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ot-nav,
+  .ot-segment button,
+  .ot-orn-strip {
+    transition: none;
+  }
+}

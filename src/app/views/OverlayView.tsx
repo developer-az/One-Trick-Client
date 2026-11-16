@@ -147,7 +147,7 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">In-game overlay</h1>
+          <h1 className="ot-page-title ot-orn-title">In-game overlay</h1>
           <p className="ot-page-sub">
             Small panels over League that only appear when they have something to show. Windows stay hidden otherwise,
             so the game keeps its frame rate.

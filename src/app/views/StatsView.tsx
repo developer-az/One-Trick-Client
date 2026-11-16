@@ -36,7 +36,7 @@ export const StatsView: React.FC<{
   const header = (
     <div className="ot-page-header">
       <div>
-        <h1 className="ot-page-title">Your stats</h1>
+        <h1 className="ot-page-title ot-orn-title">Your stats</h1>
         <p className="ot-page-sub">
           From your recent Summoner's Rift games in the League client. Remakes and other modes are left out.
         </p>

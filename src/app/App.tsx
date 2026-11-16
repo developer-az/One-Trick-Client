@@ -19,9 +19,13 @@ import {
   APPEARANCE_THEME_OPTIONS,
   APPEARANCE_ACCENT_OPTIONS,
   APPEARANCE_DENSITY_OPTIONS,
+  APPEARANCE_LAYOUT_OPTIONS,
+  mainChampionId,
+  useChampionAccent,
 } from './hooks';
 import { leagueStatus } from './status';
-import { Pill, Toasts } from './ui';
+import { Pill, Toasts, Portrait, ChampionCombobox } from './ui';
+import { ChampionStrip, Filigree, type BannerChampion } from './ornaments';
 import { HomeView } from './views/HomeView';
 import { DraftView } from './views/DraftView';
 import { LoadoutView } from './views/LoadoutView';
@@ -113,7 +117,11 @@ export const App: React.FC = () => {
   }, [enemies, allyAdc, allyPartner, profile]);
 
   const { settings, update } = useAppSettings();
-  const history = useMatchHistory(league, view === 'stats' || draft.live);
+  // The champion banner needs the history even before Stats is opened: an
+  // unset main champion defaults to the most-played one.
+  const wantsHistory =
+    view === 'stats' || draft.live || !settings?.appearance?.mainChampion;
+  const history = useMatchHistory(league, wantsHistory);
 
   // Apply dashboard appearance (theme/accent/density/radius/glass/font scale)
   // straight to the app root so token.css / theme.css react immediately.
@@ -149,9 +157,24 @@ export const App: React.FC = () => {
     radius: 6,
     glass: 0,
     fontScale: 1,
+    mainChampion: '',
+    layoutPreset: 'compact',
+    ornament: 50,
   };
   const setAppearance = (patch: Partial<AppearanceSettings>) =>
     update({ appearance: patch as AppearanceSettings });
+
+  // Champion-driven shell: explicit main champion, else the most-played in
+  // history. The accent is sampled only when the champion palette is active.
+  const mainChampionKey = mainChampionId(ap, history.games, catalog.champions);
+  const mainChampion: BannerChampion | null = mainChampionKey
+    ? catalog.champions.find((c) => c.id === mainChampionKey) || {
+        id: mainChampionKey,
+        name: mainChampionKey,
+        key: '',
+      }
+    : null;
+  useChampionAccent(mainChampion, ap.accent === 'champion');
 
   // Dashboard pet: persisted species + color; hidden only during an active match.
   const pet = settings?.pet ?? PET_DEFAULTS;
@@ -220,7 +243,10 @@ export const App: React.FC = () => {
             {item.id === 'overlay' && league.inGame ? <span className="ot-nav-badge" title="Match in progress" /> : null}
           </button>
         ))}
-        <div className="mt-auto px-3 pt-6 text-xs ot-faint leading-relaxed">
+        <div className="mt-auto px-3 pt-4" aria-hidden>
+          <Filigree />
+        </div>
+        <div className="px-3 pt-2 text-xs ot-faint leading-relaxed">
           <p>{isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games</p>
           <p className="mt-2">
             Auto-clip plays FFmpeg 6.1.1 as a separate program. That build is GPL-3.0. License and source are in
@@ -230,6 +256,7 @@ export const App: React.FC = () => {
       </nav>
 
       <main className="ot-main">
+        {view !== 'home' && mainChampion ? <ChampionStrip champion={mainChampion} /> : null}
         {view === 'home' ? (
           <HomeView
             league={league}
@@ -237,6 +264,7 @@ export const App: React.FC = () => {
             draft={draft}
             profile={profile}
             champions={catalog.champions}
+            mainChampion={mainChampion}
             onSelectChampion={selectChampion}
             onSelectProfile={setProfileId}
             onNavigate={setView}
@@ -291,13 +319,22 @@ export const App: React.FC = () => {
 
       {appearanceOpen ? <div className="ot-appearance-scrim" onClick={() => setAppearanceOpen(false)} /> : null}
       <div className={`ot-appearance-drawer ${appearanceOpen ? 'is-open' : ''}`} role="dialog" aria-modal="true" aria-label="Appearance">
-        <AppearanceControls ap={ap} setAppearance={setAppearance} pet={pet} setPet={setPet} onClose={() => setAppearanceOpen(false)} />
+        <AppearanceControls
+          ap={ap}
+          setAppearance={setAppearance}
+          pet={pet}
+          setPet={setPet}
+          champions={catalog.champions}
+          mainChampion={mainChampionKey}
+          onClose={() => setAppearanceOpen(false)}
+        />
       </div>
     </div>
   );
 };
 
 const ACCENT_SWATCH: Record<AppearanceAccent, string> = {
+  champion: 'var(--ot-champ)',
   chrome: '#d6dae0',
   gold: '#c8a24e',
   blood: '#c0392b',
@@ -310,12 +347,17 @@ type AppearanceControlsProps = {
   setAppearance: (patch: Partial<AppearanceSettings>) => void;
   pet: PetSettings;
   setPet: (patch: Partial<PetSettings>) => void;
+  champions: Champion[];
+  /** Resolved main champion id (explicit choice or most-played). */
+  mainChampion: string;
   onClose: () => void;
 };
 
-function AppearanceControls({ ap, setAppearance, pet, setPet, onClose }: AppearanceControlsProps) {
+function AppearanceControls({ ap, setAppearance, pet, setPet, champions, mainChampion, onClose }: AppearanceControlsProps) {
   const currentTheme = APPEARANCE_THEME_OPTIONS.find((t) => t.id === ap.theme);
   const currentDensity = APPEARANCE_DENSITY_OPTIONS.find((d) => d.id === ap.density);
+  const currentLayout = APPEARANCE_LAYOUT_OPTIONS.find((l) => l.id === ap.layoutPreset);
+  const mainChampionEntry: Champion | null = champions.find((c) => c.id === mainChampion) || null;
   const glassBlur = Math.round((ap.glass / 100) * 8);
   return (
     <div className="p-4 h-full flex flex-col">
@@ -387,6 +429,32 @@ function AppearanceControls({ ap, setAppearance, pet, setPet, onClose }: Appeara
           <div className="ot-appearance-hint">Primary “yours” signal color across the dashboard.</div>
         </div>
 
+        <div className="ot-appearance-field" role="group" aria-label="Main champion">
+          <div className="ot-appearance-label">Main champion</div>
+          <div className="flex items-center gap-2">
+            {mainChampionEntry ? <Portrait champion={mainChampionEntry} size={26} /> : null}
+            <div className="min-w-0 flex-1">
+              <ChampionCombobox
+                champions={champions}
+                value={mainChampionEntry}
+                placeholder={champions.length ? 'Search a champion' : 'Loading champions'}
+                disabled={!champions.length}
+                onChange={(c) =>
+                  setAppearance({
+                    mainChampion: c?.id || '',
+                    // Picking a main champion opts into the champion palette
+                    // unless the user already chose a different one.
+                    accent: c && ap.accent === 'chrome' ? 'champion' : ap.accent,
+                  })
+                }
+              />
+            </div>
+          </div>
+          <div className="ot-appearance-hint">
+            Drives the hero banner, the ornament tint and the Champion accent. Empty follows your most-played champion.
+          </div>
+        </div>
+
         <div className="ot-appearance-field">
           <div className="ot-appearance-label">Pet companion</div>
           <p className="ot-appearance-hint mb-2">
@@ -444,6 +512,44 @@ function AppearanceControls({ ap, setAppearance, pet, setPet, onClose }: Appeara
           </div>
           {currentDensity ? <div className="ot-appearance-hint">{currentDensity.hint}</div> : null}
         </div>
+
+        <div className="ot-appearance-field">
+          <div className="ot-appearance-label">Layout preset</div>
+          <div className="ot-segment" role="radiogroup" aria-label="Layout preset">
+            {APPEARANCE_LAYOUT_OPTIONS.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                role="radio"
+                aria-checked={ap.layoutPreset === l.id}
+                title={l.hint}
+                className={ap.layoutPreset === l.id ? 'is-active' : ''}
+                onClick={() => setAppearance({ layoutPreset: l.id })}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+          {currentLayout ? <div className="ot-appearance-hint">{currentLayout.hint}</div> : null}
+        </div>
+
+        <label className="ot-appearance-field ot-appearance-slider">
+          <span className="ot-appearance-label">Ornament intensity </span>
+          <span className="ot-appearance-value">{ap.ornament}%</span>
+          <input
+            type="range"
+            className="ot-range"
+            min={0}
+            max={100}
+            step={5}
+            value={ap.ornament}
+            onChange={(e) => setAppearance({ ornament: Number(e.target.value) })}
+          />
+          <span className="ot-appearance-hint">
+            0 keeps today’s plain chrome, 50 adds engraved titles and hairline rules, 100 the full crest, filigree and
+            corner flourishes.
+          </span>
+        </label>
 
         <label className="ot-appearance-field ot-appearance-slider">
           <span className="ot-appearance-label">Corner radius </span>

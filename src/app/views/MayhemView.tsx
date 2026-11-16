@@ -177,7 +177,7 @@ export const MayhemView: React.FC<{
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title flex flex-wrap items-center gap-2">
+          <h1 className="ot-page-title ot-orn-title flex flex-wrap items-center gap-2">
             ARAM Mayhem <Badge tone="gold">Beta</Badge>
           </h1>
           <p className="ot-page-sub">

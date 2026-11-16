@@ -20,6 +20,8 @@ import {
   type ProfileId,
 } from '../logic/profiles';
 import type { OverlayBotSummoner } from '../overlay/overlayLogic';
+import { accentSoft, resolveChampionAccent } from '../overlay/champAccent';
+import type { BannerChampion } from './ornaments';
 import type { Toast } from './ui';
 import { sendLoadout, type ExportResult } from './exporter';
 import type { Loadout } from './views/LoadoutView';
@@ -466,6 +468,7 @@ export const APPEARANCE_THEME_OPTIONS: Array<{ id: AppearanceTheme; label: strin
 ];
 
 export const APPEARANCE_ACCENT_OPTIONS: Array<{ id: AppearanceAccent; label: string }> = [
+  { id: 'champion', label: 'Champion' },
   { id: 'chrome', label: 'Chrome' },
   { id: 'gold', label: 'Gold' },
   { id: 'blood', label: 'Blood' },
@@ -479,25 +482,48 @@ export const APPEARANCE_DENSITY_OPTIONS: Array<{ id: AppearanceDensity; label: s
   { id: 'spacious', label: 'Spacious', hint: 'Roomier cards and headers' },
 ];
 
+export const APPEARANCE_LAYOUT_OPTIONS: Array<{ id: AppearanceLayout; label: string; hint: string }> = [
+  { id: 'compact', label: 'Compact', hint: 'Current shell with a slim champion strip' },
+  { id: 'showcase', label: 'Showcase', hint: 'Large champion hero on Home, wider banner art' },
+];
+
+/**
+ * Ornament bucket for the 0–100 intensity. Mirrors `ornamentLevel` in
+ * electron/app-settings.ts (the persisted contract); parity is exercised by
+ * verify_client_revamp.ts.
+ */
+export function ornamentBucket(value: number): OrnamentLevel {
+  const orn = !Number.isFinite(value) ? 50 : Math.min(100, Math.max(0, Math.round(value)));
+  if (orn <= 0) return 'none';
+  return orn < 75 ? 'light' : 'full';
+}
+
 /**
  * Map an appearance choice onto root attributes + CSS custom properties. This
  * mirrors the authoritative `appearanceToCss` in electron/app-settings.ts (the
- * naming/enum contract is exercised by verify_appearance_settings.ts).
+ * naming/enum contract is exercised by verify_appearance_settings.ts and
+ * verify_client_revamp.ts).
  */
 export function appearanceCssMap(app: AppearanceSettings): {
   attributes: Record<string, string>;
   vars: Record<string, string>;
 } {
+  const ornament = !Number.isFinite(app.ornament)
+    ? 50
+    : Math.min(100, Math.max(0, Math.round(app.ornament)));
   return {
     attributes: {
       'data-ot-theme': app.theme,
       'data-ot-accent': app.accent,
       'data-ot-density': app.density,
+      'data-ot-layout': app.layoutPreset === 'showcase' ? 'showcase' : 'compact',
+      'data-ot-ornament': ornamentBucket(app.ornament),
     },
     vars: {
       '--ot-radius-set': `${app.radius}px`,
       '--ot-glass': `${app.glass}`,
       '--ot-font-scale': `${app.fontScale}`,
+      '--ot-ornament': `${ornament / 100}`,
     },
   };
 }
@@ -511,6 +537,72 @@ export function applyAppearance(settings: AppSettings | null): void {
   for (const [key, value] of Object.entries(css.vars)) root.style.setProperty(key, value);
   if (settings.appearance.glass > 0) root.setAttribute('data-ot-glass-on', '');
   else root.removeAttribute('data-ot-glass-on');
+}
+
+/**
+ * Main champion used by the shell: the explicit choice, else the most-played
+ * champion in the match history (numeric keys resolved through the catalog),
+ * else ''. Pure so the settings contract and verify test can share it.
+ */
+export function mainChampionId(
+  appearance: AppearanceSettings | null | undefined,
+  games: MatchSummary[] | null | undefined,
+  champions: ReadonlyArray<{ id: string; key: string }> | null | undefined
+): string {
+  const chosen = typeof appearance?.mainChampion === 'string' ? appearance.mainChampion.trim() : '';
+  if (chosen) return chosen;
+  if (!Array.isArray(games) || !games.length) return '';
+  const counts = new Map<number, { count: number; latest: number }>();
+  for (const game of games) {
+    const key = Number(game?.championId);
+    if (!Number.isFinite(key) || key <= 0) continue;
+    const row = counts.get(key) || { count: 0, latest: 0 };
+    row.count += 1;
+    row.latest = Math.max(row.latest, Number(game.at) || 0);
+    counts.set(key, row);
+  }
+  let best: { id: number; count: number; latest: number } | null = null;
+  for (const [id, row] of counts) {
+    const candidate = { id, count: row.count, latest: row.latest };
+    if (!best || candidate.count > best.count || (candidate.count === best.count && candidate.latest > best.latest)) {
+      best = candidate;
+    }
+  }
+  if (!best) return '';
+  const bestId = best.id;
+  const match = (champions || []).find((c) => String(c.key) === String(bestId));
+  return match ? match.id : '';
+}
+
+/**
+ * Sample the main champion's icon once per champion change and publish it as
+ * --ot-champ / --ot-champ-soft on the app root. The overlay's resolver caches
+ * in memory and localStorage, so this costs one small image fetch ever per
+ * champion and nothing at all unless the champion palette is selected.
+ */
+export function useChampionAccent(champion: BannerChampion | null, enabled: boolean): void {
+  const id = champion?.id || '';
+  const key = champion?.key != null ? String(champion.key) : '';
+  const name = champion?.name || '';
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (!enabled || !id) {
+      root.style.removeProperty('--ot-champ');
+      root.style.removeProperty('--ot-champ-soft');
+      return;
+    }
+    let cancelled = false;
+    void resolveChampionAccent({ id, key, name }).then((hex) => {
+      if (cancelled) return;
+      root.style.setProperty('--ot-champ', hex);
+      root.style.setProperty('--ot-champ-soft', accentSoft(hex));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, key, name, enabled]);
 }
 
 /* -------------------------------------------------------------- auto import */
