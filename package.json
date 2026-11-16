@@ -162,6 +162,7 @@
     "verify:appearance-settings": "npx --yes tsx verify_appearance_settings.ts",
     "verify:pixel-pet": "npx --yes tsx verify_pixel_pet.ts",
     "verify:loading-pet": "npx --yes tsx verify_loading_pet.ts",
+    "verify:prematch-loading": "npx --yes tsx verify_prematch_loading.ts",
     "verify:scouting": "npx --yes tsx verify_scouting.ts",
     "verify:scouting-identity": "npx --yes tsx verify_scouting_identity.ts",
     "verify:review-fixes": "npx --yes tsx verify_review_fixes.ts"

@@ -38,6 +38,7 @@ import {
     createOverlayWindow,
     destroyOverlay,
     onOverlayWindowCreated,
+    setOverlayPageReadyHandler,
     getOverlayWindow,
     syncScalesFromLeague,
     keepOverlayOnTop,
@@ -136,6 +137,12 @@ let monitorStarted = false;
 let liveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastChampSelectEnemies: CachedEnemy[] = [];
 let inGame = false;
+/**
+ * League is loading a game: GameStart, or InProgress before the Live Client
+ * answers. The overlay shows the loading pet from here; beginMatch (or a phase
+ * back in a menu) ends it.
+ */
+let prematchLoading = false;
 let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOverlayFingerprint = '';
 let lastSentOverlayPayload: unknown = null;
@@ -170,6 +177,49 @@ export function isMayhemMatchActive(): boolean {
         !!lastGoodPayload &&
         isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)
     );
+}
+
+/** The overlay is showing the pre-match loading screen right now. */
+export function isPrematchLoading(): boolean {
+    return prematchLoading;
+}
+
+/**
+ * Which phase means "a game is loading but no live board exists yet".
+ * GameStart is the loading screen; InProgress appears before the Live Client
+ * answers when the client reconnects straight into a game. Once beginMatch has
+ * run, a real match owns the overlay, so `inGame` always wins.
+ */
+export function isPrematchLoadingPhase(phase: string | null, inGameNow: boolean): boolean {
+    if (inGameNow) return false;
+    return phase === 'GameStart' || phase === 'InProgress';
+}
+
+/** The one payload the loading screen needs: pet + phase, no board. */
+export function prematchLoadingPayload(
+    phase: string | null,
+    pet: AppSettings['pet']
+): Record<string, unknown> {
+    return {
+        inGame: true,
+        loading: true,
+        gameflowPhase: phase,
+        gameTime: 0,
+        trustedGameTime: 0,
+        pet,
+        timestamp: Date.now(),
+    };
+}
+
+/** Whether a freshly created (or just mounted) overlay page should be re-sent the last payload. */
+export function shouldReplayOverlayState(state: {
+    inGame: boolean;
+    prematchLoading: boolean;
+    userHidden: boolean;
+    hasPayload: boolean;
+}): boolean {
+    if (state.userHidden || !state.hasPayload) return false;
+    return state.inGame || state.prematchLoading;
 }
 
 /** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
@@ -1045,10 +1095,83 @@ function sendFullOverlayUpdate(payload: unknown): void {
     sendOverlayUpdate(payload);
 }
 
-function handleOverlayWindowCreated(): void {
-    if (!inGame || isOverlayUserHidden() || !lastSentOverlayPayload) return;
+/**
+ * A new overlay page (window-created) or one that just reported it is mounted
+ * (page-ready) has no state of its own: re-send the last payload. Before this
+ * existed the pre-match loading payload was sent into a page that did not
+ * listen yet and was never replayed, so the pet never appeared.
+ */
+function replayOverlayState(via: string): void {
+    if (
+        !shouldReplayOverlayState({
+            inGame,
+            prematchLoading,
+            userHidden: isOverlayUserHidden(),
+            hasPayload: !!lastSentOverlayPayload,
+        })
+    ) {
+        return;
+    }
+    if (prematchLoading) {
+        overlayLog('prematch-loading replay-loading', { via, phase: lcuSocket.phase ?? 'none' });
+    }
     lastOverlayFingerprint = '';
     sendOverlayUpdate(lastSentOverlayPayload);
+}
+
+function handleOverlayWindowCreated(): void {
+    replayOverlayState('window-created');
+}
+
+/** The page's first heartbeat proves React mounted and its listener is bound. */
+function handleOverlayPageReady(): void {
+    replayOverlayState('page-ready');
+}
+
+/**
+ * Enter the pre-match loading state once per load: clear a hide carried over
+ * from the last match, raise the overlay and send the loading payload through
+ * sendFullOverlayUpdate so lastSentOverlayPayload can replay it.
+ */
+function enterPrematchLoading(phase: string | null): void {
+    if (prematchLoading) return;
+    prematchLoading = true;
+    const previousHide = isOverlayUserHidden();
+    overlayLog('prematch-loading enter', {
+        phase: phase ?? 'none',
+        userHidden: previousHide,
+    });
+    if (previousHide) setOverlayUserHidden(false);
+    const settings = settingsForTick();
+    if (!settings.overlayEnabled) return;
+    // Clearing a hide above shows the overlay, and createOverlayWindow re-reads
+    // game.cfg itself, so the scales are right whichever call creates the window.
+    syncScalesFromLeague();
+    createOverlayWindow();
+    showOverlay();
+    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet));
+}
+
+/**
+ * Leave it. A real match takes over silently (its first board payload follows
+ * the same tick). A dodge/cancel has nothing to show, so the overlay is hidden
+ * and the loading flag is cleared for the page.
+ */
+function exitPrematchLoading(reason: string, hide: boolean): void {
+    if (!prematchLoading) return;
+    prematchLoading = false;
+    overlayLog('prematch-loading exit', { reason });
+    if (!hide) return;
+    hideOverlay();
+    sendFullOverlayUpdate({
+        inGame: false,
+        loading: false,
+        enemies: [],
+        allies: [],
+        cachedChampSelectEnemies: [],
+        localPlayer: null,
+        timestamp: Date.now(),
+    });
 }
 
 function ensureOverlayShown(): void {
@@ -1074,6 +1197,8 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(): void {
     console.info('[match] started');
     inGame = true;
+    // A live board arrived: the load screen is over, no hide (this is a match).
+    exitPrematchLoading('match-start', false);
     let windowMode: string | null = null;
     try {
         windowMode = readLeagueHudScales()?.windowMode ?? null;
@@ -1302,20 +1427,13 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
-    const settings = getAppSettings();
-    if (phase === 'GameStart' && settings.overlayEnabled && !isOverlayUserHidden()) {
-        syncScalesFromLeague();
-        createOverlayWindow();
-        showOverlay();
-        sendOverlayUpdate({
-            inGame: true,
-            loading: true,
-            gameflowPhase: phase,
-            gameTime: 0,
-            trustedGameTime: 0,
-            pet: settings.pet,
-            timestamp: Date.now(),
-        });
+    // Loading screen: GameStart, or InProgress before the Live Client answers.
+    // Leaving those phases without a live board means the load was dodged or
+    // cancelled — take the overlay back down.
+    if (isPrematchLoadingPhase(phase, inGame)) {
+        enterPrematchLoading(phase);
+    } else if (prematchLoading) {
+        exitPrematchLoading(`phase-${phase ?? 'none'}`, true);
     }
     if (isInGamePhase(phase) && !liveTimer) {
         // Read immediately rather than waiting a full interval after loading.
@@ -1359,6 +1477,7 @@ export function startGameMonitor(): void {
     lcuSocket.on('champSelect', onChampSelect);
     lcuSocket.start();
     overlayWindowCreatedUnsubscribe = onOverlayWindowCreated(handleOverlayWindowCreated);
+    setOverlayPageReadyHandler(handleOverlayPageReady);
     // Catch a match that is already running when the app opens.
     void liveTick().finally(scheduleLive);
 }
@@ -1373,6 +1492,8 @@ export function stopGameMonitor(): void {
         overlayWindowCreatedUnsubscribe();
         overlayWindowCreatedUnsubscribe = null;
     }
+    setOverlayPageReadyHandler(null);
+    prematchLoading = false;
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();

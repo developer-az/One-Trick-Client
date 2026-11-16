@@ -427,8 +427,9 @@ export function healOverlayWindows(): void {
 /**
  * An overlay page reports that it is alive and whether a frame was produced.
  * This is the only signal that separates "shown" from "actually drawn".
- * It is measurement only: since the single-window remake nothing acts on it
- * automatically — the health line in overlay.log is what a human reads.
+ * The first beat of a page also tells the game monitor the page is mounted, so
+ * it can replay its last payload; the health line in overlay.log is what a
+ * human reads afterwards.
  */
 export function noteOverlayHeartbeat(
     webContentsId: number,
@@ -444,6 +445,14 @@ export function noteOverlayHeartbeat(
         frameAt: beat.frames ? now : previous?.frameAt ?? null,
         pageVisible: beat.pageVisible,
     });
+    // First beat of a page: its effects have run, so a replay is actually heard.
+    if (!previous && overlayPageReadyHandler) {
+        try {
+            overlayPageReadyHandler();
+        } catch {
+            // A replay listener must not break the beat path.
+        }
+    }
 }
 
 /**
@@ -880,6 +889,18 @@ export function onOverlayWindowCreated(listener: () => void): () => void {
     return () => {
         overlayWindowCreatedListeners.delete(listener);
     };
+}
+
+/**
+ * The page's first heartbeat means its React effects ran and the overlay-update
+ * listener is bound. A payload sent at did-finish-load can be missed when the
+ * bundle mounts late (or the window came from a backend fallback), so the game
+ * monitor replays its last payload here. One call per page, not per beat.
+ */
+let overlayPageReadyHandler: (() => void) | null = null;
+
+export function setOverlayPageReadyHandler(handler: (() => void) | null): void {
+    overlayPageReadyHandler = handler;
 }
 
 /**
