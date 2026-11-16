@@ -590,7 +590,47 @@ const DEFAULT_HUD_MODULES: HudModules = {
 
 let hudModules: HudModules = { ...DEFAULT_HUD_MODULES };
 let hudLayout: unknown = null;
+
+/** HUD skin tweaks (Brief I) — cosmetic only; mirrored in src/overlay/hudSkins.ts. */
+export type HudSkinChoice = 'auto' | 'gothic' | 'bloodmoon' | 'arcane' | 'ironclad' | 'warden' | 'hunter' | 'vanguard';
+export interface HudSkinSettings {
+    hudSkin: HudSkinChoice;
+    hudSkinOrnaments: boolean;
+    hudSkinOpacity: number;
+    hudSkinScale: number;
+    hudSkinUseChampColor: boolean;
+}
+const HUD_SKIN_CHOICES: HudSkinChoice[] = ['auto', 'gothic', 'bloodmoon', 'arcane', 'ironclad', 'warden', 'hunter', 'vanguard'];
+const DEFAULT_HUD_SKIN_SETTINGS: HudSkinSettings = {
+    hudSkin: 'gothic',
+    hudSkinOrnaments: true,
+    hudSkinOpacity: 92,
+    hudSkinScale: 100,
+    hudSkinUseChampColor: true,
+};
+let hudSkin: HudSkinSettings = { ...DEFAULT_HUD_SKIN_SETTINGS };
 let settingsLoaded = false;
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+/** Defaults + clamping (opacity 80–100 keeps the R5 surface floor). */
+function normalizeHudSkinSettings(value: unknown): HudSkinSettings {
+    const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+    const choice = src.hudSkin;
+    return {
+        hudSkin: typeof choice === 'string' && (HUD_SKIN_CHOICES as string[]).includes(choice)
+            ? (choice as HudSkinChoice)
+            : DEFAULT_HUD_SKIN_SETTINGS.hudSkin,
+        hudSkinOrnaments: typeof src.hudSkinOrnaments === 'boolean' ? src.hudSkinOrnaments : DEFAULT_HUD_SKIN_SETTINGS.hudSkinOrnaments,
+        hudSkinOpacity: clampInt(src.hudSkinOpacity, 80, 100, DEFAULT_HUD_SKIN_SETTINGS.hudSkinOpacity),
+        hudSkinScale: clampInt(src.hudSkinScale, 75, 150, DEFAULT_HUD_SKIN_SETTINGS.hudSkinScale),
+        hudSkinUseChampColor:
+            typeof src.hudSkinUseChampColor === 'boolean' ? src.hudSkinUseChampColor : DEFAULT_HUD_SKIN_SETTINGS.hudSkinUseChampColor,
+    };
+}
 
 function normalizeHudModules(value: unknown): HudModules {
     const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -768,6 +808,7 @@ function loadSettings(): void {
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
             hudModules?: unknown;
+            hudSkin?: unknown;
             overlayBackend?: unknown;
         };
         // Only override with saved values if user explicitly tuned after import
@@ -799,6 +840,7 @@ function loadSettings(): void {
             interactiveBounds = settings.interactiveBounds;
         }
         hudModules = normalizeHudModules(settings.hudModules);
+        hudSkin = normalizeHudSkinSettings(settings.hudSkin);
         const savedLayout = (settings as { hudLayout?: unknown }).hudLayout;
         if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
         // Backend: saved setting wins; else the packaged build's default
@@ -840,6 +882,7 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
                 calibration,
                 hudModules,
                 hudLayout,
+                hudSkin,
                 overlayBackend: backend,
                 preferLeagueCfg,
             }),
@@ -1468,7 +1511,6 @@ export function getHudLayout(): unknown {
     ensureSettingsLoaded();
     return hudLayout;
 }
-
 export function setHudLayout(next: unknown): unknown {
     ensureSettingsLoaded();
     if (next && typeof next === 'object') {
@@ -1477,6 +1519,20 @@ export function setHudLayout(next: unknown): unknown {
         broadcastOverlayMeta();
     }
     return hudLayout;
+}
+
+export function getHudSkin(): HudSkinSettings {
+    ensureSettingsLoaded();
+    return { ...hudSkin };
+}
+
+/** Merge a tweak patch, clamp it, persist and push to a running overlay. */
+export function setHudSkin(next: unknown): HudSkinSettings {
+    ensureSettingsLoaded();
+    hudSkin = normalizeHudSkinSettings({ ...hudSkin, ...(next && typeof next === 'object' ? next : {}) });
+    saveSettings();
+    broadcastOverlayMeta();
+    return { ...hudSkin };
 }
 
 export function getHudScale(): number {
@@ -1657,6 +1713,7 @@ export function broadcastOverlayMeta(): void {
         alignMode,
         hudModules,
         hudLayout,
+        hudSkin,
         pet: getAppSettings().pet,
         displayWidth: display.bounds.width,
         displayHeight: display.bounds.height,

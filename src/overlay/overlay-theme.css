@@ -710,3 +710,31 @@ html.overlay-root .ov-pet-ground {
   background: var(--ov-border-bright);
   pointer-events: none;
 }
+
+/* ---------- HUD skin hooks (Brief I) ----------
+ * hud-skins.css sets these variables per `[data-ov-skin]`; the defaults here
+ * reproduce the shipped gothic look exactly. Only cosmetic properties read
+ * them — radius, frame width, clip path and panel backing alpha — so a skin
+ * switch can never move a module box or clip its text. The surface keeps the
+ * R5 floor: --ov-skin-panel-alpha is clamped to 0.80–1 by hudSkins.ts.
+ */
+html.overlay-root .ov-panel,
+html.overlay-root .hud-overlay-panel {
+  border-radius: var(--ov-skin-radius, 5px);
+  border-width: var(--ov-skin-border-width, 1px);
+  clip-path: var(--ov-skin-clip, none);
+}
+html.overlay-root .ov-panel {
+  background-color: rgb(9 9 11 / var(--ov-skin-panel-alpha, 0.86));
+}
+html.overlay-root .hud-overlay-panel {
+  background-color: rgb(8 8 11 / var(--ov-skin-panel-alpha, 0.92));
+}
+/* Left-rail section cards share the skin frame (radius/clip) but keep their
+ * lightweight translucent backing and existing padding: decoration only, so
+ * module boxes and text clipping are unchanged. Corner marks are rendered in
+ * OverlayApp and collision-hidden like every other panel. */
+html.overlay-root .hud-rail-card {
+  border-radius: var(--ov-skin-radius, 5px);
+  clip-path: var(--ov-skin-clip, none);
+}

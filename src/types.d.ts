@@ -16,6 +16,19 @@ declare global {
     type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
+    /** HUD skin pick (Brief I): a named skin, or auto by champion class. */
+    type HudSkinChoice = 'auto' | 'gothic' | 'bloodmoon' | 'arcane' | 'ironclad' | 'warden' | 'hunter' | 'vanguard';
+
+    interface HudSkinSettings {
+        hudSkin: HudSkinChoice;
+        hudSkinOrnaments: boolean;
+        /** Panel surface alpha percent, clamped to 80–100. */
+        hudSkinOpacity: number;
+        /** Ornament size percent, clamped to 75–150. */
+        hudSkinScale: number;
+        hudSkinUseChampColor: boolean;
+    }
+
     interface LcuStatus {
         state: 'searching' | 'connecting' | 'connected';
         phase: string | null;
@@ -214,6 +227,7 @@ declare global {
             setOverlayTextScale: (scale: number) => Promise<{ success: boolean; overlayTextScale: number }>;
             setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
             setOverlayHudLayout: (layout: unknown) => Promise<{ success: boolean; hudLayout?: unknown }>;
+            setOverlayHudSkin: (skin: Partial<HudSkinSettings>) => Promise<{ success: boolean; hudSkin: HudSkinSettings }>;
             getCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             refreshCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             syncLeagueScales: () => Promise<{ success: boolean; hudScale: number; mapScale: number; source?: string }>;
@@ -231,6 +245,7 @@ declare global {
                 overlayTextScale?: number;
                 hudModules?: HudModules;
                 hudLayout?: unknown;
+                hudSkin?: HudSkinSettings;
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;

@@ -1,6 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { HudStudio } from '../../components/HudStudio';
 import { CHROME_COLOR_PRESETS, normalizeChromeColor } from '../../overlay/chromeTheme';
+import { HudSkinPreview, HudStudioCanvas } from '../../overlay/HudStudioCanvas';
+import {
+  HUD_SKIN_CHOICES,
+  HUD_SKIN_CLASS,
+  HUD_SKIN_HINTS,
+  HUD_SKIN_LABELS,
+  DEFAULT_HUD_SKIN_SETTINGS,
+  normalizeHudSkinSettings,
+  resolveHudSkin,
+  type HudSkinSettings,
+} from '../../overlay/hudSkins';
 import {
   applyModulesToLayout,
   dualRailLayout,
@@ -17,7 +28,7 @@ import {
   type HudModules,
 } from '../../overlay/hudModules';
 import type { OverlayBotSummoner } from '../../overlay/overlayLogic';
-import { isDesktop, useAppSettings } from '../hooks';
+import { isDesktop, useAppSettings, useCatalog } from '../hooks';
 import { SpellTimers } from '../SpellTimers';
 import { Card, CardHeader, SettingRow, Switch } from '../ui';
 
@@ -43,6 +54,7 @@ interface OverlayControls {
   overlayTextScale: number;
   modules: HudModules;
   layout: HudLayout;
+  hudSkin: HudSkinSettings;
 }
 
 function useOverlayControls() {
@@ -55,6 +67,7 @@ function useOverlayControls() {
     overlayTextScale: 1,
     modules: DEFAULT_HUD_MODULES,
     layout: typeof window !== 'undefined' ? loadStoredHudLayout() : dualRailLayout(),
+    hudSkin: DEFAULT_HUD_SKIN_SETTINGS,
   }));
   const patch = useCallback((next: Partial<OverlayControls>) => setState((s) => ({ ...s, ...next })), []);
 
@@ -74,12 +87,13 @@ function useOverlayControls() {
         chromeColor: res.chromeColor || s.chromeColor,
         overlayTextScale: typeof res.overlayTextScale === 'number' ? res.overlayTextScale : s.overlayTextScale,
         layout: layout || s.layout,
+        hudSkin: res.hudSkin ? normalizeHudSkinSettings(res.hudSkin) : s.hudSkin,
         modules: res.hudModules ? normalizeHudModules(res.hudModules) : layout ? normalizeHudModules(Object.fromEntries(layout.elements.map((e) => [e.id, e.visible]))) : s.modules,
       }));
     });
     const unsubVis = api.onOverlayVisibilityChanged?.((p) => patch({ visible: p.visible }));
     const unsubMeta = api.onOverlayMeta?.((payload) => {
-      const meta = payload as Partial<{ clickThrough: boolean; hudScale: number; mapScale: number; chromeColor: string; overlayTextScale: number; hudModules: unknown; hudLayout: unknown }>;
+      const meta = payload as Partial<{ clickThrough: boolean; hudScale: number; mapScale: number; chromeColor: string; overlayTextScale: number; hudModules: unknown; hudLayout: unknown; hudSkin: unknown }>;
       const next: Partial<OverlayControls> = {};
       if (typeof meta.clickThrough === 'boolean') next.clickThrough = meta.clickThrough;
       if (typeof meta.hudScale === 'number') next.hudScale = meta.hudScale;
@@ -87,6 +101,7 @@ function useOverlayControls() {
       if (typeof meta.chromeColor === 'string') next.chromeColor = meta.chromeColor;
       if (typeof meta.overlayTextScale === 'number') next.overlayTextScale = meta.overlayTextScale;
       if (meta.hudModules) next.modules = normalizeHudModules(meta.hudModules);
+      if (meta.hudSkin) next.hudSkin = normalizeHudSkinSettings(meta.hudSkin);
       if (meta.hudLayout) {
         next.layout = normalizeHudLayout(meta.hudLayout);
         storeHudLayout(next.layout);
@@ -105,6 +120,7 @@ function useOverlayControls() {
 export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummoner[] }> = ({ inGame, summoners }) => {
   const { settings, update } = useAppSettings();
   const { state, patch } = useOverlayControls();
+  const { champions } = useCatalog();
   const api = window.electronAPI;
 
   const setModules = (modules: HudModules, layout = applyModulesToLayout(state.layout, modules)) => {
@@ -141,7 +157,24 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
     void api?.setOverlayTextScale?.(value);
   };
 
+  const setSkin = (next: Partial<HudSkinSettings>) => {
+    const value = normalizeHudSkinSettings({ ...state.hudSkin, ...next });
+    patch({ hudSkin: value });
+    void api?.setOverlayHudSkin?.(value);
+  };
+
   const chrome = normalizeChromeColor(state.chromeColor);
+
+  // Auto resolution for the settings previews: the app's main champion is the
+  // closest stand-in for the in-game pick (the overlay itself resolves the
+  // live champion).
+  const mainChampionTags = useMemo(() => {
+    const name = (settings?.appearance?.mainChampion || '').toLowerCase();
+    if (!name || !champions.length) return [] as string[];
+    const champ = champions.find((c) => c.id.toLowerCase() === name || c.name.toLowerCase() === name);
+    return champ?.tags || [];
+  }, [champions, settings?.appearance?.mainChampion]);
+  const previewSkin = resolveHudSkin(state.hudSkin.hudSkin, mainChampionTags);
 
   return (
     <div className="ot-page">
@@ -319,6 +352,95 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
           </div>
         </Card>
 
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="HUD Skin"
+            sub="Frames, corners and marks for the panels. Decoration only — panels stay exactly where you placed them and every value keeps its meaning."
+          />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {HUD_SKIN_CHOICES.map((choice) => {
+              const active = state.hudSkin.hudSkin === choice;
+              return (
+                <button
+                  key={choice}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setSkin({ hudSkin: choice })}
+                  className={`text-left rounded-[var(--ot-radius)] border p-2 transition-colors duration-150 ${
+                    active
+                      ? 'border-[var(--ot-border-bright)] bg-[var(--ot-surface-2)]'
+                      : 'border-[var(--ot-border)] bg-[var(--ot-surface)]'
+                  }`}
+                >
+                  <HudSkinPreview skin={resolveHudSkin(choice, mainChampionTags)} settings={state.hudSkin} />
+                  <span className="mt-2 block text-[13px] font-semibold">{HUD_SKIN_LABELS[choice]}</span>
+                  <span className="block text-xs ot-muted leading-snug">
+                    {choice === 'auto' ? 'By class' : HUD_SKIN_CLASS[choice]} · {HUD_SKIN_HINTS[choice]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 grid gap-x-4 md:grid-cols-2">
+            <SettingRow
+              title="Corner ornaments"
+              hint="The skin's corner marks and header emblems. Off keeps the plain frame."
+              control={
+                <Switch
+                  label="Corner ornaments"
+                  checked={state.hudSkin.hudSkinOrnaments}
+                  onChange={(v) => setSkin({ hudSkinOrnaments: v })}
+                />
+              }
+            />
+            <SettingRow
+              title="Tint marks with champion"
+              hint="Ornaments follow the champion's accent. Off keeps chrome silver."
+              control={
+                <Switch
+                  label="Tint marks with champion"
+                  checked={state.hudSkin.hudSkinUseChampColor}
+                  onChange={(v) => setSkin({ hudSkinUseChampColor: v })}
+                />
+              }
+            />
+            <SkinSlider
+              label="Panel opacity"
+              value={state.hudSkin.hudSkinOpacity}
+              min={80}
+              max={100}
+              step={1}
+              onChange={(v) => setSkin({ hudSkinOpacity: v })}
+              hint="Never below 80% so text stays readable over the map."
+            />
+            <SkinSlider
+              label="Ornament size"
+              value={state.hudSkin.hudSkinScale}
+              min={75}
+              max={150}
+              step={5}
+              onChange={(v) => setSkin({ hudSkinScale: v })}
+              hint="Scales the corner marks only — not the panel or its text."
+            />
+          </div>
+
+          <div className="mt-4 max-w-[560px]">
+            <div className="text-xs ot-faint uppercase tracking-wide mb-2">Live HUD stage · {HUD_SKIN_LABELS[previewSkin]}</div>
+            <div className="hud-studio-wrap">
+              <HudStudioCanvas
+                layout={state.layout}
+                editable={false}
+                chromeColor={state.chromeColor}
+                hudScale={state.hudScale}
+                mapScale={state.mapScale}
+                skin={previewSkin}
+                skinSettings={state.hudSkin}
+              />
+            </div>
+          </div>
+        </Card>
+
         {inGame && summoners.length ? (
           <Card className="lg:col-span-2">
             <CardHeader title="Enemy summoners" />
@@ -366,5 +488,33 @@ const Slider: React.FC<{ label: string; value: number; onChange: (v: number) => 
       <span className="ot-muted ot-num">{value}</span>
     </div>
     <input type="range" min={0} max={100} value={value} className="ot-range" onChange={(e) => onChange(Number(e.target.value))} />
+  </label>
+);
+
+/** Range row for a HUD skin tweak (percent value shown on the right). */
+const SkinSlider: React.FC<{
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  hint: string;
+  onChange: (v: number) => void;
+}> = ({ label, value, min, max, step, hint, onChange }) => (
+  <label className="block py-2">
+    <div className="flex justify-between text-[15px] mb-1.5">
+      <span className="font-medium">{label}</span>
+      <span className="ot-muted ot-num">{value}%</span>
+    </div>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      className="ot-range"
+      onChange={(e) => onChange(Number(e.target.value))}
+    />
+    <p className="mt-1 text-xs ot-faint leading-relaxed">{hint}</p>
   </label>
 );

@@ -64,6 +64,8 @@ import {
     setHudModules,
     getHudLayout,
     setHudLayout,
+    getHudSkin,
+    setHudSkin,
     syncScalesFromLeague,
     getCalibration,
     adjustCalibration,
@@ -915,6 +917,10 @@ app.whenReady().then(() => {
         return { success: true, hudLayout: setHudLayout(layout) };
     });
 
+    ipcMain.handle('overlay-set-hud-skin', async (_event, skin: unknown) => {
+        return { success: true, hudSkin: setHudSkin(skin) };
+    });
+
     ipcMain.handle('catalog-get', () => {
         return { success: true, catalog: loadCatalogCache() };
     });
@@ -1023,6 +1029,7 @@ app.whenReady().then(() => {
             overlayTextScale: getOverlayTextScale(),
             hudModules: getHudModules(),
             hudLayout: getHudLayout(),
+            hudSkin: getHudSkin(),
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,

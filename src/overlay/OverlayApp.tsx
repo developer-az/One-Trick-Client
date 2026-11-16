@@ -44,6 +44,15 @@ import { catalogItemsById, getCatalog, subscribeCatalog, warmCatalog } from '../
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
+import {
+  DEFAULT_HUD_SKIN_SETTINGS,
+  hudSkinVars,
+  normalizeHudSkinSettings,
+  resolveHudSkin,
+  type HudSkinSettings,
+} from './hudSkins';
+import { HudSkinChromeProvider, HudSkinOrnaments, useHudSkinChrome } from './hudSkinOrnaments';
+import './hud-skins.css';
 import { OverlayStickers } from './OverlayStickers';
 import {
   dualRailLayout,
@@ -271,8 +280,10 @@ function OverlayChromePanel({
   children: React.ReactNode;
   className?: string;
 }) {
+  const skin = useHudSkinChrome();
   return (
     <div className={`hud-overlay-panel ov-panel ov-panel-accent hud-overlay-panel--rail overflow-hidden ${className}`}>
+      <HudSkinOrnaments skin={skin.skin} ornaments={skin.ornaments} />
       <span className="hud-corner hud-corner-tl" aria-hidden />
       <span className="hud-corner hud-corner-br" aria-hidden />
       <span className="hud-rail hud-rail-top" aria-hidden />
@@ -430,6 +441,7 @@ export const OverlayApp: React.FC = () => {
   const [gameHeight, setGameHeight] = useState(1080);
   const [hudModules, setHudModules] = useState<HudModules>(DEFAULT_HUD_MODULES);
   const [hudLayout, setHudLayout] = useState<HudLayout>(() => dualRailLayout());
+  const [hudSkin, setHudSkin] = useState<HudSkinSettings>(DEFAULT_HUD_SKIN_SETTINGS);
   const [viewport, setViewport] = useState(() => ({
     vw: typeof window !== 'undefined' ? window.innerWidth : 1920,
     vh: typeof window !== 'undefined' ? window.innerHeight : 1080,
@@ -548,6 +560,7 @@ export const OverlayApp: React.FC = () => {
         gameHeight?: number;
         hudModules?: unknown;
         hudLayout?: unknown;
+        hudSkin?: unknown;
         displayWidth?: number;
         displayHeight?: number;
         slot?: {
@@ -574,6 +587,7 @@ export const OverlayApp: React.FC = () => {
       if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
       if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
       if (meta.calibration) setCalibration(meta.calibration);
+      if (meta.hudSkin) setHudSkin(normalizeHudSkinSettings(meta.hudSkin));
       if (meta.hudLayout) {
         const nextLayout = normalizeHudLayout(meta.hudLayout);
         setHudLayout(nextLayout);
@@ -1287,6 +1301,32 @@ export const OverlayApp: React.FC = () => {
     };
   }, [accentSource]);
 
+  // HUD skin: `auto` maps the champion's primary Data Dragon tag to a skin
+  // (hudSkins.ts), then the root carries `data-ov-skin` for the CSS block and
+  // the three tweak variables. Panels read the resolved skin through context
+  // so their corner ornaments re-render only when the skin itself changes.
+  const hudSkinChampionTags = useMemo(() => {
+    const name = (state.localPlayer?.championName || state.championName || '').toLowerCase();
+    if (!name || !champions.length) return [] as string[];
+    const hit = champions.find((c) => c.name.toLowerCase() === name || c.id.toLowerCase() === name);
+    return hit?.tags || [];
+  }, [champions, state.localPlayer?.championName, state.championName]);
+  const activeHudSkin = useMemo(
+    () => resolveHudSkin(hudSkin.hudSkin, hudSkinChampionTags),
+    [hudSkin.hudSkin, hudSkinChampionTags]
+  );
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-ov-skin', activeHudSkin);
+    root.setAttribute('data-ov-skin-orn', hudSkin.hudSkinOrnaments ? 'on' : 'off');
+    const vars = hudSkinVars(hudSkin);
+    for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  }, [activeHudSkin, hudSkin]);
+  const hudSkinChromeValue = useMemo(
+    () => ({ skin: activeHudSkin, ornaments: hudSkin.hudSkinOrnaments }),
+    [activeHudSkin, hudSkin.hudSkinOrnaments]
+  );
+
   // Loading-card champion name: payload name first, else resolve the numeric
   // key through the champion catalog the overlay already ingested.
   const loadingChampionName = useMemo(() => {
@@ -1363,15 +1403,16 @@ export const OverlayApp: React.FC = () => {
     showGank || showVision || showAction || showBuy || showObjectives || !profileMatchesLocal;
 
   return (
-    <div
-      className={`w-screen h-screen bg-transparent overflow-hidden select-none${
-        clickThrough && !alignMode ? ' pointer-events-none' : ''
-      }`}
-      style={{
-        ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
-        ['--ov-text-scale' as string]: String(overlayTextScale),
-      }}
-    >
+    <HudSkinChromeProvider value={hudSkinChromeValue}>
+      <div
+        className={`w-screen h-screen bg-transparent overflow-hidden select-none${
+          clickThrough && !alignMode ? ' pointer-events-none' : ''
+        }`}
+        style={{
+          ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
+          ['--ov-text-scale' as string]: String(overlayTextScale),
+        }}
+      >
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}
@@ -1439,6 +1480,7 @@ export const OverlayApp: React.FC = () => {
           >
             <div className="hud-rail-stack" data-hud-rail="sums">
               <section className="hud-rail-card" data-hud-section="summoners">
+                <HudSkinOrnaments skin={activeHudSkin} ornaments={hudSkin.hudSkinOrnaments} />
                 <h3 className="hud-rail-label">
                   <span className="hud-rail-label-text">Summoners</span>
                   <span className="hud-rail-label-meta">
@@ -1451,6 +1493,7 @@ export const OverlayApp: React.FC = () => {
               </section>
               {showRespawns && (
                 <section className="hud-rail-card" data-hud-section="respawns">
+                  <HudSkinOrnaments skin={activeHudSkin} ornaments={hudSkin.hudSkinOrnaments} />
                   <h3 className="hud-rail-label">
                     <span className="hud-rail-label-text">Respawns</span>
                   </h3>
@@ -1603,6 +1646,7 @@ export const OverlayApp: React.FC = () => {
         </OverlayChromePanel>
       </div>
       )}
-    </div>
+      </div>
+    </HudSkinChromeProvider>
   );
 };

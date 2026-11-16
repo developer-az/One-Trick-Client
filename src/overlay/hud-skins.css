@@ -1,0 +1,285 @@
+/*
+ * HUD skins — cosmetic frames for the existing overlay panels (Brief I).
+ *
+ * Every rule here is static decoration: no animation, no keyframes, no
+ * filters, no backdrop-filter, no blur shadows. Skins never change module
+ * geometry: they only set the panel chrome variables read by the hook rules
+ * in overlay-theme.css, draw absolutely-positioned corner ornaments, and add
+ * non-layout paint (borders, backgrounds, clip-path, pseudo-elements).
+ *
+ * The active skin is `data-ov-skin` on the overlay root (auto already mapped
+ * to a concrete skin by hudSkins.ts). The HUD Studio previews carry the same
+ * attribute inside `.hud-skin-scope`, so the settings cards render the real
+ * panel classes under the real skin CSS.
+ */
+
+/* ---------- Skin variables (defaults reproduce the shipped gothic look) ---------- */
+html.overlay-root,
+.hud-skin-scope {
+  --ov-skin-orn: var(--ov-champ, #c9ced6);
+  --ov-skin-orn-scale: 1;
+  --ov-skin-panel-alpha: 0.92;
+  --ov-skin-radius: 5px;
+  --ov-skin-border-width: 1px;
+  --ov-skin-clip: none;
+}
+
+[data-ov-skin='gothic'] {
+  --ov-skin-radius: 5px;
+  --ov-skin-border-width: 1px;
+  --ov-skin-clip: none;
+}
+
+[data-ov-skin='bloodmoon'] {
+  --ov-skin-radius: 0;
+  --ov-skin-clip: polygon(
+    7px 0,
+    100% 0,
+    100% calc(100% - 7px),
+    calc(100% - 7px) 100%,
+    0 100%,
+    0 7px
+  );
+}
+
+[data-ov-skin='arcane'] {
+  --ov-skin-radius: 2px;
+  --ov-skin-border-width: 1px;
+}
+
+[data-ov-skin='ironclad'] {
+  --ov-skin-radius: 2px;
+  --ov-skin-border-width: 1px;
+}
+
+[data-ov-skin='warden'] {
+  --ov-skin-radius: 8px;
+  --ov-skin-border-width: 1px;
+}
+
+[data-ov-skin='hunter'] {
+  --ov-skin-radius: 2px;
+  --ov-skin-border-width: 1px;
+}
+
+[data-ov-skin='vanguard'] {
+  --ov-skin-radius: 0;
+  --ov-skin-clip: polygon(
+    6px 0,
+    100% 0,
+    100% calc(100% - 6px),
+    calc(100% - 6px) 100%,
+    0 100%,
+    0 6px
+  );
+}
+
+/* ---------- Corner ornament placement ----------
+ * Ornaments are absolute, pointer-transparent spans inside a panel; they are
+ * outside the layout flow, so no skin can move a module box or clip its text.
+ */
+.ov-skin-orn {
+  position: absolute;
+  z-index: 3;
+  display: block;
+  width: calc(22px * var(--ov-skin-orn-scale, 1));
+  height: calc(22px * var(--ov-skin-orn-scale, 1));
+  color: var(--ov-skin-orn, var(--ov-champ, #c9ced6));
+  opacity: 0.9;
+  pointer-events: none;
+}
+/* The ornament host participates in no layout: its children anchor to the
+ * panel. Collision-hidden marks keep their boxes (visibility, not display) so
+ * a resize can re-test them without a remount. */
+.ov-skin-orn-host {
+  display: contents;
+}
+.ov-skin-orn[data-hidden='true'] {
+  visibility: hidden;
+}
+.ov-skin-orn svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.ov-skin-orn--tl {
+  top: 2px;
+  left: 2px;
+}
+.ov-skin-orn--tr {
+  top: 2px;
+  right: 2px;
+}
+.ov-skin-orn--br {
+  bottom: 2px;
+  right: 2px;
+}
+.ov-skin-orn--bl {
+  bottom: 2px;
+  left: 2px;
+}
+/* Vanguard's shield crest sits on the header's top edge, centred. */
+.ov-skin-orn--emblem {
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(14px * var(--ov-skin-orn-scale, 1));
+  height: calc(14px * var(--ov-skin-orn-scale, 1));
+  opacity: 0.75;
+}
+
+[data-ov-skin-orn='off'] .ov-skin-orn {
+  display: none;
+}
+
+/* ---------- Skin paint ----------
+ * The bracket pseudo-elements in overlay-theme.css are the gothic corner
+ * marks; every skin ships its own SVG set, so the CSS brackets step aside.
+ */
+:root[data-ov-skin] .ov-panel::before,
+:root[data-ov-skin] .ov-panel::after,
+:root[data-ov-skin] .hud-overlay-panel::before,
+:root[data-ov-skin] .hud-overlay-panel::after {
+  display: none;
+}
+
+/* Blood Moon: thin blood hairline frame around the ink. */
+:root[data-ov-skin='bloodmoon'] .ov-panel,
+:root[data-ov-skin='bloodmoon'] .hud-overlay-panel,
+:root[data-ov-skin='bloodmoon'] .hud-rail-card,
+.hud-skin-scope[data-ov-skin='bloodmoon'] .ov-panel {
+  border-color: color-mix(in srgb, var(--ov-blood, #9b1c2e) 55%, transparent);
+}
+
+/* Arcane: double inner hairline drawn with the spare pseudo-elements. */
+:root[data-ov-skin='arcane'] .ov-panel::before,
+:root[data-ov-skin='arcane'] .hud-overlay-panel::before,
+.hud-skin-scope[data-ov-skin='arcane'] .ov-panel::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 3px;
+  width: auto;
+  height: auto;
+  border: 1px solid color-mix(in srgb, var(--ov-skin-orn) 42%, transparent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+:root[data-ov-skin='arcane'] .ov-panel::after,
+:root[data-ov-skin='arcane'] .hud-overlay-panel::after,
+.hud-skin-scope[data-ov-skin='arcane'] .ov-panel::after {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 6px;
+  width: auto;
+  height: auto;
+  border: 1px solid color-mix(in srgb, var(--ov-skin-orn) 26%, transparent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* Ironclad: a second, inset frame line (the "heavy" frame reads as 2px of
+ * plate without widening the border, so the content box never shrinks). */
+:root[data-ov-skin='ironclad'] .ov-panel::before,
+:root[data-ov-skin='ironclad'] .hud-overlay-panel::before,
+.hud-skin-scope[data-ov-skin='ironclad'] .ov-panel::before {
+  content: '';
+  display: block;
+  position: absolute;
+  inset: 1px;
+  width: auto;
+  height: auto;
+  border: 1px solid color-mix(in srgb, var(--ov-skin-orn) 34%, transparent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* Ironclad: riveted plate rule along the header's bottom edge. */
+:root[data-ov-skin='ironclad'] .hud-chrome-header,
+.hud-skin-scope[data-ov-skin='ironclad'] .hud-chrome-header {
+  background-image:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--chrome-silver, #d4d8de) 30%, transparent) 0 1px,
+      transparent 1px 10px
+    ),
+    linear-gradient(180deg, color-mix(in srgb, var(--ov-skin-orn) 9%, transparent), transparent);
+  background-size: 100% 3px, 100% 100%;
+  background-position: bottom left, top left;
+  background-repeat: repeat-x, no-repeat;
+  border-bottom-color: color-mix(in srgb, var(--ov-skin-orn) 34%, transparent);
+}
+
+/* Hunter: range-scale ticks along the header hairline. */
+:root[data-ov-skin='hunter'] .hud-chrome-header::after,
+.hud-skin-scope[data-ov-skin='hunter'] .hud-chrome-header::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--ov-skin-orn) 0 1px,
+    transparent 1px 8px
+  );
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ---------- HUD Studio / settings preview ----------
+ * The dashboard has no html.overlay-root, so the preview scope supplies the
+ * panel backing and frame the overlay theme would otherwise draw. Preview
+ * only: live HUD panels keep their geometry rules in overlay-theme.css.
+ */
+.hud-skin-preview {
+  position: relative;
+  height: 88px;
+}
+.hud-skin-scope .ov-panel {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background-color: rgb(8 8 11 / var(--ov-skin-panel-alpha, 0.92));
+  border: var(--ov-skin-border-width, 1px) solid
+    var(--ov-skin-edge, rgba(212, 216, 222, 0.18));
+  border-radius: var(--ov-skin-radius, 5px);
+  clip-path: var(--ov-skin-clip, none);
+  color: var(--ot-text, #e7e9ee);
+}
+.hud-skin-scope .ov-panel::before,
+.hud-skin-scope .ov-panel::after {
+  display: none;
+}
+.hud-skin-scope[data-ov-skin='arcane'] .ov-panel::before,
+.hud-skin-scope[data-ov-skin='arcane'] .ov-panel::after {
+  display: block;
+}
+.hud-skin-preview-body {
+  padding: 4px 10px 8px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.hud-skin-preview-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ot-text-2, #a7aebb);
+}
+.hud-skin-preview-row + .hud-skin-preview-row {
+  border-top: 1px solid color-mix(in srgb, var(--ot-border, #2a2d33) 70%, transparent);
+}
+.hud-skin-preview-row span:last-child {
+  font-variant-numeric: tabular-nums;
+  color: var(--ot-text, #e7e9ee);
+}
+.hud-skin-preview-row span:first-child {
+  min-width: 0;
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
