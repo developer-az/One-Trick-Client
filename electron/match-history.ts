@@ -74,14 +74,27 @@ const MIN_DURATION_SEC = 300;
 const SMITE = 11;
 
 /**
- * Which games the companion's history window keeps: Rift as before, plus the
- * whole ARAM family (classic, Mayhem and any unknown queue on Howling Abyss).
- * The loading card then scopes its fold by the current queue.
+ * Which games a history read keeps. The shared `getMatchHistory` (Stats, Home
+ * form, automatic main-champion pick, draft) stays Rift-only exactly as its
+ * copy says; only the loading-card summaries widen to the ARAM family so the
+ * card can scope its fold by the current queue.
  */
-export function isSupportedHistoryGame(queueId: number, mapId?: number | null): boolean {
-    if (RIFT_QUEUES.has(queueId)) return true;
+export type HistoryScope = 'rift' | 'aram-family';
+
+/** Rift-only: what every existing match-history consumer expects. */
+export function isRiftHistoryGame(queueId: number): boolean {
+    return RIFT_QUEUES.has(queueId);
+}
+
+/** Classic ARAM, Mayhem and any unknown queue on Howling Abyss. */
+export function isAramFamilyHistoryGame(queueId: number, mapId?: number | null): boolean {
     if (ARAM_HISTORY_QUEUES.has(queueId)) return true;
     return mapId === HOWLING_ABYSS_MAP_ID;
+}
+
+/** The loading card's wider window: Rift plus the whole ARAM family. */
+export function isSupportedHistoryGame(queueId: number, mapId?: number | null): boolean {
+    return isRiftHistoryGame(queueId) || isAramFamilyHistoryGame(queueId, mapId);
 }
 
 export function roleOf(p: RawParticipant | undefined): MatchSummary['role'] {
@@ -218,10 +231,20 @@ export type LcuRequest = (
 /**
  * Up to `count` recent Summoner's Rift games, newest first. Enemy details are
  * filled for at most `detailLimit` games per call so the first load stays quick.
+ * `request` is a test seam for the LCU transport.
  */
-export function getMatchHistory(opts: { count?: number; detailLimit?: number; canFetchDetails: () => boolean }): Promise<MatchSummary[]> {
+export function getMatchHistory(opts: {
+    count?: number;
+    detailLimit?: number;
+    canFetchDetails: () => boolean;
+    request?: LcuRequest;
+}): Promise<MatchSummary[]> {
     if (inFlight) return inFlight;
-    inFlight = load(opts).finally(() => {
+    inFlight = load(
+        { count: opts.count, detailLimit: opts.detailLimit, canFetchDetails: opts.canFetchDetails },
+        opts.request,
+        'rift'
+    ).finally(() => {
         inFlight = null;
     });
     return inFlight;
@@ -252,7 +275,8 @@ export function getMatchHistorySummaries(opts: {
             detailLimit: 0,
             canFetchDetails: () => false,
         },
-        opts.request
+        opts.request,
+        'aram-family'
     ).finally(() => {
         if (summariesInFlight === entry) summariesInFlight = null;
     });
@@ -262,7 +286,8 @@ export function getMatchHistorySummaries(opts: {
 
 async function load(
     { count = 60, detailLimit = 25, canFetchDetails }: { count?: number; detailLimit?: number; canFetchDetails: () => boolean },
-    request?: LcuRequest
+    request: LcuRequest | undefined,
+    scope: HistoryScope
 ): Promise<MatchSummary[]> {
     // An injected transport is a complete seam (tests): no client connection,
     // no disk cache. Production connects and caches as before.
@@ -301,7 +326,11 @@ async function load(
         .map((g) => summarize(g, puuid))
         .filter(
             (g): g is MatchSummary =>
-                !!g && isSupportedHistoryGame(g.queueId, g.mapId) && g.durationSec >= MIN_DURATION_SEC
+                !!g &&
+                g.durationSec >= MIN_DURATION_SEC &&
+                (scope === 'aram-family'
+                    ? isSupportedHistoryGame(g.queueId, g.mapId)
+                    : isRiftHistoryGame(g.queueId))
         )
         .sort((a, b) => b.at - a.at);
 

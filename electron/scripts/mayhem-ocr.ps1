@@ -199,14 +199,15 @@ function Capture-FractionRegion {
   return (Capture-Region -Left $rx -Top $ry -Width $rw -Height $rh -OutPath $OutPath)
 }
 
-function Capture-CenterRegion {
+function Capture-PrimaryScreen {
   param([string]$OutPath)
   Add-Type -AssemblyName System.Windows.Forms
-  $pt = [System.Windows.Forms.Cursor]::Position
-  $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
-  if (-not $scr) { $scr = [System.Windows.Forms.Screen]::PrimaryScreen }
-  $b = $scr.Bounds
-  return (Capture-FractionRegion -BoundsLeft $b.X -BoundsTop $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height -OutPath $OutPath)
+  # Fallback (no game window matched): the PRIMARY screen's complete bounds —
+  # never the monitor under the cursor and never a fractional crop — so a game
+  # on the primary screen is still read. Mask rects are physical-pixel screen
+  # coordinates and are applied in this same space by Capture-Region.
+  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath)
 }
 
 $blackFrame = $false
@@ -230,7 +231,7 @@ if ($CaptureScreen) {
     }
   }
   if (-not $captured) {
-    $blackFrame = Capture-CenterRegion -OutPath $ImagePath
+    $blackFrame = Capture-PrimaryScreen -OutPath $ImagePath
   }
   if ($target) {
     $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)

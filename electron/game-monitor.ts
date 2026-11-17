@@ -268,6 +268,15 @@ export function isMayhemMatchActive(): boolean {
     return inGame && !!lastGoodPayload && isMayhemMode(currentMayhemMode());
 }
 
+/**
+ * Live augment ingestion runs for every Mayhem mode, including `mayhem-likely`
+ * (the unknown-queue Howling Abyss game the Live Client reports as plain ARAM).
+ * Classic ARAM never reads `activePlayer.augments`.
+ */
+export function shouldSyncMayhemPickPhase(mode: MayhemMode): boolean {
+    return isMayhemMode(mode);
+}
+
 /** Howling Abyss / ARAM-ish live game (Mayhem, mayhem-likely or classic ARAM). */
 export function isAramFamilyMatchActive(): boolean {
     if (!inGame || !lastGoodPayload) return false;
@@ -588,13 +597,35 @@ function applyChampSelectChampionToLoading(): void {
 
 /** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
 export function dismissMayhemAugmentPanelFromHotkey(): void {
-    if (!isMayhemMatchActive()) return;
+    // Any ARAM-family game with a panel on screen owns PageUp: a manual
+    // PageDown scan can show offers in classic ARAM too. Clearing the panel
+    // never enables automatic Mayhem or latches the classic queue.
+    if (
+        !canDismissMayhemPanel({
+            inGame,
+            hasPayload: !!lastGoodPayload,
+            aramFamily: isAramFamilyMatchActive(),
+            panelShown: mayhemAugmentHudShouldShow(),
+        })
+    ) {
+        return;
+    }
     mayhemUserDismissedUntilMs = Date.now() + 120_000;
     mayhemAugmentDismissedAt = Date.now();
     mayhemManualScanUntilMs = 0;
     purgeMayhemOffersFromScreen();
     pushMayhemOverlayPatch();
     notifyMayhemOverlayStateChanged();
+}
+
+/** PageUp has something to dismiss: a live ARAM-family game with a shown panel. */
+export function canDismissMayhemPanel(input: {
+    inGame: boolean;
+    hasPayload: boolean;
+    aramFamily: boolean;
+    panelShown: boolean;
+}): boolean {
+    return input.inGame && input.hasPayload && input.aramFamily && input.panelShown;
 }
 
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
@@ -609,7 +640,7 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
         mapId: signals.mapId,
         augmentOffersDetected: false,
     });
-    if (currentMayhemMode() !== 'mayhem' && !aramFamily) return;
+    if (!isMayhemMode(currentMayhemMode()) && !aramFamily) return;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
     const bundle = loadMayhemBundle();
@@ -884,7 +915,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
     const enemies = mapEnemies(enemyPlayers);
     const mayhemMode = mayhemModeForLive(live);
     const aramMatch = mayhemMode !== 'other';
-    if (mayhemMode === 'mayhem' && live) {
+    if (shouldSyncMayhemPickPhase(mayhemMode) && live) {
         syncMayhemPickPhase(live);
     }
     // Lane-based enemy sum tracking is SR-only (ADC/mid bot lane model).
@@ -1276,7 +1307,7 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
     // Live Client owned augments are authoritative when the game exposes them.
     mayhemLiveAugmentIds = readLiveAugmentIds(live.activePlayer);
     const events = live.events?.Events;
-    if (events?.length && mayhemModeForLive(live) === 'mayhem') {
+    if (events?.length && isMayhemMode(mayhemModeForLive(live))) {
         const start = events.length + 8 < mayhemEventScanFrom ? 0 : Math.max(0, mayhemEventScanFrom - 4);
         let maxId = mayhemLastEventScanId;
         for (let i = start; i < events.length; i++) {
@@ -1922,8 +1953,10 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
     void setClipperActive(true);
     lastLiveProofAt = Date.now();
     overlayDestroyGate.cancel();
-    // New match — never stay hidden from a previous manual hide
-    setOverlayUserHidden(false);
+    // New match — never stay hidden from a previous manual hide. An already
+    // shown window is left untouched (setOverlayUserHidden(false) does not
+    // re-show/re-apply bounds on its own).
+    if (isOverlayUserHidden()) setOverlayUserHidden(false);
     if (settingsForTick().overlayEnabled) {
         syncScalesFromLeague();
         // The load screen already created and showed this window. Re-creating

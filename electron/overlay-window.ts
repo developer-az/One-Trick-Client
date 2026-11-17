@@ -1305,15 +1305,45 @@ export function toggleOverlayVisibility(): boolean {
     return !userHidden;
 }
 
-export function setOverlayUserHidden(hidden: boolean): void {
+export interface OverlayUserHiddenDeps {
+    /** The overlay surface is created and visible right now. */
+    isShown: () => boolean;
+    show: () => void;
+    hide: () => void;
+    broadcast: () => void;
+}
+
+function defaultUserHiddenDeps(): OverlayUserHiddenDeps {
+    return {
+        isShown: () => {
+            if (isNativeLocked()) return !!nativeSurface && nativeSurface.isLive();
+            return overlayWindows().some((win) => safeCall(() => win.isVisible()) === true);
+        },
+        show: showOverlay,
+        hide: hideOverlay,
+        broadcast: broadcastOverlayMeta,
+    };
+}
+
+/**
+ * Set the user-hidden flag. Clearing it must never re-show (or re-apply the
+ * bounds of) a window that is already on screen: match start calls this on a
+ * window the loading screen already showed, and showOverlay() would re-apply
+ * locked bounds and flicker the handoff.
+ */
+export function setOverlayUserHidden(hidden: boolean, deps?: OverlayUserHiddenDeps): void {
+    const d = deps ?? defaultUserHiddenDeps();
+    // Unchanged and already in the requested state: a no-op. Hidden=true stays
+    // a no-op even if a stale surface exists; shown=true is the match-start case.
+    if (userHidden === hidden && (hidden || d.isShown())) return;
     userHidden = hidden;
     overlayLog('user-hidden', { hidden, source: 'set' });
     if (hidden) {
-        hideOverlay();
-    } else {
-        showOverlay();
+        d.hide();
+    } else if (!d.isShown()) {
+        d.show();
     }
-    broadcastOverlayMeta();
+    d.broadcast();
 }
 
 function applyFullscreenBounds(): void {

@@ -4,9 +4,10 @@
  * `game-monitor.ts` owns timers, payloads and the overlay; this module owns the
  * parts that need to be proven without Electron:
  *
- *   1. bounded discovery for an unknown-queue ARAM game (the queue id is not
- *      verified live yet, so a Mayhem game can report a null/unknown queue on
- *      Howling Abyss and must be recognised from augment offers on screen);
+ *   1. the normal Mayhem scan schedule for `mayhem` AND `mayhem-likely` (the
+ *      queue id is not verified live yet, so a Mayhem game can report a
+ *      null/unknown queue on Howling Abyss); bounded discovery survives only
+ *      as a fallback for an ARAM signal that is not Howling Abyss;
  *   2. frame-accurate pick counting (only ids matched on the current frame may
  *      move the counter, never the retained display roll);
  *   3. invalid reads (failed capture, no game window, OCR exception) neither
@@ -20,6 +21,7 @@ import {
   ARAM_QUEUE_IDS,
   MAYHEM_QUEUE_IDS,
   detectMayhemMode,
+  isMayhemMode,
   type MayhemMode,
   type MayhemModeSignals,
 } from './mode';
@@ -181,13 +183,19 @@ export function mayhemDiscoveryDue(state: MayhemMonitorState, now: number): bool
   return now - state.discovery.lastScanAt >= MAYHEM_DISCOVERY_INTERVAL_MS;
 }
 
-/** Is a scan (normal Mayhem or bounded discovery) wanted right now? */
+/**
+ * Is a scan (normal Mayhem or bounded discovery) wanted right now?
+ *
+ * `mayhem-likely` (unknown-queue Howling Abyss) is a Mayhem mode: it runs the
+ * normal schedule exactly like `mayhem`. Bounded discovery only remains as the
+ * fallback for an unknown-queue ARAM signal that is not Howling Abyss.
+ */
 export function mayhemMonitorWantsScan(
   state: MayhemMonitorState,
   signals: MayhemModeSignals,
   now: number
 ): 'mayhem' | 'discovery' | 'none' {
-  if (mayhemMonitorMode(state, signals) === 'mayhem') return 'mayhem';
+  if (isMayhemMode(mayhemMonitorMode(state, signals))) return 'mayhem';
   if (!isUnknownQueueAram(signals)) return 'none';
   if (!mayhemDiscoveryLive(state.discovery, now)) return 'none';
   return 'discovery';
@@ -318,15 +326,14 @@ export async function runMayhemMonitorScan(
   });
   const hudAction: MayhemHudAction = visible ? 'show' : trusted && offers === 0 ? 'purge' : 'keep';
 
-  let mode: MayhemMode = 'aram';
-  if (next.discovery.latched) mode = 'mayhem';
-  else if (!discovery) mode = 'mayhem';
-  else if (isUnknownQueueAram(input.signals)) mode = 'aram';
+  // Classification is the monitor's own (latch first, then the frame's offers):
+  // `mayhem-likely` stays honest for the unknown queue while still getting the
+  // normal Mayhem behaviour everywhere.
   return {
     state: next,
     scanned: true,
     counted: next.counter.picksTaken - before,
-    mode,
+    mode: mayhemMonitorMode(next, input.signals),
     discovery,
     hudAction,
   };

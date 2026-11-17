@@ -76,7 +76,7 @@ import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
-import { cardRect, type Rect } from './loadingScreenGeometry';
+import { cardRect } from './loadingScreenGeometry';
 import { mergeLoadingPayload, type LoadingStats } from './loadingStats';
 import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveChampionAccent } from './champAccent';
 import { resolveChampionRef } from '../data/championCatalog';
@@ -1349,11 +1349,14 @@ export const OverlayApp: React.FC = () => {
 
   /* ------------------------------------------------- loading → game handoff */
   /*
-   * The load and the first in-game frame are two payloads a few ms apart. The
-   * loading pet/card stay mounted through that gap and fade out over 250 ms
-   * while the HUD fades in, so the switch never blinks the window or the
-   * champion art. Reduced motion skips the fade.
+   * The load and the first in-game frame are two payloads a few ms apart. ONE
+   * loading layer — the same element and the same pet/card children before and
+   * during the handoff — is rendered as a SIBLING of the HUD, so the fade can
+   * never hide both at once and the pet/card never remount into another
+   * subtree. Reduced motion skips both transitions.
    */
+  const HANDOFF_FADE_MS = 250;
+  const HUD_FADE_MS = 200;
   const loadingSnapshotRef = useRef<{
     championName: string;
     stats: LoadingStats | null;
@@ -1361,10 +1364,19 @@ export const OverlayApp: React.FC = () => {
     queueId: number | null;
     pet: PetSettings;
   } | null>(null);
-  const [handoffVisible, setHandoffVisible] = useState(false);
-  const [handoffFading, setHandoffFading] = useState(false);
-  const [hudFadedIn, setHudFadedIn] = useState(true);
+  const handoffStartedRef = useRef(false);
+  const [handoffPhase, setHandoffPhase] = useState<'idle' | 'mounted' | 'fading'>('idle');
+  const reducedMotion = useMemo(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    []
+  );
 
+  // Snapshot the load; open the handoff once the first in-game frame carries a
+  // slot. The dependency list deliberately leaves out the handoff state, so
+  // this effect never cancels the transition it started.
   useEffect(() => {
     if (state.loading === true) {
       loadingSnapshotRef.current = {
@@ -1374,129 +1386,154 @@ export const OverlayApp: React.FC = () => {
         queueId: state.queueId ?? null,
         pet: activePet,
       };
-      setHandoffVisible(false);
-      setHandoffFading(false);
-      setHudFadedIn(false);
+      handoffStartedRef.current = false;
+      setHandoffPhase('idle');
       return;
     }
     if (!state.inGame) {
       // Match ended: drop any pending handoff so the next game cannot replay
       // this one's loading layer.
       loadingSnapshotRef.current = null;
-      if (handoffVisible) setHandoffVisible(false);
-      if (handoffFading) setHandoffFading(false);
-      if (!hudFadedIn) setHudFadedIn(true);
+      handoffStartedRef.current = false;
+      setHandoffPhase('idle');
       return;
     }
-    if (!state.inGame || !loadingSnapshotRef.current || handoffVisible) return;
-    setHandoffVisible(true);
-    const raf = window.requestAnimationFrame(() => setHudFadedIn(true));
-    return () => window.cancelAnimationFrame(raf);
-  }, [state.loading, state.inGame, state.loadingStats, state.loadingSlot, state.queueId, state.championName, state.championId, loadingChampionName, activePet, handoffVisible, handoffFading, hudFadedIn]);
+    if (!loadingSnapshotRef.current || !slot || handoffStartedRef.current) return;
+    handoffStartedRef.current = true;
+    setHandoffPhase('mounted');
+  }, [
+    state.loading,
+    state.inGame,
+    state.loadingStats,
+    state.loadingSlot,
+    state.queueId,
+    state.championName,
+    state.championId,
+    loadingChampionName,
+    activePet,
+    slot,
+  ]);
 
+  // Transition setup, separated from every state-dependent cleanup: two frames
+  // paint the opaque layer under the transparent HUD, then both fades start.
   useEffect(() => {
-    if (!handoffVisible || handoffFading || !slot) return;
-    // Two frames: one to paint the opaque layer, one to start the transition.
+    if (handoffPhase !== 'mounted') return;
     let inner = 0;
     const outer = window.requestAnimationFrame(() => {
-      inner = window.requestAnimationFrame(() => setHandoffFading(true));
+      inner = window.requestAnimationFrame(() => setHandoffPhase('fading'));
     });
     return () => {
       window.cancelAnimationFrame(outer);
       window.cancelAnimationFrame(inner);
     };
-  }, [handoffVisible, handoffFading, slot]);
+  }, [handoffPhase]);
 
+  // Teardown after the fade; reduced motion unmounts immediately.
   useEffect(() => {
-    if (!handoffFading) return;
-    const reduced =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (handoffPhase !== 'fading') return;
     const id = window.setTimeout(() => {
-      setHandoffVisible(false);
-      setHandoffFading(false);
       loadingSnapshotRef.current = null;
-    }, reduced ? 0 : 250);
+      setHandoffPhase('idle');
+    }, reducedMotion ? 0 : HANDOFF_FADE_MS);
     return () => window.clearTimeout(id);
-  }, [handoffFading]);
+  }, [handoffPhase, reducedMotion]);
 
-  const showHandoffLayer =
-    !!loadingSnapshotRef.current &&
-    !state.loading &&
-    state.inGame &&
-    (handoffVisible || !hudFadedIn);
+  const handoffActive = handoffPhase !== 'idle';
+  const loadingLayerMounted = state.loading || (state.inGame && loadingSnapshotRef.current !== null);
+  const hudHiddenForHandoff = loadingSnapshotRef.current !== null && handoffPhase !== 'fading';
 
-  // Content stays reported through the handoff: the loading layer is still
-  // mounted, so the window must not hide in the gap before the HUD paints.
+  // The loading layer draws live values during the load and the frozen snapshot
+  // through the handoff. Same element, same child components: no remount.
+  const handoffSnapshot = loadingSnapshotRef.current;
+  const handoffHome =
+    handoffSnapshot &&
+    handoffSnapshot.slot &&
+    handoffSnapshot.slot.source === 'gameflow-session' &&
+    handoffSnapshot.slot.side
+      ? cardRect(
+          handoffSnapshot.slot.side,
+          handoffSnapshot.slot.index,
+          handoffSnapshot.slot.teamSize,
+          viewport.vw,
+          viewport.vh
+        )
+      : null;
+
+  const loadingLayer = handoffSnapshot ? (
+    <div
+      className="ov-handoff-loading"
+      data-ov-loading-layer
+      style={{
+        opacity: handoffPhase === 'fading' ? 0 : 1,
+        transition:
+          handoffPhase === 'fading' && !reducedMotion
+            ? `opacity ${HANDOFF_FADE_MS}ms ease-out`
+            : undefined,
+      }}
+    >
+      <OverlayPet preference={handoffSnapshot.pet} home={handoffHome} />
+      <LoadingCard
+        championName={handoffSnapshot.championName}
+        stats={handoffSnapshot.stats}
+        home={handoffHome}
+        viewport={viewport}
+        queueKnown={handoffSnapshot.queueId != null}
+      />
+    </div>
+  ) : null;
+
+  // Content stays reported through the handoff: the loading layer (or the load
+  // itself) is still mounted, so the window must not hide before the HUD paints.
   useEffect(() => {
-    window.electronAPI?.reportOverlayContent?.(state.loading || showHandoffLayer || slotHasContent);
-  }, [state.loading, showHandoffLayer, slotHasContent]);
-
-  const handoffLayer = (() => {
-    if (!showHandoffLayer || !loadingSnapshotRef.current) return null;
-    const snap = loadingSnapshotRef.current;
-    const home: Rect | null =
-      snap.slot && snap.slot.source === 'gameflow-session' && snap.slot.side
-        ? cardRect(snap.slot.side, snap.slot.index, snap.slot.teamSize, viewport.vw, viewport.vh)
-        : null;
-    return (
-      <div
-        className="ov-handoff-loading"
-        style={{
-          opacity: handoffFading ? 0 : 1,
-          transition: handoffFading ? 'opacity 250ms ease-out' : undefined,
-        }}
-      >
-        <OverlayPet preference={snap.pet} home={home} />
-        <LoadingCard
-          championName={snap.championName}
-          stats={snap.stats}
-          home={home}
-          viewport={viewport}
-          queueKnown={snap.queueId != null}
-        />
-      </div>
+    window.electronAPI?.reportOverlayContent?.(
+      state.loading || loadingLayerMounted || slotHasContent
     );
-  })();
+  }, [state.loading, loadingLayerMounted, slotHasContent]);
 
   if (state.loading) {
     // Your loading-screen portrait, only when the side AND the index came from
     // the gameflow session: a champ-select-only slot has no side, so the pet
-    // stays in the bottom third and the card bottom-right.
+    // stays in the bottom third and the card bottom-right. The card is present
+    // for the whole load: numbers when this load's history has landed, a
+    // pending/neutral line until then.
     const loadingSlot = state.loadingSlot ?? null;
-    const loadingHome: Rect | null =
+    const loadingHome =
       loadingSlot && loadingSlot.source === 'gameflow-session' && loadingSlot.side
         ? cardRect(loadingSlot.side, loadingSlot.index, loadingSlot.teamSize, viewport.vw, viewport.vh)
         : null;
     return (
-      <div className="w-screen h-screen pointer-events-none bg-transparent">
-        <OverlayPet preference={activePet} home={loadingHome} />
-        {/* Present for the whole load: numbers when this load's history has
-            landed, a pending/neutral line until then. */}
-        {state.loadingStats ? (
-          <LoadingCard
-            championName={loadingChampionName}
-            stats={state.loadingStats}
-            home={loadingHome}
-            viewport={viewport}
-            queueKnown={state.queueId != null}
-          />
-        ) : (
-          <LoadingCard
-            championName={loadingChampionName}
-            stats={null}
-            home={loadingHome}
-            viewport={viewport}
-            queueKnown={state.queueId != null}
-          />
-        )}
-      </div>
+      <HudSkinChromeProvider value={hudSkinChromeValue}>
+        <div className="w-screen h-screen pointer-events-none bg-transparent">
+          <div className="ov-handoff-loading" data-ov-loading-layer style={{ opacity: 1 }}>
+            <OverlayPet preference={activePet} home={loadingHome} />
+            {state.loadingStats ? (
+              <LoadingCard
+                championName={loadingChampionName}
+                stats={state.loadingStats}
+                home={loadingHome}
+                viewport={viewport}
+                queueKnown={state.queueId != null}
+              />
+            ) : (
+              <LoadingCard
+                championName={loadingChampionName}
+                stats={null}
+                home={loadingHome}
+                viewport={viewport}
+                queueKnown={state.queueId != null}
+              />
+            )}
+          </div>
+        </div>
+      </HudSkinChromeProvider>
     );
   }
 
   if (!state.inGame || !slot) {
     return (
-      <div className="w-screen h-screen pointer-events-none bg-transparent">{handoffLayer}</div>
+      <HudSkinChromeProvider value={hudSkinChromeValue}>
+        <div className="w-screen h-screen pointer-events-none bg-transparent">{loadingLayer}</div>
+      </HudSkinChromeProvider>
     );
   }
 
@@ -1531,19 +1568,22 @@ export const OverlayApp: React.FC = () => {
 
   return (
     <HudSkinChromeProvider value={hudSkinChromeValue}>
-      <div
-        className={`w-screen h-screen bg-transparent overflow-hidden select-none${
-          clickThrough && !alignMode ? ' pointer-events-none' : ''
-        }`}
-        style={{
-          ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
-          ['--ov-text-scale' as string]: String(overlayTextScale),
-          // During the handoff the in-game HUD fades in under the loading layer.
-          opacity: showHandoffLayer && !hudFadedIn ? 0 : 1,
-          transition: showHandoffLayer ? 'opacity 200ms ease-out' : undefined,
-        }}
-      >
-        {handoffLayer}
+      <div className="w-screen h-screen bg-transparent">
+        {loadingLayer}
+        <div
+          data-ov-hud-root
+          className={`w-screen h-screen bg-transparent overflow-hidden select-none${
+            clickThrough && !alignMode ? ' pointer-events-none' : ''
+          }`}
+          style={{
+            ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
+            ['--ov-text-scale' as string]: String(overlayTextScale),
+            // During the handoff the in-game HUD fades in under the loading layer.
+            opacity: hudHiddenForHandoff ? 0 : 1,
+            transition:
+              handoffActive && !reducedMotion ? `opacity ${HUD_FADE_MS}ms ease-out` : undefined,
+          }}
+        >
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}
@@ -1777,6 +1817,7 @@ export const OverlayApp: React.FC = () => {
         </OverlayChromePanel>
       </div>
       )}
+      </div>
       </div>
     </HudSkinChromeProvider>
   );

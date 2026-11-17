@@ -4,8 +4,9 @@
  * Drives the real monitor scan engine (`src/logic/mayhem/monitor.ts`) with an
  * injected OCR runner through the behaviours that were broken:
  *
- *   1. unknown-queue ARAM discovery: 90 s bursts around level 3/7/11/15 or a
- *      death classify the match from offers (classic ARAM 450 never scans);
+ *   1. unknown-queue ARAM is `mayhem-likely`: the NORMAL Mayhem scan schedule
+ *      (never the old bounded 90 s discovery bursts), while classic ARAM 450
+ *      never scans;
  *   2. a manual PageDown scan classifies an unknown queue, never 450;
  *   3. a single high-confidence offer is kept across scans through the real
  *      adapter acceptance and promoted only after two consecutive frames;
@@ -20,7 +21,6 @@
 import {
   createMayhemMonitorState,
   isUnknownQueueAram,
-  mayhemDiscoveryLive,
   mayhemMonitorMode,
   mayhemMonitorWantsScan,
   noteMayhemDiscoveryTrigger,
@@ -159,7 +159,7 @@ const MAYHEM: MayhemModeSignals = {
 };
 
 async function main(): Promise<void> {
-  console.log('--- unknown-queue ARAM discovery ---');
+  console.log('--- unknown-queue ARAM runs the normal Mayhem schedule ---');
   ok(isUnknownQueueAram(UNKNOWN_ARAM), 'null queue on Howling Abyss is a discovery candidate');
   ok(!isUnknownQueueAram(CLASSIC_ARAM), 'classic ARAM queue 450 is never a discovery candidate');
   ok(!isUnknownQueueAram({ gameMode: 'CLASSIC', mapName: 'Map11', queueId: 420, mapId: 11 }), 'Summoner\'s Rift is not a candidate');
@@ -169,28 +169,52 @@ async function main(): Promise<void> {
     let ocrCalls = 0;
     const discoveryRead = frame(['jeweled_gauntlet', 'giant_slayer']);
     const state = createMayhemMonitorState();
+    ok(
+      mayhemMonitorWantsScan(state, UNKNOWN_ARAM, 1_000_000) === 'mayhem',
+      'mayhem-likely wants the normal Mayhem scan, not a discovery burst'
+    );
     const first = await runMayhemMonitorScan(
       state,
-      input(UNKNOWN_ARAM, 1_000_000, { autoOcrAllowed: false }),
+      input(UNKNOWN_ARAM, 1_000_000),
       async () => {
         ocrCalls += 1;
         return discoveryRead;
       }
     );
-    ok(first.scanned && ocrCalls === 1, 'the first discovery tick runs one OCR scan');
-    ok(first.discovery === true, 'the scan ran in discovery mode');
+    ok(first.scanned && ocrCalls === 1, 'the first tick runs one normal OCR scan');
+    ok(first.discovery === false, 'the scan is not a bounded discovery scan');
     ok(first.mode === 'mayhem', 'two offers classify the unknown queue as Mayhem');
-    ok(first.state.discovery.latched, 'classification latches for the rest of the match');
     ok(
       mayhemMonitorWantsScan(first.state, UNKNOWN_ARAM, 1_000_001) === 'mayhem',
-      'after classification the monitor runs the normal Mayhem cadence'
+      'after the offers the monitor stays on the normal Mayhem cadence'
     );
     const later = await runMayhemMonitorScan(
       first.state,
       input(UNKNOWN_ARAM, 1_000_001),
       async () => frame([])
     );
-    ok(later.scanned && later.mode === 'mayhem', 'a blank later frame cannot demote a latched Mayhem match');
+    ok(later.scanned && later.mode === 'mayhem-likely', 'a blank later frame returns to the mayhem-likely classification');
+
+    // No offers ever: the normal schedule must still scan past the old 90 s
+    // discovery window.
+    let scans = 0;
+    let lastScanAt = -1;
+    let chasing = later.state;
+    for (let now = 1_002_000; now <= 1_200_000; now += 1_000) {
+      const result = await runMayhemMonitorScan(
+        chasing,
+        input(UNKNOWN_ARAM, now),
+        async () => frame([])
+      );
+      chasing = result.state;
+      if (result.scanned) {
+        scans += 1;
+        lastScanAt = now;
+      }
+    }
+    ok(scans >= 180, `the unknown queue scans on every normal tick (${scans})`);
+    ok(lastScanAt > 1_090_000, `scanning continues past 90 s with no offers (last ${lastScanAt})`);
+    ok(!chasing.discovery.latched, 'empty frames never latch the unknown queue');
   }
 
   {
@@ -208,119 +232,54 @@ async function main(): Promise<void> {
   }
 
   {
-    // Burst cadence: one scan per 10 s inside a 90 s window opened by a level
-    // or death trigger; a later burst reopens around the next augment window.
+    // The level/dismissal gate still applies to the normal schedule: a tick the
+    // caller disallowed does not scan, and the next allowed tick does.
     let ocrCalls = 0;
-    const first = await runMayhemMonitorScan(
+    const gated = await runMayhemMonitorScan(
       createMayhemMonitorState(),
-      input(UNKNOWN_ARAM, 1_000_000),
+      input(UNKNOWN_ARAM, 1_000_000, { autoOcrAllowed: false }),
       async () => {
         ocrCalls += 1;
         return frame([]);
       }
     );
-    ok(first.scanned && ocrCalls === 1, 'the first discovery burst scan runs');
-    const tooSoon = await runMayhemMonitorScan(
-      first.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 5_000),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
-    );
-    ok(!tooSoon.scanned && ocrCalls === 1, 'a second discovery scan is gated to one per 10 s');
-    const due = await runMayhemMonitorScan(
-      tooSoon.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 10_000),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
-    );
-    ok(due.scanned && ocrCalls === 2, 'the next scan runs once the 10 s slot elapses');
-    ok(
-      !mayhemDiscoveryLive(due.state.discovery, 1_000_000 + 90_001),
-      'a discovery burst expires 90 s after it opened'
-    );
-    const expired = await runMayhemMonitorScan(
-      due.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 90_001),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
-    );
-    ok(!expired.scanned && ocrCalls === 2, 'no scan runs after the burst with no new window');
-    const level7 = await runMayhemMonitorScan(
-      expired.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 100_000, { level: 7 }),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
-    );
-    ok(level7.scanned && ocrCalls === 3, 'reaching level 7 opens a new discovery burst');
-  }
-
-  {
-    // A late first augment: nothing scans below level 3, then level 3 opens a
-    // burst even minutes after the match started (the old 3-minute cap missed
-    // this).
-    let ocrCalls = 0;
-    const early = await runMayhemMonitorScan(
-      createMayhemMonitorState(),
-      input(UNKNOWN_ARAM, 1_000_000, { level: 1 }),
+    ok(!gated.scanned && ocrCalls === 0, 'the level/dismissal gate is respected before the first augment level');
+    const allowed = await runMayhemMonitorScan(
+      gated.state,
+      input(UNKNOWN_ARAM, 1_001_000),
       async () => {
         ocrCalls += 1;
         return frame(['jeweled_gauntlet', 'giant_slayer']);
       }
     );
-    ok(!early.scanned && ocrCalls === 0, 'no discovery scan before the first augment level');
-    const lateFirst = await runMayhemMonitorScan(
-      early.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 300_000, { level: 3 }),
-      async () => {
-        ocrCalls += 1;
-        return frame(['jeweled_gauntlet', 'giant_slayer']);
-      }
-    );
-    ok(lateFirst.scanned && ocrCalls === 1, 'a late level 3 still opens a discovery burst');
-    ok(lateFirst.mode === 'mayhem', 'the late first augment classifies the unknown queue as Mayhem');
+    ok(allowed.scanned && ocrCalls === 1, 'the next allowed tick scans normally');
+    ok(allowed.mode === 'mayhem', 'the first offers still classify the unknown queue');
   }
 
   {
-    // A death opens a burst even when every level threshold is already past.
+    // The discovery trigger itself survives as the fallback for a NON-Howling
+    // unknown-queue ARAM signal; reaching level 9 or dying keeps it open.
     const state = createMayhemMonitorState();
     state.discovery.levelBurst = 15;
     state.discovery.wasDead = false;
-    let ocrCalls = 0;
-    const alive = await runMayhemMonitorScan(
-      state,
-      input(UNKNOWN_ARAM, 1_000_000, { level: 9, isDead: false }),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
+    ok(
+      !noteMayhemDiscoveryTrigger(state, {
+        now: 1_000_000,
+        level: 9,
+        isDead: false,
+        signals: UNKNOWN_ARAM,
+      }),
+      'no burst without a level or death trigger'
     );
-    ok(!alive.scanned && ocrCalls === 0, 'no burst without a level or death trigger');
-    const dead = await runMayhemMonitorScan(
-      alive.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 1_000, { level: 9, isDead: true }),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
+    ok(
+      noteMayhemDiscoveryTrigger(state, {
+        now: 1_001_000,
+        level: 9,
+        isDead: true,
+        signals: UNKNOWN_ARAM,
+      }),
+      'a death opens a fallback discovery burst'
     );
-    ok(dead.scanned && ocrCalls === 1, 'a death opens a discovery burst');
-    const stillDead = await runMayhemMonitorScan(
-      dead.state,
-      input(UNKNOWN_ARAM, 1_000_000 + 20_000, { level: 9, isDead: true }),
-      async () => {
-        ocrCalls += 1;
-        return frame([]);
-      }
-    );
-    ok(stillDead.scanned && ocrCalls === 2, 'staying dead keeps the burst scan cadence');
   }
 
   {
