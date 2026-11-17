@@ -3,14 +3,15 @@
  * fallback coordinate space can be proven without Windows OCR.
  *
  * The PowerShell script does this arithmetic itself; this module is its
- * mirror. The fallback must use the PRIMARY screen's complete bounds — never
- * the monitor the cursor happens to be on, and never a fractional crop of it —
- * so a missing game window still OCRs the screen the game is on. Masks are
- * physical-pixel screen rectangles and are translated into the capture's own
- * origin, exactly like `Set-MaskRectangles` does.
+ * mirror. The fallback captures the PRIMARY screen's complete bounds — never
+ * the monitor the cursor happens to be on — masks in that screen space, and
+ * then crops the same offer band a matched game window would use, relative to
+ * the primary bounds (with no window to measure, the game is assumed to fill
+ * the primary screen). Masks are physical-pixel screen rectangles and are
+ * translated into the capture's own origin, exactly like `Set-MaskRectangles`.
  *
  * `src/logic/mayhem/captureMask.ts` is the Electron-side mask builder; this
- * module owns only where the fallback frame starts and how big it is.
+ * module owns only the fallback frame's bounds, crop and mask translation.
  */
 
 export interface ScreenBounds {
@@ -76,6 +77,29 @@ export function fractionalOfferRegion(
     top: bounds.y + Math.trunc(bounds.height * fractions.topFrac),
     width: Math.max(MIN_CAPTURE_PX, Math.trunc(bounds.width * fractions.widthFrac)),
     height: Math.max(MIN_CAPTURE_PX, Math.trunc(bounds.height * fractions.heightFrac)),
+  };
+}
+
+export interface FallbackCapture {
+  /** The full primary-screen frame; masks are applied in this space. */
+  capture: CaptureRegion;
+  /** The offer band cut from that frame after masking, in screen coordinates. */
+  crop: CaptureRegion;
+}
+
+/**
+ * The whole fallback path (mirrors `Capture-PrimaryScreen` in the ps1): capture
+ * the primary screen's full bounds, mask there, then crop the offer band
+ * relative to the primary bounds. The cursor's monitor never participates.
+ */
+export function primaryFallbackCapture(
+  primary: ScreenBounds,
+  cursorScreen?: ScreenBounds | null,
+  fractions: OfferFractions = DEFAULT_OFFER_FRACTIONS
+): FallbackCapture {
+  return {
+    capture: primaryFallbackRegion(primary, cursorScreen),
+    crop: fractionalOfferRegion(primary, fractions),
   };
 }
 

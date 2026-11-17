@@ -168,7 +168,12 @@ function Capture-Region {
     [int]$Top,
     [int]$Width,
     [int]$Height,
-    [string]$OutPath
+    [string]$OutPath,
+    # Optional post-mask crop, in the SAME screen coordinates as $Left/$Top.
+    [int]$CropLeft = -1,
+    [int]$CropTop = -1,
+    [int]$CropWidth = 0,
+    [int]$CropHeight = 0
   )
   Add-Type -AssemblyName System.Drawing
   $rw = [Math]::Max(64, $Width)
@@ -179,7 +184,21 @@ function Capture-Region {
   $g.Dispose()
   Set-MaskRectangles -Bitmap $bmp -CaptureLeft $Left -CaptureTop $Top -Spec $MaskRects
   $black = Test-BlackFrame -Bitmap $bmp
-  $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  $out = $bmp
+  if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
+    # Crop AFTER capturing and masking the whole frame: the mask rects already
+    # live in $Left/$Top screen space, then the offer band is cut out.
+    $cx = [Math]::Max(0, $CropLeft - $Left)
+    $cy = [Math]::Max(0, $CropTop - $Top)
+    $cw = [Math]::Min($CropWidth, $bmp.Width - $cx)
+    $ch = [Math]::Min($CropHeight, $bmp.Height - $cy)
+    if ($cw -gt 0 -and $ch -gt 0) {
+      $rect = New-Object System.Drawing.Rectangle $cx, $cy, $cw, $ch
+      $out = $bmp.Clone($rect, $bmp.PixelFormat)
+    }
+  }
+  $out.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  if (-not [object]::ReferenceEquals($out, $bmp)) { $out.Dispose() }
   $bmp.Dispose()
   return $black
 }
@@ -202,12 +221,18 @@ function Capture-FractionRegion {
 function Capture-PrimaryScreen {
   param([string]$OutPath)
   Add-Type -AssemblyName System.Windows.Forms
-  # Fallback (no game window matched): the PRIMARY screen's complete bounds —
-  # never the monitor under the cursor and never a fractional crop — so a game
-  # on the primary screen is still read. Mask rects are physical-pixel screen
-  # coordinates and are applied in this same space by Capture-Region.
+  # Fallback (no game window matched): capture the PRIMARY screen's complete
+  # bounds — never the monitor under the cursor — and mask in that space. Then
+  # cut the same offer-band crop a matched game window would use, relative to
+  # the primary bounds: with no window to measure, the game is assumed to fill
+  # the primary screen, so the offers are centred there.
   $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-  return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath)
+  $rw = [Math]::Max(64, [int]($b.Width * $WidthFrac))
+  $rh = [Math]::Max(64, [int]($b.Height * $HeightFrac))
+  $rx = $b.X + [int]($b.Width * $LeftFrac)
+  $ry = $b.Y + [int]($b.Height * $TopFrac)
+  return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath `
+    -CropLeft $rx -CropTop $ry -CropWidth $rw -CropHeight $rh)
 }
 
 $blackFrame = $false

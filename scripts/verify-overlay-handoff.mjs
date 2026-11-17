@@ -1,22 +1,26 @@
 #!/usr/bin/env node
 /**
- * Loading → game handoff guard (Review fixes on 1b6173e).
+ * Loading → game handoff guard (Review round 2 on 5e90148).
  *
  * Mounts the REAL `src/overlay/OverlayApp.tsx` in an offscreen Electron page
- * (bundled from source with esbuild, a fake `window.electronAPI` feeding the
- * real overlay-update channel) and drives one load → first in-game frame:
+ * (bundled from source with esbuild, with the production CSS: index/tokens/
+ * overlay-theme/hud-skins) and a fake `window.electronAPI` feeding the real
+ * overlay-update channel. It drives one load → first in-game frame:
  *
- *   1. the loading card is present and opaque on the loading payload;
- *   2. every sampled frame of the handoff has visible content: either the
- *      loading layer or the HUD is above half opacity — never both hidden;
- *   3. the loading layer and the loading card/pet keep the same DOM nodes
- *      through the handoff (no remount into another subtree);
- *   4. the handoff eventually unmounts the loading layer and lands the HUD at
- *      opacity 1 while `reportOverlayContent(true)` stayed true throughout;
+ *   1. the loading card is present, effectively visible and painted on the
+ *      loading payload;
+ *   2. every sampled frame has visible content measured by EFFECTIVE opacity
+ *      (the element's own computed opacity multiplied through every ancestor),
+ *      never by the container alone;
+ *   3. the loading card, its pet canvas and the loading layer keep the same DOM
+ *      nodes through the handoff (no remount into another subtree);
+ *   4. a POPULATED production HUD module (the chrome ability frame) becomes
+ *      effectively visible while the loading card is still painted, and ends
+ *      at opacity 1; the loading layer eventually unmounts;
  *   5. reduced motion disables both opacity transitions and finishes fast.
  *
- * No build is required: the page is bundled from source and needs no CSS.
- * Run `npm run verify:real-game` (it invokes this) or `node scripts/verify-overlay-handoff.mjs`.
+ * No `npm run build` needed: the page is bundled from source.
+ * Run `npm run verify:overlay-handoff` (also invoked by verify:real-game).
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,6 +33,12 @@ import electronPath from 'electron';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const nodeRequire = createRequire(path.join(root, 'package.json'));
+
+let failures = 0;
+const ok = (cond, msg) => {
+  console.log(`${cond ? 'ok' : 'FAIL'} ${msg}`);
+  if (!cond) failures += 1;
+};
 
 /**
  * Bare imports are resolved with Node's own resolver: this machine has a Yarn
@@ -48,24 +58,14 @@ const nodeModulesPlugin = {
     });
   },
 };
-let failures = 0;
-const ok = (cond, msg) => {
-  console.log(`${cond ? 'ok' : 'FAIL'} ${msg}`);
-  if (!cond) failures += 1;
-};
-
-const cssStub = {
-  name: 'css-stub',
-  setup(build) {
-    build.onResolve({ filter: /\.css$/ }, (args) => ({ path: args.path, namespace: 'css-stub' }));
-    build.onLoad({ filter: /.*/, namespace: 'css-stub' }, () => ({ contents: '', loader: 'js' }));
-  },
-};
 
 // The driver runs inside the page: it defines the fake electron API before
 // React mounts, feeds the real overlay-update listener, samples the DOM every
 // animation frame and parks the result on window.__hudDomResult.
 const entry = `
+import './src/index.css';
+import './src/app/tokens.css';
+import './src/overlay/overlay-theme.css';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { OverlayApp } from './src/overlay/OverlayApp';
@@ -113,6 +113,7 @@ page.electronAPI = {
       displayWidth: 1280,
       displayHeight: 800,
       slot: { id: 'slot-center', originX: 0, originY: 0, moduleIds: ['frames', 'mayhem', 'vision', 'buy'], stickerIds: [], mode: 'locked' },
+      hudModules: { sums: true, gank: true, vision: true, buy: true, action: true, mayhem: false, frames: true },
       pet: {},
     }),
   getCatalog: () =>
@@ -157,15 +158,54 @@ const frames = (n = 1) =>
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const layerEl = () => document.querySelector('[data-ov-loading-layer]') as HTMLElement | null;
 const hudEl = () => document.querySelector('[data-ov-hud-root]') as HTMLElement | null;
-const opacityOf = (el: HTMLElement | null) => (el ? Number(getComputedStyle(el).opacity) : null);
-const sample = () => ({
-  layer: !!layerEl(),
-  hud: !!hudEl(),
-  layerOpacity: opacityOf(layerEl()),
-  hudOpacity: opacityOf(hudEl()),
-  layerTransition: layerEl() ? layerEl()!.style.transition || '' : '',
-  hudTransition: hudEl() ? hudEl()!.style.transition || '' : '',
-});
+const cardEl = () => document.querySelector('[data-ov-loading-layer] .ov-loading-card') as HTMLElement | null;
+const petEl = () => document.querySelector('[data-ov-loading-layer] canvas') as HTMLElement | null;
+const hudModuleEl = () =>
+  document.querySelector('[data-ov-hud-root] .chrome-frame-ability') as HTMLElement | null;
+
+// The only honest visibility measure: the element's own opacity times every
+// ancestor's, with hidden/none ancestors collapsing to zero.
+const effectiveOpacity = (el: HTMLElement | null): number => {
+  if (!el) return 0;
+  let value = 1;
+  let node: HTMLElement | null = el;
+  while (node && node.nodeType === 1) {
+    const style = getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return 0;
+    const own = Number(style.opacity);
+    value *= Number.isFinite(own) ? own : 1;
+    node = node.parentElement;
+  }
+  return value;
+};
+const paintBox = (el: HTMLElement | null) => {
+  if (!el || !el.isConnected) return null;
+  const rect = el.getBoundingClientRect();
+  if (!el.getClientRects().length || rect.width <= 0.5 || rect.height <= 0.5) return null;
+  return { w: Number(rect.width.toFixed(1)), h: Number(rect.height.toFixed(1)) };
+};
+const round3 = (value: number) => Number(value.toFixed(3));
+
+const sample = () => {
+  const layer = layerEl();
+  const hud = hudEl();
+  const card = cardEl();
+  const module = hudModuleEl();
+  return {
+    layer: !!layer,
+    hud: !!hud,
+    layerOpacity: layer ? round3(effectiveOpacity(layer)) : null,
+    hudOpacity: hud ? round3(effectiveOpacity(hud)) : null,
+    layerTransition: layer ? layer.style.transition || '' : '',
+    hudTransition: hud ? hud.style.transition || '' : '',
+    cardPresent: !!card,
+    cardEffective: card ? round3(effectiveOpacity(card)) : null,
+    cardBox: card ? paintBox(card) : null,
+    modulePresent: !!module,
+    moduleEffective: module ? round3(effectiveOpacity(module)) : null,
+    moduleBox: module ? paintBox(module) : null,
+  };
+};
 
 const pet = { enabled: true };
 const loadingSlot = { source: 'gameflow-session', side: 'blue', index: 0, teamSize: 5 };
@@ -193,7 +233,14 @@ const inGamePayload = {
   mapId: 12,
   queueId: 450,
   championId: 103,
-  localPlayer: { championName: 'Ahri', level: 3, isDead: false, items: [], position: 'MIDDLE', scores: { kills: 0, deaths: 0, assists: 0 } },
+  localPlayer: {
+    championName: 'Ahri',
+    level: 3,
+    isDead: false,
+    items: [],
+    position: 'MIDDLE',
+    scores: { kills: 0, deaths: 0, assists: 0 },
+  },
   enemies: [],
   allies: [],
   pet,
@@ -207,11 +254,13 @@ async function run() {
     if (!pushUpdate) throw new Error('OverlayApp never subscribed to overlay updates');
     reports.length = 0;
     pushUpdate(loadingPayload);
-    await frames(6);
+    await frames(8);
     result.loading = sample();
-    result.cardPresent = !!document.querySelector('.ov-loading-card');
-    const cardNode = document.querySelector('.ov-loading-card');
+    const cardNode = cardEl();
+    const petNode = petEl();
     const initialLayerNode = layerEl();
+    result.cardPresentAtStart = !!cardNode;
+    result.petPresentAtStart = !!petNode;
     result.layerPresentAtStart = !!initialLayerNode;
 
     pushUpdate(inGamePayload);
@@ -222,7 +271,8 @@ async function run() {
       result.samples.push({
         t: Math.round(performance.now() - started),
         ...sample(),
-        sameCardNode: cardNode ? cardNode.isConnected : false,
+        sameCardNode: cardNode ? cardEl() === cardNode : false,
+        samePetNode: petNode ? petEl() === petNode : false,
         sameLayerNode: initialLayerNode ? layerEl() === initialLayerNode : false,
       });
       if (!reduced && result.samples.length > 20 && !layerEl()) break;
@@ -230,6 +280,7 @@ async function run() {
     await frames(3);
     result.end = sample();
     result.cardNodesStillConnected = cardNode ? cardNode.isConnected : false;
+    result.petNodesStillConnected = petNode ? petNode.isConnected : false;
   } catch (error) {
     result.error = String(error);
   }
@@ -246,23 +297,32 @@ try {
     stdin: { contents: entry, resolveDir: root, sourcefile: 'handoff-entry.tsx', loader: 'tsx' },
     bundle: true,
     write: false,
+    outfile: 'handoff-bundle.js',
     format: 'iife',
     platform: 'browser',
     jsx: 'automatic',
+    loader: { '.css': 'css' },
     define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env.BASE_URL': '"/"' },
-    plugins: [nodeModulesPlugin, cssStub],
+    plugins: [nodeModulesPlugin],
     logLevel: 'silent',
   });
 } catch (error) {
   console.error('could not bundle OverlayApp:', String(error));
   process.exit(1);
 }
-const code = bundle.outputFiles[0].text;
+const js = bundle.outputFiles.find((file) => file.path.endsWith('.js'))?.text || '';
+const css = bundle.outputFiles.find((file) => file.path.endsWith('.css'))?.text || '';
+if (!js || !css) {
+  console.error('the harness bundle is missing its JS or production CSS');
+  process.exit(1);
+}
+
 const pageHtml = (reduced) => `<!doctype html>
 <html lang="en" class="overlay-root"><head><meta charset="UTF-8" />
+<style>${css}</style>
 <style>html, body { margin: 0; background: #101014; }</style></head>
 <body><script>window.__HANDOFF_REDUCED = ${reduced ? 'true' : 'false'};</script>
-<script>${code}</script></body></html>`;
+<script>${js}</script></body></html>`;
 
 const host = path.join(root, 'scripts', 'hud-skins-dom-main.cjs');
 
@@ -298,23 +358,36 @@ function checkNormal(result) {
     ok(false, `overlay page mounted and drove a handoff (${result?.error || 'no result'})`);
     return;
   }
-  ok(!!result.loading && result.cardPresent, 'the loading card is on screen during the load');
-  ok(result.loading.layerOpacity === 1 && result.loading.hud === false, 'the loading layer is opaque and the HUD is not drawn yet');
+  ok(!!result.loading && result.cardPresentAtStart, 'the loading card is on screen during the load');
+  ok(!!result.petPresentAtStart, 'the loading pet canvas is on screen during the load');
+  ok(
+    result.loading.cardEffective > 0.99 && !!result.loading.cardBox,
+    `the loading card is effectively visible and painted (${result.loading.cardEffective}, ${JSON.stringify(result.loading.cardBox)})`
+  );
+  ok(result.loading.hud === false, 'the HUD is not drawn during the load');
   const samples = result.samples || [];
   ok(samples.length >= 5, `the handoff was sampled frame by frame (${samples.length} frames)`);
-  const crossfade = samples.filter((s) => s.layer && s.hud);
-  ok(crossfade.length > 0, 'the loading layer and the HUD overlap during the handoff');
-  const visibleGaps = samples.filter(
-    (s) => !(s.layer && (s.layerOpacity ?? 0) > 0.5) && !(s.hud && (s.hudOpacity ?? 0) > 0.5)
+  const crossfade = samples.filter((s) => (s.cardEffective || 0) > 0.2 && (s.moduleEffective || 0) > 0.2);
+  ok(crossfade.length > 0, 'a populated HUD module and the loading card are both effectively visible during the handoff');
+  const gaps = samples.filter(
+    (s) => Math.max(s.cardEffective || 0, s.moduleEffective || 0) <= 0.05
   );
-  ok(visibleGaps.length === 0, `content is visible at every handoff frame (gaps=${visibleGaps.length})`);
-  const remounted = samples.filter((s) => s.layer && !s.sameCardNode);
-  ok(remounted.length === 0, `the loading card is never remounted during the handoff (remounts=${remounted.length})`);
+  ok(gaps.length === 0, `effective content is visible at every handoff frame (gaps=${gaps.length})`);
+  const cardRemounts = samples.filter((s) => s.layer && !s.sameCardNode);
+  ok(cardRemounts.length === 0, `the loading card is never remounted during the handoff (remounts=${cardRemounts.length})`);
+  const petRemounts = samples.filter((s) => s.layer && !s.samePetNode);
+  ok(petRemounts.length === 0, `the pet canvas node is retained across loading → handoff (remounts=${petRemounts.length})`);
   const layerReplaced = samples.filter((s) => s.layer && !s.sameLayerNode);
   ok(layerReplaced.length === 0, 'the loading layer keeps one DOM node until it unmounts');
+  const moduleWithoutBox = samples.filter((s) => s.modulePresent && !s.moduleBox);
+  ok(moduleWithoutBox.length === 0, `the populated HUD module paints a real box every frame (missing=${moduleWithoutBox.length})`);
   ok(result.end && !result.end.layer, 'the loading layer unmounts after the fade');
-  ok(result.end && result.end.hudOpacity === 1, 'the HUD ends at opacity 1');
-  ok(!result.cardNodesStillConnected, 'the loading card is gone once the handoff finishes');
+  ok(result.end && !result.end.cardPresent, 'the loading card is gone once the handoff finishes');
+  ok(
+    result.end && result.end.modulePresent && result.end.moduleEffective >= 0.99 && !!result.end.moduleBox,
+    `the populated HUD module ends effectively visible at opacity 1 (${result.end?.moduleEffective})`
+  );
+  ok(!result.cardNodesStillConnected && !result.petNodesStillConnected, 'the loading card/pet are unmounted once the handoff finishes');
   ok((result.reported || []).length > 0 && (result.reported || []).every(Boolean), 'content stays reported through the whole handoff');
   ok(samples.some((s) => /200ms/.test(s.hudTransition || '')), 'the HUD fades in over 200 ms');
   ok(samples.some((s) => /250ms/.test(s.layerTransition || '')), 'the loading layer fades out over 250 ms');
@@ -326,11 +399,16 @@ function checkReduced(result) {
     return;
   }
   const samples = result.samples || [];
-  const done = samples.find((s) => !s.layer && s.hud && s.hudOpacity === 1);
+  const done = samples.find((s) => !s.layer && s.moduleEffective >= 0.99);
   ok(!!done && done.t <= 200, `reduced motion finishes the handoff fast (${done ? done.t : 'never'} ms)`);
   const transitions = samples.filter((s) => s.layer && s.hud && (s.hudTransition || s.layerTransition));
   ok(transitions.length === 0, 'reduced motion disables both opacity transitions');
-  ok(result.end && !result.end.layer && result.end.hudOpacity === 1, 'reduced motion still lands on the HUD at opacity 1');
+  const gaps = samples.filter((s) => Math.max(s.cardEffective || 0, s.moduleEffective || 0) <= 0.05);
+  ok(gaps.length === 0, `effective content is visible at every reduced-motion frame (gaps=${gaps.length})`);
+  ok(
+    result.end && !result.end.layer && result.end.moduleEffective >= 0.99,
+    `reduced motion still lands on the HUD at opacity 1 (${result.end?.moduleEffective})`
+  );
 }
 
 console.log('--- verify:overlay-handoff: normal fade ---');

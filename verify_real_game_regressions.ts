@@ -264,6 +264,11 @@ async function main(): Promise<void> {
     ok(ps1.includes('Capture-PrimaryScreen'), 'the ps1 fallback captures through one primary-screen helper');
     ok(!/Cursor\]::Position/.test(ps1), 'the fallback never follows the cursor to another monitor');
     ok(
+      /-CropLeft \$rx -CropTop \$ry -CropWidth \$rw -CropHeight \$rh/.test(ps1),
+      'the ps1 applies the offer-band crop after the full primary capture'
+    );
+    ok(ps1.includes('CropWidth') && ps1.includes('Clone('), 'the crop runs on the masked full frame');
+    ok(
       /isGameProcess\s*=\s*\$proc\.ProcessName\s*-match\s*'\^League of Legends/.test(ps1),
       'the window finder also accepts the League of Legends process name'
     );
@@ -276,7 +281,8 @@ async function main(): Promise<void> {
 
     // The pure mirror of the ps1 arithmetic, with a fake two-monitor layout:
     // primary 1920x1080 at the origin, secondary 2560x1440 at x=1920, cursor on
-    // the secondary. The fallback must still be the primary's FULL bounds.
+    // the secondary. The fallback captures the primary's FULL bounds, masks
+    // there, then crops the offer band relative to the primary.
     let region: typeof import('./src/logic/mayhem/captureRegion') | null = null;
     try {
       region = await import('./src/logic/mayhem/captureRegion');
@@ -286,24 +292,36 @@ async function main(): Promise<void> {
     if (region) {
       const primary = { x: 0, y: 0, width: 1920, height: 1080 };
       const secondary = { x: 1920, y: 0, width: 2560, height: 1440 };
-      const fallbackRegion = region.primaryFallbackRegion(primary, secondary);
-      ok(
-        fallbackRegion.left === 0 &&
-          fallbackRegion.top === 0 &&
-          fallbackRegion.width === primary.width &&
-          fallbackRegion.height === primary.height,
-        'a missing game window captures the primary screen, not the cursor monitor'
-      );
-      ok(
-        fallbackRegion.width === primary.width,
-        'the fallback is the full screen, not a fractional crop'
-      );
-      const mask = { x: 500, y: 300, width: 400, height: 200 };
-      const local = region.screenRectToCapture(mask, fallbackRegion);
-      ok(
-        local.left === 500 && local.top === 300 && local.width === 400 && local.height === 200,
-        'masks are translated in the primary-screen capture space'
-      );
+      const fallbackCapture = (region as Partial<typeof region>).primaryFallbackCapture;
+      ok(typeof fallbackCapture === 'function', 'the capture mirror exposes the full-screen capture + crop');
+      if (typeof fallbackCapture === 'function') {
+        const fallback = fallbackCapture(primary, secondary);
+        ok(
+          fallback.capture.left === 0 &&
+            fallback.capture.top === 0 &&
+            fallback.capture.width === primary.width &&
+            fallback.capture.height === primary.height,
+          'a missing game window captures the primary screen, not the cursor monitor'
+        );
+        ok(
+          fallback.crop.left === 153 &&
+            fallback.crop.top === 194 &&
+            fallback.crop.width === 1612 &&
+            fallback.crop.height === 669,
+          `the fallback crops the offer band relative to the primary screen (${fallback.crop.left},${fallback.crop.top} ${fallback.crop.width}x${fallback.crop.height})`
+        );
+        ok(
+          fallbackCapture(primary, secondary).crop.left ===
+            fallbackCapture(primary, { x: 0, y: 0, width: 1280, height: 720 }).crop.left,
+          'the crop ignores which monitor the cursor is on'
+        );
+        const mask = { x: 500, y: 300, width: 400, height: 200 };
+        const local = region.screenRectToCapture(mask, fallback.capture);
+        ok(
+          local.left === 500 && local.top === 300 && local.width === 400 && local.height === 200,
+          'masks are translated in the full primary-screen capture space'
+        );
+      }
       const windowRegion = region.fractionalOfferRegion({ x: 100, y: 200, width: 1000, height: 800 });
       ok(
         windowRegion.left === 180 &&
@@ -493,6 +511,51 @@ async function main(): Promise<void> {
       /* ignore */
     }
     ok(calls.show === 1, 'clearing a hide on a window that is not shown still shows it');
+
+    // Native presenter: LIVE is not VISIBLE. A healthy-but-hidden presenter
+    // must be restored at match start, exactly like a hidden Electron window.
+    let overlayWindowModule: typeof import('./electron/overlay-window') | null = null;
+    try {
+      overlayWindowModule = await import('./electron/overlay-window');
+    } catch (error) {
+      console.error('could not import electron/overlay-window:', String(error));
+    }
+    const surfaceShown = overlayWindowModule?.overlaySurfaceShown;
+    ok(typeof surfaceShown === 'function', 'overlay-window exposes the surface shown-state');
+    if (typeof surfaceShown === 'function') {
+      const liveHidden = {
+        nativeLocked: true,
+        nativeAlive: true,
+        nativeShown: false,
+        electronShown: false,
+      };
+      ok(
+        surfaceShown(liveHidden) === false,
+        'a live-but-hidden native surface is NOT treated as shown'
+      );
+      ok(
+        surfaceShown({ ...liveHidden, nativeShown: true }) === true,
+        'a shown native surface counts as shown'
+      );
+      ok(
+        surfaceShown({ ...liveHidden, nativeAlive: false, nativeShown: true }) === false,
+        'a dead native surface is not shown'
+      );
+      const restored = { show: 0 };
+      const nativeDeps = {
+        isShown: () => surfaceShown(liveHidden),
+        show: () => {
+          restored.show += 1;
+        },
+        hide: () => {},
+        broadcast: () => {},
+      };
+      // Match start: the previous match left the user-hidden flag set and the
+      // presenter alive but hidden.
+      setOverlayUserHidden(true, { ...nativeDeps, isShown: () => true });
+      setOverlayUserHidden(false, nativeDeps);
+      ok(restored.show === 1, 'match start restores a live-but-hidden native surface');
+    }
 
     const monitor = fs.readFileSync('electron/game-monitor.ts', 'utf8');
     const begin = monitor.slice(monitor.indexOf('function beginMatch'), monitor.indexOf('function resolveMatchQueueAfterStart'));

@@ -347,6 +347,59 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log('--- fallback frames: offers display, picks never count ---');
+  {
+    // No game window matched, so the capture is the primary-screen fallback.
+    // Offers on it are real enough to show, but the frame cannot prove the
+    // game was on top, so the pick counter must ignore it entirely.
+    const fallbackOffers = frame(['jeweled_gauntlet', 'giant_slayer', 'apex_inventor'], {
+      fallback: true,
+    });
+    const fallbackEmpty = frame([], { fallback: true });
+    const state = createMayhemMonitorState();
+    const first = await runMayhemMonitorScan(
+      state,
+      input(UNKNOWN_ARAM, 1_000_000),
+      async () => fallbackOffers
+    );
+    ok(first.scanned && first.hudAction === 'show', 'a fallback offer frame displays the offers');
+    ok(first.state.displayIds.length === 3, `the fallback roll is shown (${first.state.displayIds.join(',')})`);
+    const second = await runMayhemMonitorScan(
+      first.state,
+      input(UNKNOWN_ARAM, 1_001_000),
+      async () => fallbackOffers
+    );
+    ok(second.scanned && second.hudAction === 'show', 'successive fallback offer frames keep the panel up');
+    ok(second.counted === 0 && second.state.counter.picksTaken === 0, 'fallback offer frames never count a pick');
+    const cleared = await runMayhemMonitorScan(
+      second.state,
+      input(UNKNOWN_ARAM, 1_002_000),
+      async () => fallbackEmpty
+    );
+    ok(cleared.hudAction === 'purge', 'an empty fallback frame after offers purges the panel (visibility rule)');
+    ok(cleared.state.displayIds.length === 0, 'the purged fallback roll leaves no display ids');
+    const stillCleared = await runMayhemMonitorScan(
+      cleared.state,
+      input(UNKNOWN_ARAM, 1_003_000),
+      async () => fallbackEmpty
+    );
+    ok(
+      stillCleared.counted === 0 && stillCleared.state.counter.picksTaken === 0,
+      'empty fallback frames never count a pick'
+    );
+    ok(stillCleared.state.counter.offerScans === 0, 'fallback frames never feed the offer streak');
+
+    // Control: the identical sequence with foreground frames still counts one
+    // pick, so the fallback assertions above are not vacuous.
+    const control = await drive(createMayhemMonitorState(), UNKNOWN_ARAM, [
+      frame(['a', 'b']),
+      frame(['a', 'b']),
+      frame([]),
+      frame([]),
+    ]);
+    ok(control.counted === 1, 'the same sequence with foreground frames still counts one pick');
+  }
+
   console.log('--- real adapter: single high-confidence offer across scans ---');
   {
     // The adapter asks for two matches, so a one-card frame yields no display

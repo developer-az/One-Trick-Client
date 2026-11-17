@@ -1313,12 +1313,35 @@ export interface OverlayUserHiddenDeps {
     broadcast: () => void;
 }
 
+/**
+ * "Is the overlay actually on screen?" A live native presenter is not enough:
+ * a healthy presenter can be hidden. Electron visibility is its own signal.
+ */
+export interface OverlaySurfaceProbe {
+    /** The native presenter is the active surface (locked mode). */
+    nativeLocked: boolean;
+    /** The presenter process/socket is alive. */
+    nativeAlive: boolean;
+    /** The presenter was told to show (the actual native visibility). */
+    nativeShown: boolean;
+    /** Any Electron overlay window is visible. */
+    electronShown: boolean;
+}
+
+export function overlaySurfaceShown(probe: OverlaySurfaceProbe): boolean {
+    if (probe.nativeLocked) return probe.nativeAlive && probe.nativeShown;
+    return probe.electronShown;
+}
+
 function defaultUserHiddenDeps(): OverlayUserHiddenDeps {
     return {
-        isShown: () => {
-            if (isNativeLocked()) return !!nativeSurface && nativeSurface.isLive();
-            return overlayWindows().some((win) => safeCall(() => win.isVisible()) === true);
-        },
+        isShown: () =>
+            overlaySurfaceShown({
+                nativeLocked: isNativeLocked(),
+                nativeAlive: !!nativeSurface && nativeSurface.isLive(),
+                nativeShown: !!nativeSurface && nativeSurface.isShown(),
+                electronShown: overlayWindows().some((win) => safeCall(() => win.isVisible()) === true),
+            }),
         show: showOverlay,
         hide: hideOverlay,
         broadcast: broadcastOverlayMeta,
