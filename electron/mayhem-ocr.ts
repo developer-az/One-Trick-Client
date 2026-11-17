@@ -289,10 +289,10 @@ export async function detectMayhemOffers(
       overlayLog('ocr-black-frame', { reason: 'exclusive-fullscreen-or-hidden-window' });
     }
     // A foreground read is only trusted when the game window itself was
-    // captured. A fallback (no game window matched) captured the full primary
-    // screen: usable, but it cannot prove what was on top. Assume foreground
-    // for manual scans; the counter refuses to count picks from a fallback
-    // frame (see runMayhemMonitorScan).
+    // captured. A fallback (no game window matched) captured the primary screen
+    // and cropped its offer band: usable, but it cannot prove what was on top.
+    // Assume foreground for manual scans; the counter refuses to count picks
+    // from a fallback frame (see runMayhemMonitorScan).
     const foreground = parsed.fallback
       ? true
       : parsed.target

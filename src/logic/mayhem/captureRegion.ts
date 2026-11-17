@@ -116,3 +116,26 @@ export function screenRectToCapture(rect: ScreenBounds, capture: CaptureRegion):
     height: rect.height,
   };
 }
+
+/**
+ * Mirror of the ps1's `ConvertTo-CropRect`: a crop rect in screen coordinates
+ * translated into the local pixels of a bitmap captured at `capture`, then
+ * clipped to the bitmap. The ps1 negates nothing and clamps at zero, so a crop
+ * that starts above/left of the capture keeps the bitmap's origin, and a crop
+ * that runs past the bitmap's edge is shrunk to fit.
+ */
+export function cropRectToBitmap(
+  crop: CaptureRegion,
+  capture: CaptureRegion,
+  bitmapWidth: number,
+  bitmapHeight: number
+): CaptureRegion {
+  const left = Math.max(0, crop.left - capture.left);
+  const top = Math.max(0, crop.top - capture.top);
+  return {
+    left,
+    top,
+    width: Math.min(crop.width, bitmapWidth - left),
+    height: Math.min(crop.height, bitmapHeight - top),
+  };
+}

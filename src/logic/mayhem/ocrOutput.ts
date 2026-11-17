@@ -20,8 +20,9 @@ export interface MayhemOcrOutput {
   /** The game window was not found at all. */
   noTarget: boolean;
   /**
-   * No game window matched, so the full primary screen was captured instead.
-   * The read is still usable, but it cannot prove what was on top.
+   * No game window matched, so the primary screen was captured and its offer
+   * band cropped out. The read is still usable, but it cannot prove what was
+   * on top.
    */
   fallback: boolean;
 }

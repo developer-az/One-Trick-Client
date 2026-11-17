@@ -162,6 +162,35 @@ function Test-BlackFrame {
   return ($dark / $samples) -ge 0.98
 }
 
+# A crop rect given in screen coordinates, translated into the local pixels of
+# the bitmap captured at $CaptureLeft/$CaptureTop and clipped to that bitmap.
+# The crop arguments name the area to keep; the capture origin is where the
+# bitmap starts, so the local offset is the difference, never the raw value.
+# Pure: no bitmap is touched, so the verifier runs this straight from the AST.
+# verify_ocr_geometry_actual.ts exercises it with positive and negative origins.
+function ConvertTo-CropRect {
+  param(
+    [int]$CropLeft,
+    [int]$CropTop,
+    [int]$CropWidth,
+    [int]$CropHeight,
+    [int]$CaptureLeft,
+    [int]$CaptureTop,
+    [int]$BitmapWidth,
+    [int]$BitmapHeight
+  )
+  $cx = [Math]::Max(0, $CropLeft - $CaptureLeft)
+  $cy = [Math]::Max(0, $CropTop - $CaptureTop)
+  $cw = [Math]::Min($CropWidth, $BitmapWidth - $cx)
+  $ch = [Math]::Min($CropHeight, $BitmapHeight - $cy)
+  return [pscustomobject]@{
+    X = $cx
+    Y = $cy
+    Width = $cw
+    Height = $ch
+  }
+}
+
 function Capture-Region {
   param(
     [int]$Left,
@@ -188,12 +217,12 @@ function Capture-Region {
   if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
     # Crop AFTER capturing and masking the whole frame: the mask rects already
     # live in $Left/$Top screen space, then the offer band is cut out.
-    $cx = [Math]::Max(0, $CropLeft - $Left)
-    $cy = [Math]::Max(0, $CropTop - $Top)
-    $cw = [Math]::Min($CropWidth, $bmp.Width - $cx)
-    $ch = [Math]::Min($CropHeight, $bmp.Height - $cy)
-    if ($cw -gt 0 -and $ch -gt 0) {
-      $rect = New-Object System.Drawing.Rectangle $cx, $cy, $cw, $ch
+    $crop = ConvertTo-CropRect -CropLeft $CropLeft -CropTop $CropTop `
+      -CropWidth $CropWidth -CropHeight $CropHeight `
+      -CaptureLeft $Left -CaptureTop $Top `
+      -BitmapWidth $bmp.Width -BitmapHeight $bmp.Height
+    if ($crop.Width -gt 0 -and $crop.Height -gt 0) {
+      $rect = New-Object System.Drawing.Rectangle $crop.X, $crop.Y, $crop.Width, $crop.Height
       $out = $bmp.Clone($rect, $bmp.PixelFormat)
     }
   }
@@ -281,8 +310,9 @@ if ($CaptureScreen) {
         -BoundsWidth $target.Width -BoundsHeight $target.Height -OutPath $ImagePath
       $captured = $true
     } else {
-      # No game window matched: capture the full primary screen (as the early
-      # builds did) and mark the frame as a fallback, never as no-target.
+      # No game window matched: capture the primary screen's full bounds (as the
+      # early builds did), then cut the offer band from it, and mark the frame as
+      # a fallback, never as no-target.
       Write-Marker 'FALLBACK'
     }
   }
