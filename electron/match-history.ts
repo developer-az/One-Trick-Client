@@ -17,6 +17,8 @@ export interface MatchSummary {
     at: number;
     durationSec: number;
     queueId: number;
+    /** LCU map id (12 = Howling Abyss). */
+    mapId?: number;
     championId: number;
     win: boolean;
     kills: number;
@@ -56,15 +58,44 @@ interface RawGame {
     gameCreation?: number;
     gameDuration?: number;
     queueId?: number;
+    mapId?: number;
     participants?: RawParticipant[];
     participantIdentities?: Array<{ participantId?: number; player?: { puuid?: string } }>;
 }
 
 /** Summoner's Rift queues: draft, ranked solo/flex, blind, quickplay, swiftplay. */
 export const RIFT_QUEUES = new Set([400, 420, 430, 440, 480, 490]);
+/** Classic ARAM and ARAM Mayhem queues. */
+export const ARAM_HISTORY_QUEUES = new Set([450, 100, 2400]);
+/** Howling Abyss map id — catches Mayhem queues the client has not named yet. */
+export const HOWLING_ABYSS_MAP_ID = 12;
 /** Games shorter than this were remakes. */
 const MIN_DURATION_SEC = 300;
 const SMITE = 11;
+
+/**
+ * Which games a history read keeps. The shared `getMatchHistory` (Stats, Home
+ * form, automatic main-champion pick, draft) stays Rift-only exactly as its
+ * copy says; only the loading-card summaries widen to the ARAM family so the
+ * card can scope its fold by the current queue.
+ */
+export type HistoryScope = 'rift' | 'aram-family';
+
+/** Rift-only: what every existing match-history consumer expects. */
+export function isRiftHistoryGame(queueId: number): boolean {
+    return RIFT_QUEUES.has(queueId);
+}
+
+/** Classic ARAM, Mayhem and any unknown queue on Howling Abyss. */
+export function isAramFamilyHistoryGame(queueId: number, mapId?: number | null): boolean {
+    if (ARAM_HISTORY_QUEUES.has(queueId)) return true;
+    return mapId === HOWLING_ABYSS_MAP_ID;
+}
+
+/** The loading card's wider window: Rift plus the whole ARAM family. */
+export function isSupportedHistoryGame(queueId: number, mapId?: number | null): boolean {
+    return isRiftHistoryGame(queueId) || isAramFamilyHistoryGame(queueId, mapId);
+}
 
 export function roleOf(p: RawParticipant | undefined): MatchSummary['role'] {
     const lane = (p?.timeline?.lane || '').toUpperCase();
@@ -102,6 +133,7 @@ export function summarize(game: RawGame, puuid: string | null): MatchSummary | n
         at: game.gameCreation ?? 0,
         durationSec: seconds,
         queueId: game.queueId ?? 0,
+        mapId: typeof game.mapId === 'number' ? game.mapId : undefined,
         championId: me.championId,
         win: !!me.stats?.win,
         kills: me.stats?.kills ?? 0,
@@ -175,22 +207,93 @@ function saveCacheSoon(): void {
 }
 
 let inFlight: Promise<MatchSummary[]> | null = null;
+/**
+ * Summaries-only requests keep their own in-flight slot. The champ-select
+ * prefetch must never join another caller's in-flight detail fetch (it would
+ * inherit per-game requests for games it does not need), and the loading path
+ * must never join either — it reads the cache the prefetch fills.
+ */
+interface SummariesInFlight {
+    /** The champ-select session that started it; undefined for a session-less caller. */
+    session: number | undefined;
+    promise: Promise<MatchSummary[]>;
+}
+let summariesInFlight: SummariesInFlight | null = null;
+
+/** LCU transport seam: production is `makeLCURequest`, tests inject a fake. */
+export type LcuRequest = (
+    method: string,
+    endpoint: string,
+    body?: unknown,
+    timeoutMs?: number
+) => Promise<unknown>;
 
 /**
  * Up to `count` recent Summoner's Rift games, newest first. Enemy details are
  * filled for at most `detailLimit` games per call so the first load stays quick.
+ * `request` is a test seam for the LCU transport.
  */
-export function getMatchHistory(opts: { count?: number; detailLimit?: number; canFetchDetails: () => boolean }): Promise<MatchSummary[]> {
+export function getMatchHistory(opts: {
+    count?: number;
+    detailLimit?: number;
+    canFetchDetails: () => boolean;
+    request?: LcuRequest;
+}): Promise<MatchSummary[]> {
     if (inFlight) return inFlight;
-    inFlight = load(opts).finally(() => {
+    inFlight = load(
+        { count: opts.count, detailLimit: opts.detailLimit, canFetchDetails: opts.canFetchDetails },
+        opts.request,
+        'rift'
+    ).finally(() => {
         inFlight = null;
     });
     return inFlight;
 }
 
-async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?: number; detailLimit?: number; canFetchDetails: () => boolean }): Promise<MatchSummary[]> {
-    await ensureLCUConnected();
-    const me = (await makeLCURequest('GET', '/lol-summoner/v1/current-summoner', undefined, 5000)) as { puuid?: string } | null;
+/**
+ * Summaries only: count games, no per-game detail requests, no joining of a
+ * detail fetch. This is the champ-select prefetch behind the loading card.
+ *
+ * `session` scopes the in-flight slot to the champ-select load that started
+ * it: a caller whose session changed (a hot requeue, a relog) must never
+ * accept a request started before its cache reset, so it starts its own page
+ * instead of joining. Two sessions can therefore have one request each, and a
+ * request is only ever handed to the session that owns it.
+ */
+export function getMatchHistorySummaries(opts: {
+    count?: number;
+    session?: number;
+    request?: LcuRequest;
+} = {}): Promise<MatchSummary[]> {
+    if (summariesInFlight && summariesInFlight.session === opts.session) {
+        return summariesInFlight.promise;
+    }
+    const entry: SummariesInFlight = { session: opts.session, promise: Promise.resolve([]) };
+    entry.promise = load(
+        {
+            count: opts.count ?? 60,
+            detailLimit: 0,
+            canFetchDetails: () => false,
+        },
+        opts.request,
+        'aram-family'
+    ).finally(() => {
+        if (summariesInFlight === entry) summariesInFlight = null;
+    });
+    summariesInFlight = entry;
+    return entry.promise;
+}
+
+async function load(
+    { count = 60, detailLimit = 25, canFetchDetails }: { count?: number; detailLimit?: number; canFetchDetails: () => boolean },
+    request: LcuRequest | undefined,
+    scope: HistoryScope
+): Promise<MatchSummary[]> {
+    // An injected transport is a complete seam (tests): no client connection,
+    // no disk cache. Production connects and caches as before.
+    const send: LcuRequest = request ?? makeLCURequest;
+    if (!request) await ensureLCUConnected();
+    const me = (await send('GET', '/lol-summoner/v1/current-summoner', undefined, 5000)) as { puuid?: string } | null;
     const puuid = me?.puuid || null;
 
     const games: RawGame[] = [];
@@ -204,7 +307,7 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
     let route = 0;
     for (let beg = 0; beg < count; ) {
         const end = Math.min(count, beg + 20) - 1;
-        const res = (await makeLCURequest('GET', `${routes[route]}?begIndex=${beg}&endIndex=${end}`, undefined, 10000).catch(
+        const res = (await send('GET', `${routes[route]}?begIndex=${beg}&endIndex=${end}`, undefined, 10000).catch(
             () => null
         )) as { games?: { games?: RawGame[] } } | null;
         const page = res?.games?.games || [];
@@ -221,10 +324,19 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
 
     const out = games
         .map((g) => summarize(g, puuid))
-        .filter((g): g is MatchSummary => !!g && RIFT_QUEUES.has(g.queueId) && g.durationSec >= MIN_DURATION_SEC)
+        .filter(
+            (g): g is MatchSummary =>
+                !!g &&
+                g.durationSec >= MIN_DURATION_SEC &&
+                (scope === 'aram-family'
+                    ? isSupportedHistoryGame(g.queueId, g.mapId)
+                    : isRiftHistoryGame(g.queueId))
+        )
         .sort((a, b) => b.at - a.at);
 
-    const cache = loadCache();
+    // Summaries only never need the detail cache (and must not touch the disk
+    // when a test injects its own transport).
+    const cache: DetailCache = detailLimit > 0 ? loadCache() : {};
     let fetched = 0;
     const applyDetail = (g: MatchSummary, info: ReturnType<typeof enemiesFrom>, allyInfo: ReturnType<typeof alliesFrom>): void => {
         cache[g.gameId] = { ...info, ...allyInfo };
@@ -255,7 +367,7 @@ async function load({ count = 60, detailLimit = 25, canFetchDetails }: { count?:
             continue;
         }
         try {
-            const full = (await makeLCURequest('GET', `/lol-match-history/v1/games/${g.gameId}`, undefined, 8000)) as RawGame | null;
+            const full = (await send('GET', `/lol-match-history/v1/games/${g.gameId}`, undefined, 8000)) as RawGame | null;
             fetched++;
             if (!full) continue;
             const info = enemiesFrom(full, puuid);

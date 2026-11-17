@@ -181,3 +181,38 @@ export function evaluateCrossMap(input: CrossMapInput): CrossMapRead {
 
   return { quality, headline, detail, notes, requiresCarrySacrifice };
 }
+
+export interface CrossMapCueInput {
+  quality: CrossMapQuality;
+  jgHot: boolean;
+  junglerName?: string;
+  cannonClock?: string;
+}
+
+/** Short HUD line for roam vs hold — verb + target + threat/clock. */
+export function crossMapCue(input: CrossMapCueInput): { label: string; detail: string } {
+  if (input.jgHot) {
+    const who = input.junglerName ? ` ${input.junglerName}` : '';
+    return {
+      label: 'Hold — jg hot',
+      detail: `Enemy jg${who} bot side — finish crash, skip river hover.`,
+    };
+  }
+  if (input.quality === 'avoid') {
+    return {
+      label: 'Hold lane',
+      detail: 'Collapse loses without carry setup — ward pit/tri instead.',
+    };
+  }
+  const clock = input.cannonClock ? ` ${input.cannonClock}` : '';
+  if (input.quality === 'strong') {
+    return {
+      label: `Crash${clock}`,
+      detail: 'Strong collapse — leave after bot wave dies.',
+    };
+  }
+  return {
+    label: `Crash${clock}`,
+    detail: 'Timed roam only if bot spells are down.',
+  };
+}

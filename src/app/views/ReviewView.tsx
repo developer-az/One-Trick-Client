@@ -86,7 +86,7 @@ export const ReviewView: React.FC = () => {
   return (
     <div className="ot-page">
       <div className="ot-page-header">
-        <h1 className="ot-page-title">Match review</h1>
+        <h1 className="ot-page-title ot-orn-title">Match review</h1>
         <p className="ot-page-sub">Every moment the live pipeline scored, oldest first.</p>
       </div>
 

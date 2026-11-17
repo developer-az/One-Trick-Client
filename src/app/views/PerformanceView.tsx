@@ -87,7 +87,7 @@ export const PerformanceView: React.FC = () => {
     return (
       <div className="ot-page">
         <div className="ot-page-header">
-          <h1 className="ot-page-title">Performance</h1>
+          <h1 className="ot-page-title ot-orn-title">Performance</h1>
         </div>
         <Card>
           <p className="ot-muted">Live performance numbers are available in the desktop app.</p>
@@ -160,7 +160,7 @@ export const PerformanceView: React.FC = () => {
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Performance</h1>
+          <h1 className="ot-page-title ot-orn-title">Performance</h1>
           <p className="ot-page-sub">What One Trick costs your PC right now. During a match it should be close to nothing.</p>
         </div>
       </div>

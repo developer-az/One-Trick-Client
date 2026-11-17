@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { getRuneIconUrl, getRuneMeta, getStyleMeta } from '../../data/runeService';
-import type { Build, DominanceMetrics, Item as BuildItem, MatchupAnalysis, RunePage } from '../../logic/pykeLogic';
-import type { ChampionProfile } from '../../logic/profiles';
+import type { Build, DominanceMetrics, Item as BuildItem, MatchupAnalysis, RunePage, Champion } from '../../logic/pykeLogic';
+import { AUTHORED_PROFILES, isAuthoredProfileId, type ChampionProfile } from '../../logic/profiles';
 import { resolveBuildOrder } from '../../logic/purchasePlan';
+import type { CatalogRole } from '../../catalog/types';
 import type { ViewId } from '../App';
 import { sendLoadout } from '../exporter';
 import { IconArrowRight, IconLoadout, IconUpload } from '../icons';
-import { isDesktop, useAppSettings } from '../hooks';
-import { Badge, Card, CardHeader, EmptyState, Item, SettingRow, Switch, type Toast } from '../ui';
+import { ROLES, isDesktop, useAppSettings } from '../hooks';
+import { Badge, Card, CardHeader, ChampionCombobox, EmptyState, Item, Portrait, SettingRow, Switch, type Toast } from '../ui';
+import { OneTrickCard } from './OneTrickCard';
 
 export interface Loadout {
   build: Build;
@@ -20,17 +22,34 @@ export const LoadoutView: React.FC<{
   profile: ChampionProfile;
   loadout: Loadout | null;
   connected: boolean;
+  champions: Champion[];
+  onSelectChampion: (champion: Champion, role: CatalogRole) => void;
+  onSelectProfile: (id: ChampionProfile['id']) => void;
   onNavigate: (view: ViewId) => void;
   onToast: (toast: Omit<Toast, 'id'>) => void;
-}> = ({ profile, loadout, connected, onNavigate, onToast }) => {
+}> = ({ profile, loadout, connected, champions, onSelectChampion, onSelectProfile, onNavigate, onToast }) => {
   const [busy, setBusy] = useState(false);
+
+  const planSection = (
+    <>
+      <PlanSection
+        profile={profile}
+        champions={champions}
+        onSelectChampion={onSelectChampion}
+        onSelectProfile={onSelectProfile}
+      />
+      <p className="text-xs ot-faint mt-4">
+        Builds and matchup notes are heuristics from champion classes and the authored doctrines, not win-rate data.
+      </p>
+    </>
+  );
 
   if (!loadout) {
     return (
       <div className="ot-page">
         <div className="ot-page-header">
           <div>
-            <h1 className="ot-page-title">Build & runes</h1>
+            <h1 className="ot-page-title ot-orn-title">Build & runes</h1>
             <p className="ot-page-sub">{profile.label}</p>
           </div>
         </div>
@@ -49,6 +68,7 @@ export const LoadoutView: React.FC<{
         <div className="mt-4 max-w-xl">
           <AutoImportCard />
         </div>
+        <div className="mt-4">{planSection}</div>
       </div>
     );
   }
@@ -66,7 +86,7 @@ export const LoadoutView: React.FC<{
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Build & runes</h1>
+          <h1 className="ot-page-title ot-orn-title">Build & runes</h1>
           <p className="ot-page-sub">
             {profile.label} into this enemy team. Hover anything to see why it was picked.
           </p>
@@ -138,6 +158,7 @@ export const LoadoutView: React.FC<{
           ) : null}
         </div>
       </div>
+      <div className="mt-4">{planSection}</div>
     </div>
   );
 };
@@ -298,5 +319,81 @@ const AutoImportCard: React.FC = () => {
         }
       />
     </Card>
+  );
+};
+
+/**
+ * Champion plan (brief K): the picker/role control and the one-trick doctrine
+ * moved here from Home, which now shows only the mockup's composition.
+ */
+const PlanSection: React.FC<{
+  profile: ChampionProfile;
+  champions: Champion[];
+  onSelectChampion: (champion: Champion, role: CatalogRole) => void;
+  onSelectProfile: (id: ChampionProfile['id']) => void;
+}> = ({ profile, champions, onSelectChampion, onSelectProfile }) => {
+  const [role, setRole] = React.useState<CatalogRole>(profile.role);
+  const profileChampion = champions.find((c) => c.id === profile.championId) || {
+    id: profile.championId,
+    name: profile.shortLabel,
+    key: String(profile.championKey),
+    tags: [],
+  };
+  const authored = isAuthoredProfileId(profile.id);
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="lg:col-span-2">
+        <CardHeader
+          title="Your champion"
+          sub="Follows your champ select pick. Pick one here to practice or plan ahead."
+        />
+        <div className="flex items-center gap-3 mb-3">
+          <Portrait champion={profileChampion} size={48} ring="gold" />
+          <div className="min-w-0">
+            <div className="ot-card-heading truncate">{profile.label}</div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              <Badge tone="gold">{profile.role}</Badge>
+              {authored ? <Badge tone="teal">Hand-tuned doctrine</Badge> : <Badge>Catalog build</Badge>}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 mb-3">
+          <div className="flex-1 min-w-[200px]">
+            <ChampionCombobox
+              champions={champions}
+              value={null}
+              onChange={(c) => c && onSelectChampion(c, role)}
+              placeholder={champions.length ? 'Search a champion' : 'Loading champions'}
+              disabled={!champions.length}
+            />
+          </div>
+          <div className="ot-segment" role="group" aria-label="Role">
+            {ROLES.map((r) => (
+              <button key={r} type="button" className={role === r ? 'is-active' : ''} onClick={() => setRole(r)}>
+                {r}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {AUTHORED_PROFILES.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className={`ot-home-authored-item ${profile.id === p.id ? 'is-active' : ''}`}
+              onClick={() => onSelectProfile(p.id)}
+              aria-pressed={profile.id === p.id}
+            >
+              <Portrait
+                champion={champions.find((c) => c.id === p.championId) || { id: p.championId, name: p.shortLabel }}
+                size={20}
+              />
+              <span className="truncate">{p.label}</span>
+            </button>
+          ))}
+        </div>
+      </Card>
+      <OneTrickCard champion={profileChampion as Champion} role={profile.role} />
+    </div>
   );
 };

@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import { championLossProfile, lossMatchupInsights } from '../../logic/lossInsights';
-import { byChampion, pct, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
+import { byChampion, pct, personalTier, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
 import { isDesktop } from '../hooks';
+import type { ViewId } from '../App';
 import { IconStats } from '../icons';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
 
@@ -17,7 +18,8 @@ export const StatsView: React.FC<{
   error: string | null;
   connected: boolean;
   onReload: () => void;
-}> = ({ champions, games, loading, error, connected, onReload }) => {
+  onNavigate?: (view: ViewId) => void;
+}> = ({ champions, games, loading, error, connected, onReload, onNavigate }) => {
   const byKey = useMemo(() => new Map(champions.map((c) => [Number(c.key), c])), [champions]);
   const rows = useMemo(() => byChampion(games || []), [games]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -36,16 +38,23 @@ export const StatsView: React.FC<{
   const header = (
     <div className="ot-page-header">
       <div>
-        <h1 className="ot-page-title">Your stats</h1>
+        <h1 className="ot-page-title ot-orn-title">Your stats</h1>
         <p className="ot-page-sub">
           From your recent Summoner's Rift games in the League client. Remakes and other modes are left out.
         </p>
       </div>
-      {isDesktop && connected ? (
-        <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
-          {loading ? 'Loading' : 'Refresh'}
-        </button>
-      ) : null}
+      <div className="flex items-center gap-2">
+        {onNavigate ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={() => onNavigate('performance')}>
+            Performance
+          </button>
+        ) : null}
+        {isDesktop && connected ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
+            {loading ? 'Loading' : 'Refresh'}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 
@@ -112,7 +121,22 @@ export const StatsView: React.FC<{
         <Stat label="Champions played" value={String(rows.length)} hint={`Most: ${byKey.get(rows[0].championId)?.name || '–'}`} />
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <Card className="mb-5">
+        <CardHeader title="Your tier list" sub="Tiers from your own match history and Wilson intervals — not global meta." />
+        <div className="flex flex-wrap gap-2 mt-2">
+          {rows.slice(0, 12).map((r) => {
+            const c = byKey.get(r.championId);
+            const tier = personalTier(r, MIN_SAMPLE);
+            return (
+              <span key={r.championId} className="ot-chip text-xs">
+                {c?.name || r.championId}: <strong>{tier}</strong>
+              </span>
+            );
+          })}
+        </div>
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2" pad={false}>
           <div className="ot-card-pad !pb-2">
             <CardHeader title="By champion" sub="Select a row, then use Matchups for enemies or allies." />

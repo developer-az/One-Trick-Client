@@ -37,8 +37,8 @@ export const LIVE_SILENCE_END_MS = 60_000;
 /** When the match clock is deep into the game, tolerate longer Live Client / LCU gaps. */
 export const LIVE_SILENCE_MIDGAME_END_MS = 180_000;
 
-/** Clock must move by more than a poll jitter before we trust that the match is still running. */
-export const LIVE_CLOCK_ADVANCE_SEC = 0.25;
+export { LIVE_CLOCK_ADVANCE_SEC, isMatchLoading, type MatchLoadingInput } from '../src/logic/matchLoading';
+import { LIVE_CLOCK_ADVANCE_SEC } from '../src/logic/matchLoading';
 
 const IN_GAME = new Set<string>(IN_GAME_PHASES);
 const TERMINAL = new Set<string>(TERMINAL_PHASES);

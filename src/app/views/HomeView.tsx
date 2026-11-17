@@ -1,209 +1,222 @@
-import React, { useState } from 'react';
-import type { CatalogRole } from '../../catalog/types';
-import { championSplashUrl } from '../../data/ddragonAssets';
+/**
+ * Home (brief K) — exactly the approved mockup's composition, nothing else:
+ *
+ *   bottom-left   eyebrow · huge Cinzel name · one facts line
+ *   bottom-right  one chrome action + caption (+ a quiet secondary action)
+ *   bottom        4-card dock (recent form, build, matchups, last game)
+ *
+ * Everything the mockup does not show lives elsewhere: the champion picker and
+ * the doctrine card are in Loadout, the overlay toggle and hotkeys in Overlay,
+ * the legal/attribution line in Profile → About.
+ */
+import React from 'react';
 import type { Champion } from '../../logic/pykeLogic';
-import { AUTHORED_PROFILES, isAuthoredProfileId, type ChampionProfile, type ProfileId } from '../../logic/profiles';
+import type { Build } from '../../logic/pykeLogic';
+import { getRuneMeta } from '../../data/runeService';
+import { byChampion, pct, record } from '../../logic/stats';
 import type { ViewId } from '../App';
-import { ROLES, isDesktop, useAppSettings, type DraftState, type LeagueState } from '../hooks';
+import type { DraftState, LeagueState } from '../hooks';
 import { IconArrowRight } from '../icons';
-import { SpellTimers } from '../SpellTimers';
 import type { LeagueStatus } from '../status';
-import { Badge, Card, CardHeader, ChampionCombobox, Pill, Portrait, SettingRow, Switch } from '../ui';
-import { OneTrickCard } from './OneTrickCard';
+import { Button } from '../ui';
 
-const STAGE_TITLE: Record<LeagueStatus['stage'], string> = {
-  preview: 'Browser preview',
-  offline: 'Waiting for League',
-  connecting: 'Connecting',
-  idle: 'Ready when you are',
-  queue: 'In queue',
-  draft: 'Champ select is live',
-  loading: 'Loading into the match',
-  game: 'Match in progress',
-  post: 'Match over',
-};
+type HomeLoadout = {
+  build: Build;
+  runes: { selectedPerkIds: number[] };
+  analysis: { winCondition?: string };
+} | null;
+
+const FORM_GAMES = 10;
+
+function clock(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 export const HomeView: React.FC<{
   league: LeagueState;
   status: LeagueStatus;
   draft: DraftState;
-  profile: ChampionProfile;
+  profile: { role: string; primaryEnemyRole: string; championId: string; championKey: number; label: string };
   champions: Champion[];
-  onSelectChampion: (champion: Champion, role: CatalogRole) => void;
-  onSelectProfile: (id: ProfileId) => void;
+  mainChampion: { id?: string | null; name?: string | null } | null;
+  games: MatchSummary[] | null;
+  loadout: HomeLoadout;
+  /** Baseline plan (build + runes) when no enemy team is known yet. */
+  plan?: { build: Build; runes: { selectedPerkIds: number[] } } | null;
   onNavigate: (view: ViewId) => void;
-}> = ({ league, status, draft, profile, champions, onSelectChampion, onSelectProfile, onNavigate }) => {
-  const { settings, update } = useAppSettings();
-  const [role, setRole] = useState<CatalogRole>(profile.role);
-  const profileChampion = champions.find((c) => c.id === profile.championId) || {
-    id: profile.championId,
-    name: profile.shortLabel,
-    key: String(profile.championKey),
-    tags: [],
-  };
-  const authored = isAuthoredProfileId(profile.id);
+}> = ({ status, draft, profile, champions, mainChampion, games, loadout, plan, onNavigate }) => {
+  const history = React.useMemo(() => games || [], [games]);
+  const championKey = Number(profile.championKey);
+  const championRow = React.useMemo(
+    () => byChampion(history).find((row) => row.championId === championKey) || null,
+    [history, championKey]
+  );
+  const overall = React.useMemo(() => record(history), [history]);
+  const form = history.slice(0, FORM_GAMES);
+  const formRecord = React.useMemo(() => record(form), [form]);
+  const lastGame = history[0] || null;
 
-  const cta =
-    status.stage === 'draft' ? (
-      <button type="button" className="ot-btn ot-btn-primary" onClick={() => onNavigate('draft')}>
-        Open champ select <IconArrowRight />
-      </button>
-    ) : status.stage === 'preview' ? (
-      <button type="button" className="ot-btn" onClick={() => onNavigate('draft')}>
-        Try the draft board <IconArrowRight />
-      </button>
-    ) : null;
+  const name = mainChampion?.name || mainChampion?.id || 'No champion';
+  const role = profile.role;
+  const gamesPlayed = championRow ? championRow.games : overall.games;
+  const winRate = championRow ? championRow.winRate : overall.winRate;
+  const facts = `${role} · ${gamesPlayed} games this season · ${championRow ? pct(winRate) : '—'} wins`;
+
+  // Build card: core count + keystone name from the real rune page.
+  const planBuild = loadout?.build || plan?.build || null;
+  const coreCount = planBuild?.core?.length ?? null;
+  const keystoneId = loadout?.runes?.selectedPerkIds?.[0] ?? plan?.runes?.selectedPerkIds?.[0];
+  const keystone = keystoneId != null ? getRuneMeta(keystoneId)?.name || '—' : null;
+
+  // Matchups card: best/worst lane opponent from your own history.
+  const opponents = React.useMemo(() => {
+    const groups = new Map<number, number[]>();
+    for (const game of history) {
+      if (!game.laneOpponent) continue;
+      const list = groups.get(game.laneOpponent) || [];
+      list.push(game.win ? 1 : 0);
+      groups.set(game.laneOpponent, list);
+    }
+    const rows = [...groups.entries()].map(([id, results]) => ({
+      id,
+      wins: results.reduce((a, b) => a + b, 0),
+      games: results.length,
+      winRate: results.reduce((a, b) => a + b, 0) / results.length,
+    }));
+    const best = rows.length ? rows.reduce((a, b) => (b.winRate > a.winRate ? b : a)) : null;
+    const worst = rows.length ? rows.reduce((a, b) => (b.winRate < a.winRate ? b : a)) : null;
+    const nameOf = (id: number) => champions.find((c) => Number(c.key) === id)?.name || 'Unknown';
+    return {
+      best: best ? { name: nameOf(best.id), line: `${best.wins}-${best.games - best.wins}` } : null,
+      worst: worst ? { name: nameOf(worst.id), line: `${worst.wins}-${worst.games - worst.wins}` } : null,
+    };
+  }, [history, champions]);
+  const focusEnemy = draft.enemy[profile.primaryEnemyRole as 'Top' | 'Jungle' | 'Mid' | 'Bot' | 'Support']?.champion;
+
+  const caption =
+    status.stage === 'draft'
+      ? 'Champ select is live'
+      : status.stage === 'game'
+        ? 'In match · overlay live'
+        : status.stage === 'idle'
+          ? `${role} · draft helper ready`
+          : status.short;
 
   return (
-    <div className="ot-page">
-      <Card className="ot-hero mb-4">
-        <div className="ot-splash" aria-hidden>
-          <img
-            src={championSplashUrl(profile.championId)}
-            alt=""
-            onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-          />
+    <div className="ot-home">
+      <section className="ot-home-hero min-w-0" aria-labelledby="ot-home-champion" data-ot-geo="hero">
+        <div className="ot-home-eyebrow">
+          <span>One Trick</span>
+          <span className="ot-home-eyebrow-sep" aria-hidden="true">
+            ·
+          </span>
+          <span className="ot-home-eyebrow-main">Your main</span>
         </div>
-        <div className="flex flex-wrap items-end justify-between gap-4 py-2">
-          <div className="min-w-0 max-w-xl">
-            <Pill tone={status.tone}>{status.short}</Pill>
-            <h1 className="ot-page-title mt-3">{STAGE_TITLE[status.stage]}</h1>
-            <p className="mt-2 ot-muted leading-relaxed">{status.detail}</p>
-            {status.next ? (
-              <p className="mt-3 text-sm">
-                <span className="ot-faint">Next: </span>
-                {status.next}
-              </p>
-            ) : null}
+        <h1 id="ot-home-champion" className="ot-home-champion ot-orn-title truncate">
+          {name}
+        </h1>
+        <p className="ot-home-facts ot-num">{facts}</p>
+      </section>
+
+      <section className="ot-home-play min-w-0" aria-label="Actions" data-ot-geo="primary">
+        <Button variant="primary" size="lg" className="ot-home-primary" onClick={() => onNavigate('loadout')}>
+          Open build
+        </Button>
+        <div className="ot-home-caption">{caption}</div>
+        <button type="button" className="ot-home-secondary" onClick={() => onNavigate('draft')}>
+          Draft helper <IconArrowRight size={12} />
+        </button>
+      </section>
+
+      <div className="ot-home-dock grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-ot-geo="dock">
+        <article className="ot-info-card" aria-labelledby="ot-home-form">
+          <h2 className="ot-info-card-head" id="ot-home-form">
+            Recent form
+          </h2>
+          <div className="ot-info-card-big ot-num">
+            {form.length ? pct(formRecord.winRate) : '—'}
+            <span className="ot-info-card-note">last {form.length || 0}</span>
           </div>
-          {cta}
-        </div>
-      </Card>
-
-      <div className="grid gap-4 lg:grid-cols-5 mb-4">
-        <Card className="lg:col-span-3">
-          <CardHeader
-            title="Your champion"
-            sub="Follows your champ select pick automatically. Set it here for practice or to plan ahead."
-          />
-          <div className="flex items-center gap-4 mb-4">
-            <Portrait champion={profileChampion} size={64} ring="gold" />
-            <div className="min-w-0">
-              <div className="ot-card-heading truncate">{profile.label}</div>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                <Badge tone="gold">{profile.role}</Badge>
-                {authored ? <Badge tone="teal">Hand-tuned doctrine</Badge> : <Badge>Catalog build</Badge>}
-              </div>
-            </div>
-          </div>
-
-          <div className="ot-sidebar-label !px-0">Hand-tuned</div>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {AUTHORED_PROFILES.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`ot-btn ot-btn-sm ${profile.id === p.id ? '!border-[color:var(--ot-gold)]' : ''}`}
-                onClick={() => onSelectProfile(p.id)}
-                aria-pressed={profile.id === p.id}
-              >
-                <Portrait champion={champions.find((c) => c.id === p.championId) || { id: p.championId, name: p.shortLabel }} size={20} />
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="ot-sidebar-label !px-0">Any champion</div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex-1 min-w-[220px]">
-              <ChampionCombobox
-                champions={champions}
-                value={null}
-                onChange={(c) => c && onSelectChampion(c, role)}
-                placeholder={champions.length ? 'Search a champion' : 'Loading champions'}
-                disabled={!champions.length}
-              />
-            </div>
-            <div className="ot-segment" role="group" aria-label="Role">
-              {ROLES.map((r) => (
-                <button key={r} type="button" className={role === r ? 'is-active' : ''} onClick={() => setRole(r)}>
-                  {r}
-                </button>
-              ))}
-            </div>
-          </div>
-        </Card>
-
-        <div className="lg:col-span-2 space-y-4">
-          <OneTrickCard champion={profileChampion as Champion} role={profile.role} />
-
-          {league.inGame && league.enemySummoners.length ? (
-            <Card>
-              <CardHeader title="Enemy summoners" sub="Click a spell when you see it used." />
-              <SpellTimers lanes={league.enemySummoners} />
-            </Card>
-          ) : null}
-
-          <Card>
-            <CardHeader title="In-game overlay" />
-            {isDesktop ? (
-              <SettingRow
-                title="Show the overlay in matches"
-                hint="Off means nothing is drawn over League."
-                control={
-                  <Switch
-                    label="Overlay"
-                    checked={!!settings?.overlayEnabled}
-                    disabled={!settings}
-                    onChange={(v) => update({ overlayEnabled: v })}
-                  />
-                }
-              />
+          <div className="ot-form-bar" role="img" aria-label={`Last ${form.length} games: ${form.map((g) => (g.win ? 'win' : 'loss')).join(', ')}`}>
+            {form.length ? (
+              form.map((g) => <span key={g.gameId} className={`ot-form-pip ${g.win ? 'is-win' : 'is-loss'}`} />)
             ) : (
-              <p className="text-sm ot-muted">Available in the desktop app.</p>
+              <span className="ot-info-card-empty">No games read yet</span>
             )}
-            <button type="button" className="ot-btn ot-btn-ghost ot-btn-sm mt-2 -ml-2" onClick={() => onNavigate('overlay')}>
-              Customise overlay <IconArrowRight />
-            </button>
-          </Card>
+          </div>
+        </article>
 
-          <Card>
-            <CardHeader title="Hotkeys" sub="Work while League has focus." />
-            <dl className="space-y-2.5 text-sm">
-              <Hotkey keys={['Page Up']} alt="Num 9" label="Enemy ADC used Flash" />
-              <Hotkey keys={['Page Down']} alt="Num 3" label="Enemy support used Flash" />
-              <Hotkey keys={['Ctrl', 'Shift', 'H']} label="Show or hide overlay" />
-              <Hotkey keys={['Ctrl', 'Shift', 'U']} label="Unlock overlay to move it" />
-            </dl>
-          </Card>
+        <article className="ot-info-card" aria-labelledby="ot-home-build">
+          <h2 className="ot-info-card-head" id="ot-home-build">
+            Build
+          </h2>
+          <div className="ot-info-row">
+            <span>Core</span>
+            <span className="ot-num">{coreCount != null ? `${coreCount} items` : 'No enemies yet'}</span>
+          </div>
+          <div className="ot-info-row">
+            <span>Runes</span>
+            <span className="truncate">{keystone || 'No enemies yet'}</span>
+          </div>
+        </article>
 
-          {draft.live ? null : (
-            <p className="text-xs ot-faint px-1 leading-relaxed">
-              Builds and matchup notes are heuristics from champion classes and the authored doctrines, not
-              win-rate data.
-            </p>
+        <article className="ot-info-card" aria-labelledby="ot-home-matchup">
+          <h2 className="ot-info-card-head" id="ot-home-matchup">
+            Matchups
+          </h2>
+          {opponents.best && opponents.worst && opponents.best.name !== opponents.worst.name ? (
+            <>
+              <div className="ot-info-row">
+                <span>Best</span>
+                <span className="truncate">
+                  vs {opponents.best.name} <span className="ot-num ot-info-card-note">{opponents.best.line}</span>
+                </span>
+              </div>
+              <div className="ot-info-row">
+                <span>Worst</span>
+                <span className="truncate">
+                  vs {opponents.worst.name} <span className="ot-num ot-info-card-note">{opponents.worst.line}</span>
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="ot-info-row">
+              <span>{focusEnemy ? 'Focus' : 'Lane focus'}</span>
+              <span className="truncate">{focusEnemy ? focusEnemy.name : profile.primaryEnemyRole}</span>
+            </div>
           )}
-        </div>
+        </article>
+
+        <article className="ot-info-card" aria-labelledby="ot-home-last">
+          <h2 className="ot-info-card-head" id="ot-home-last">
+            Last game
+          </h2>
+          {lastGame ? (
+            <>
+              <div className="ot-info-row">
+                <span className={lastGame.win ? 'ot-info-win' : 'ot-info-loss'}>{lastGame.win ? 'Victory' : 'Defeat'}</span>
+                <span className="ot-num">
+                  {lastGame.kills}/{lastGame.deaths}/{lastGame.assists}
+                </span>
+              </div>
+              <div className="ot-info-row">
+                <span>Duration</span>
+                <span className="ot-num">
+                  {clock(lastGame.durationSec)}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="ot-info-row">
+              <span>No game</span>
+              <span>—</span>
+            </div>
+          )}
+        </article>
       </div>
     </div>
   );
 };
-
-const Hotkey: React.FC<{ keys: string[]; alt?: string; label: string }> = ({ keys, alt, label }) => (
-  <div className="flex items-center justify-between gap-4">
-    <dt className="ot-muted">{label}</dt>
-    <dd className="flex gap-1 flex-none">
-      {keys.map((k) => (
-        <kbd key={k} className="ot-kbd">
-          {k}
-        </kbd>
-      ))}
-      {alt ? (
-        <>
-          <span className="ot-faint text-xs self-center px-0.5">or</span>
-          <kbd className="ot-kbd">{alt}</kbd>
-        </>
-      ) : null}
-    </dd>
-  </div>
-);

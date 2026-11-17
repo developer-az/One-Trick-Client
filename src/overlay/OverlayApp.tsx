@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   type Champion,
   type Build,
@@ -14,8 +14,7 @@ import {
 import type { JungleThreat } from '../logic/jungleLogic';
 import type { WardStatus } from '../logic/visionLogic';
 import { trackBuildProgress } from '../logic/buildProgress';
-import { catalogPriceLookup, type PriceLookup } from '../logic/purchasePlan';
-import type { OrderedBuyStep } from '../logic/purchasePlan';
+import { catalogPriceLookup, type OrderedBuyStep, type PriceLookup } from '../logic/purchasePlan';
 import {
   buildInGameCues,
   buyOrderPlanForState,
@@ -27,6 +26,7 @@ import {
   resolveAllyMidName,
   resolveAllyJungleName,
   resolveProfileId,
+  resolveChampionProfileId,
   shouldRunMayhemDismissTick,
   shouldRunOverlayClock,
   situationFromState,
@@ -45,6 +45,15 @@ import { catalogItemsById, getCatalog, subscribeCatalog, warmCatalog } from '../
 import { warmDdragonVersion } from '../data/ddragonAssets';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { DEFAULT_HUD_MODULES, normalizeHudModules, type HudModules } from './hudModules';
+import {
+  DEFAULT_HUD_SKIN_SETTINGS,
+  hudSkinVars,
+  normalizeHudSkinSettings,
+  resolveHudSkin,
+  type HudSkinSettings,
+} from './hudSkins';
+import { HudSkinChromeProvider, HudSkinOrnaments, useHudSkinChrome } from './hudSkinOrnaments';
+import './hud-skins.css';
 import { OverlayStickers } from './OverlayStickers';
 import {
   dualRailLayout,
@@ -65,6 +74,13 @@ import {
 } from '../logic/mayhem';
 import type { MayhemBundle } from '../logic/mayhem/types';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
+import { OverlayPet } from './OverlayPet';
+import { LoadingCard } from './LoadingCard';
+import { cardRect } from './loadingScreenGeometry';
+import { mergeLoadingPayload, type LoadingStats } from './loadingStats';
+import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveChampionAccent } from './champAccent';
+import { resolveChampionRef } from '../data/championCatalog';
+import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
 
 const mayhemBundle = bundledMayhem as MayhemBundle;
 
@@ -175,19 +191,15 @@ const GankRailPanel = React.memo(function GankRailPanel({
 
 const VisionRailPanel = React.memo(function VisionRailPanel({
   status,
-  style,
 }: {
   status: WardStatus | null;
-  style: React.CSSProperties;
 }) {
   return (
-    <div className="hud-overlay-scale hud-overlay-scale--right" style={style}>
-      <OverlayChromePanel>
-        <div className="relative z-10 px-2 py-1.5">
-          <WardIndicator status={status} compact />
-        </div>
-      </OverlayChromePanel>
-    </div>
+    <OverlayChromePanel>
+      <div className="relative z-10 px-2 py-1.5">
+        <WardIndicator status={status} compact />
+      </div>
+    </OverlayChromePanel>
   );
 });
 
@@ -269,8 +281,10 @@ function OverlayChromePanel({
   children: React.ReactNode;
   className?: string;
 }) {
+  const skin = useHudSkinChrome();
   return (
-    <div className={`hud-overlay-panel ${className}`}>
+    <div className={`hud-overlay-panel ov-panel ov-panel-accent hud-overlay-panel--rail overflow-hidden ${className}`}>
+      <HudSkinOrnaments skin={skin.skin} ornaments={skin.ornaments} />
       <span className="hud-corner hud-corner-tl" aria-hidden />
       <span className="hud-corner hud-corner-br" aria-hidden />
       <span className="hud-rail hud-rail-top" aria-hidden />
@@ -428,6 +442,7 @@ export const OverlayApp: React.FC = () => {
   const [gameHeight, setGameHeight] = useState(1080);
   const [hudModules, setHudModules] = useState<HudModules>(DEFAULT_HUD_MODULES);
   const [hudLayout, setHudLayout] = useState<HudLayout>(() => dualRailLayout());
+  const [hudSkin, setHudSkin] = useState<HudSkinSettings>(DEFAULT_HUD_SKIN_SETTINGS);
   const [viewport, setViewport] = useState(() => ({
     vw: typeof window !== 'undefined' ? window.innerWidth : 1920,
     vh: typeof window !== 'undefined' ? window.innerHeight : 1080,
@@ -442,12 +457,33 @@ export const OverlayApp: React.FC = () => {
     mode: 'locked' | 'compact' | 'align';
   } | null>(null);
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
+  const [petPreference, setPetPreference] = useState<PetSettings>(PET_DEFAULTS);
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
+  const inMayhem = isMayhemGame(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
+  const inAram = isAramOrMayhem(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
   const resolvedProfileId = useMemo(() => resolveProfileId(state), [state]);
-  const profile = useMemo(() => getProfile(resolvedProfileId), [resolvedProfileId]);
+  /** In an ARAM-family game the live champion must own the profile. */
+  const aramProfileId = useMemo(
+    () => (inAram ? resolveChampionProfileId(state) : null),
+    [inAram, state]
+  );
+  const profile = useMemo(
+    () => getProfile(aramProfileId ?? resolvedProfileId),
+    [aramProfileId, resolvedProfileId]
+  );
+  /** Unknown champion in ARAM: never draw another champion's build/buy rail. */
+  const championProfileKnown = !inAram || aramProfileId !== null;
 
   // 1 Hz clock: the gating decision stays here, but the tick writes to the
   // external clock store instead of component state — only useOverlayClock()
@@ -545,6 +581,7 @@ export const OverlayApp: React.FC = () => {
         gameHeight?: number;
         hudModules?: unknown;
         hudLayout?: unknown;
+        hudSkin?: unknown;
         displayWidth?: number;
         displayHeight?: number;
         slot?: {
@@ -555,7 +592,9 @@ export const OverlayApp: React.FC = () => {
           stickerIds: string[];
           mode: 'locked' | 'compact' | 'align';
         };
+        pet?: unknown;
       };
+      if (meta.pet) setPetPreference(normalizePet(meta.pet));
       if (typeof meta.displayWidth === 'number' && typeof meta.displayHeight === 'number') {
         setDisplaySize({ w: meta.displayWidth, h: meta.displayHeight });
       }
@@ -569,6 +608,7 @@ export const OverlayApp: React.FC = () => {
       if (typeof meta.gameWidth === 'number') setGameWidth(meta.gameWidth);
       if (typeof meta.gameHeight === 'number') setGameHeight(meta.gameHeight);
       if (meta.calibration) setCalibration(meta.calibration);
+      if (meta.hudSkin) setHudSkin(normalizeHudSkinSettings(meta.hudSkin));
       if (meta.hudLayout) {
         const nextLayout = normalizeHudLayout(meta.hudLayout);
         setHudLayout(nextLayout);
@@ -590,7 +630,9 @@ export const OverlayApp: React.FC = () => {
         ) {
           return prev;
         }
-        return next;
+        // The card's champion and stats stay put for the whole load even when a
+        // later payload omits them (payloads replace state wholesale).
+        return mergeLoadingPayload(prev, next);
       });
       const resolved = resolveProfileId(next);
       if (isProfileId(resolved)) {
@@ -665,9 +707,6 @@ export const OverlayApp: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [situationKey, enemyKey]
   );
-
-  const inMayhem = isMayhemGame(state.gameMode, state.mapName);
-  const inAram = isAramOrMayhem(state.gameMode, state.mapName);
 
   const build: Build | null = useMemo(() => {
     const base = profile.calculateBuild(enemyChampions, adcForProfile, allyPartner, situation);
@@ -824,7 +863,7 @@ export const OverlayApp: React.FC = () => {
   const [latchedMayhemOffers, setLatchedMayhemOffers] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!inMayhem || !state.mayhemAugmentWindow || state.mayhemAugmentDismissedAt) {
+    if ((!inMayhem && !inAram) || !state.mayhemAugmentWindow || state.mayhemAugmentDismissedAt) {
       setLatchedMayhemOffers([]);
       return;
     }
@@ -840,7 +879,7 @@ export const OverlayApp: React.FC = () => {
         return incoming.slice(0, 3);
       });
     }
-  }, [inMayhem, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
+  }, [inMayhem, inAram, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
 
   const displayMayhemOfferIds = useMemo(() => {
     if (!state.mayhemAugmentWindow) return [];
@@ -855,10 +894,10 @@ export const OverlayApp: React.FC = () => {
   }, [state.mayhemOfferIds, state.mayhemAugmentWindow, latchedMayhemOffers]);
 
   const mayhemRanked = useMemo(() => {
-    if (!mayhemChampion || !inMayhem || !displayMayhemOfferIds.length) return [];
+    if (!mayhemChampion || (!inMayhem && !inAram) || !displayMayhemOfferIds.length) return [];
     const owned = state.mayhemOwnedIds || [];
     return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
-  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem]);
+  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram]);
 
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
   // value the 120 s dismiss window never expired until some unrelated update
@@ -892,7 +931,7 @@ export const OverlayApp: React.FC = () => {
   );
 
   const mayhemPanelActive =
-    inMayhem &&
+    (inMayhem || inAram) &&
     hudModules.mayhem &&
     !!state.mayhemAugmentWindow &&
     !mayhemDismissedRecently &&
@@ -900,7 +939,7 @@ export const OverlayApp: React.FC = () => {
 
   const mayhemLayoutPos =
     layoutElement(hudLayout, 'mayhem') ||
-    layoutElement(hudLayout, 'vision') || { x: 0.835, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
+    layoutElement(hudLayout, 'vision') || { x: 0.982, y: 0.26, scale: 1, opacity: 1, anchor: 'tr' as const };
 
   const handleHide = () => {
     void window.electronAPI?.toggleOverlay?.().catch((error) => {
@@ -1010,6 +1049,7 @@ export const OverlayApp: React.FC = () => {
       (!mayhemPanelActive && hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
       (!inAram && hudModules.action && cues.length > 0 && slotHasModule('action')) ||
       ((!inAram || inMayhem) &&
+        championProfileKnown &&
         !mayhemPanelActive &&
         hudModules.buy &&
         buyQueue.length > 0 &&
@@ -1019,9 +1059,7 @@ export const OverlayApp: React.FC = () => {
     );
   })();
 
-  useEffect(() => {
-    window.electronAPI?.reportOverlayContent?.(slotHasContent);
-  }, [slotHasContent]);
+  const activePet = state.pet ? normalizePet(state.pet) : petPreference;
 
   // Paint heartbeat. The main process can see that this window is shown, but
   // only the page knows whether frames are still being produced. One
@@ -1057,7 +1095,11 @@ export const OverlayApp: React.FC = () => {
 
   const showAction = hudModules.action && cues.length > 0 && !inAram;
   const showBuy =
-    hudModules.buy && buyQueue.length > 0 && (!inAram || inMayhem) && !mayhemPanelActive;
+    hudModules.buy &&
+    championProfileKnown &&
+    buyQueue.length > 0 &&
+    (!inAram || inMayhem) &&
+    !mayhemPanelActive;
 
   const buyRow = useMemo(() => {
     if (!showBuy) return null;
@@ -1176,12 +1218,323 @@ export const OverlayApp: React.FC = () => {
   const actionAnchor = useMemo(() => layoutElement(hudLayout, 'action') || DEFAULT_ACTION_ANCHOR, [hudLayout]);
   const buyAnchor = useMemo(() => layoutElement(hudLayout, 'buy') || DEFAULT_BUY_ANCHOR, [hudLayout]);
   const gankStyle = useMemo(() => ({ ...layoutStyle(gankAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [gankAnchor, paintGeo]);
-  const visionStyle = useMemo(() => ({ ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [visionAnchor, paintGeo]);
+  const visionStackRef = useRef<HTMLDivElement | null>(null);
+  const [visionStackHeight, setVisionStackHeight] = useState(0);
+  // The saved Vision y is always its top edge. The vision/objectives stack can
+  // grow when objectives appear or text wraps, so measure the painted (scaled)
+  // height and lift only the part that would cross the bottom of the viewport.
+  // Re-measure on resize/layout changes and on content changes; never switch
+  // the stack to bottom-anchoring (that made the panel jump between anchors).
+  // Measurement triggers only: the effect body re-attaches the observer when
+  // geometry, visibility or rail content changes; the observer catches size
+  // changes between renders.
+  /* eslint-disable react-hooks/exhaustive-deps */
+  useLayoutEffect(() => {
+    const node = visionStackRef.current;
+    if (!node) {
+      setVisionStackHeight((prev) => (prev === 0 ? prev : 0));
+      return;
+    }
+    const measure = (): void => {
+      const next = node.getBoundingClientRect().height;
+      setVisionStackHeight((prev) => (Math.abs(prev - next) < 0.5 ? prev : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [
+    visionAnchor,
+    paintGeo,
+    hudModules,
+    wardStatus,
+    state.objectiveTimers,
+    mayhemPanelActive,
+    slot,
+    state.inGame,
+    state.loading,
+  ]);
+  /* eslint-enable react-hooks/exhaustive-deps */
+  const visionStackStyle = useMemo<React.CSSProperties>(() => {
+    const base = { ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE };
+    const stack: React.CSSProperties = {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+      minWidth: 0,
+    };
+    const anchorTop = paintGeo.offsetY + visionAnchor.y * paintGeo.gameViewH;
+    const bottomOverflow = Math.max(0, anchorTop + visionStackHeight - paintGeo.vh);
+    return {
+      ...base,
+      top: Math.max(0, anchorTop - bottomOverflow),
+      ...stack,
+    };
+  }, [visionAnchor, paintGeo, visionStackHeight]);
   const actionStyle = useMemo(() => ({ ...layoutStyle(actionAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [actionAnchor, paintGeo]);
   const buyStyle = useMemo(() => ({ ...layoutStyle(buyAnchor, paintGeo), ...RAIL_PANEL_SIZE }), [buyAnchor, paintGeo]);
 
+  // Champion accent: one vivid color from the champion's square art, resolved
+  // once per match (cached by champion id in champAccent.ts) and applied to the
+  // overlay root so every panel reads the same `--ov-champ`.
+  const accentSource = useMemo(
+    () => ({
+      key: state.championId ?? null,
+      name: state.localPlayer?.championName || state.championName || '',
+    }),
+    [state.championId, state.localPlayer?.championName, state.championName]
+  );
+  /** Invalidates a resolved accent that no longer belongs to the current pick. */
+  const accentApplyToken = useRef(0);
+  /** Source key currently on the root, so a change can reset first. */
+  const accentPreviousKey = useRef<string | null>(null);
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = (hex: string): void => {
+      root.style.setProperty('--ov-champ', hex);
+      root.style.setProperty('--ov-champ-soft', accentSoft(hex));
+    };
+    const key = accentCacheKey(accentSource);
+    const transition = accentTransition(accentPreviousKey.current, key);
+    accentPreviousKey.current = key;
+    const token = accentApplyToken.current + 1;
+    accentApplyToken.current = token;
+    // A changed source must not keep the old champion's color while the new
+    // one resolves: chrome first, then the resolved accent if still current.
+    if (transition.reset) apply(DEFAULT_ACCENT);
+    if (!transition.resolve) return;
+    void resolveChampionAccent(accentSource).then((hex) => {
+      if (accentApplyToken.current !== token) return;
+      apply(hex);
+    });
+    return () => {
+      if (accentApplyToken.current === token) accentApplyToken.current += 1;
+    };
+  }, [accentSource]);
+
+  // HUD skin: `auto` maps the champion's primary Data Dragon tag to a skin
+  // (hudSkins.ts), then the root carries `data-ov-skin` for the CSS block and
+  // the three tweak variables. Panels read the resolved skin through context
+  // so their corner ornaments re-render only when the skin itself changes.
+  const hudSkinChampionTags = useMemo(() => {
+    const name = (state.localPlayer?.championName || state.championName || '').toLowerCase();
+    if (!name || !champions.length) return [] as string[];
+    const hit = champions.find((c) => c.name.toLowerCase() === name || c.id.toLowerCase() === name);
+    return hit?.tags || [];
+  }, [champions, state.localPlayer?.championName, state.championName]);
+  const activeHudSkin = useMemo(
+    () => resolveHudSkin(hudSkin.hudSkin, hudSkinChampionTags),
+    [hudSkin.hudSkin, hudSkinChampionTags]
+  );
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute('data-ov-skin', activeHudSkin);
+    root.setAttribute('data-ov-skin-orn', hudSkin.hudSkinOrnaments ? 'on' : 'off');
+    const vars = hudSkinVars(hudSkin);
+    for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  }, [activeHudSkin, hudSkin]);
+  const hudSkinChromeValue = useMemo(
+    () => ({ skin: activeHudSkin, ornaments: hudSkin.hudSkinOrnaments }),
+    [activeHudSkin, hudSkin.hudSkinOrnaments]
+  );
+
+  // Loading-card champion name: payload name first, else resolve the numeric
+  // key through the champion catalog the overlay already ingested.
+  const loadingChampionName = useMemo(() => {
+    const payloadName = (state.championName || '').trim();
+    if (payloadName) return payloadName;
+    if (state.championId == null) return '';
+    return resolveChampionRef({ key: state.championId })?.name || '';
+  }, [state.championName, state.championId]);
+
+  /* ------------------------------------------------- loading → game handoff */
+  /*
+   * The load and the first in-game frame are two payloads a few ms apart. ONE
+   * loading layer — the same element and the same pet/card children before and
+   * during the handoff — is rendered as a SIBLING of the HUD, so the fade can
+   * never hide both at once and the pet/card never remount into another
+   * subtree. Reduced motion skips both transitions.
+   */
+  const HANDOFF_FADE_MS = 250;
+  const HUD_FADE_MS = 200;
+  const loadingSnapshotRef = useRef<{
+    championName: string;
+    stats: LoadingStats | null;
+    slot: typeof state.loadingSlot;
+    queueId: number | null;
+    pet: PetSettings;
+  } | null>(null);
+  const handoffStartedRef = useRef(false);
+  const [handoffPhase, setHandoffPhase] = useState<'idle' | 'mounted' | 'fading'>('idle');
+  const reducedMotion = useMemo(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    []
+  );
+
+  // Snapshot the load; open the handoff once the first in-game frame carries a
+  // slot. The dependency list deliberately leaves out the handoff state, so
+  // this effect never cancels the transition it started.
+  useEffect(() => {
+    if (state.loading === true) {
+      loadingSnapshotRef.current = {
+        championName: loadingChampionName,
+        stats: state.loadingStats ?? null,
+        slot: state.loadingSlot ?? null,
+        queueId: state.queueId ?? null,
+        pet: activePet,
+      };
+      handoffStartedRef.current = false;
+      setHandoffPhase('idle');
+      return;
+    }
+    if (!state.inGame) {
+      // Match ended: drop any pending handoff so the next game cannot replay
+      // this one's loading layer.
+      loadingSnapshotRef.current = null;
+      handoffStartedRef.current = false;
+      setHandoffPhase('idle');
+      return;
+    }
+    if (!loadingSnapshotRef.current || !slot || handoffStartedRef.current) return;
+    handoffStartedRef.current = true;
+    setHandoffPhase('mounted');
+  }, [
+    state.loading,
+    state.inGame,
+    state.loadingStats,
+    state.loadingSlot,
+    state.queueId,
+    state.championName,
+    state.championId,
+    loadingChampionName,
+    activePet,
+    slot,
+  ]);
+
+  // Transition setup, separated from every state-dependent cleanup: two frames
+  // paint the opaque layer under the transparent HUD, then both fades start.
+  useEffect(() => {
+    if (handoffPhase !== 'mounted') return;
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => setHandoffPhase('fading'));
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      window.cancelAnimationFrame(inner);
+    };
+  }, [handoffPhase]);
+
+  // Teardown after the fade; reduced motion unmounts immediately.
+  useEffect(() => {
+    if (handoffPhase !== 'fading') return;
+    const id = window.setTimeout(() => {
+      loadingSnapshotRef.current = null;
+      setHandoffPhase('idle');
+    }, reducedMotion ? 0 : HANDOFF_FADE_MS);
+    return () => window.clearTimeout(id);
+  }, [handoffPhase, reducedMotion]);
+
+  const handoffActive = handoffPhase !== 'idle';
+  const loadingLayerMounted = state.loading || (state.inGame && loadingSnapshotRef.current !== null);
+  const hudHiddenForHandoff = loadingSnapshotRef.current !== null && handoffPhase !== 'fading';
+
+  // The loading layer draws live values during the load and the frozen snapshot
+  // through the handoff. Same element, same child components: no remount.
+  const handoffSnapshot = loadingSnapshotRef.current;
+  const handoffHome =
+    handoffSnapshot &&
+    handoffSnapshot.slot &&
+    handoffSnapshot.slot.source === 'gameflow-session' &&
+    handoffSnapshot.slot.side
+      ? cardRect(
+          handoffSnapshot.slot.side,
+          handoffSnapshot.slot.index,
+          handoffSnapshot.slot.teamSize,
+          viewport.vw,
+          viewport.vh
+        )
+      : null;
+
+  const loadingLayer = handoffSnapshot ? (
+    <div
+      className="ov-handoff-loading"
+      data-ov-loading-layer
+      style={{
+        opacity: handoffPhase === 'fading' ? 0 : 1,
+        transition:
+          handoffPhase === 'fading' && !reducedMotion
+            ? `opacity ${HANDOFF_FADE_MS}ms ease-out`
+            : undefined,
+      }}
+    >
+      <OverlayPet preference={handoffSnapshot.pet} home={handoffHome} />
+      <LoadingCard
+        championName={handoffSnapshot.championName}
+        stats={handoffSnapshot.stats}
+        home={handoffHome}
+        viewport={viewport}
+        queueKnown={handoffSnapshot.queueId != null}
+      />
+    </div>
+  ) : null;
+
+  // Content stays reported through the handoff: the loading layer (or the load
+  // itself) is still mounted, so the window must not hide before the HUD paints.
+  useEffect(() => {
+    window.electronAPI?.reportOverlayContent?.(
+      state.loading || loadingLayerMounted || slotHasContent
+    );
+  }, [state.loading, loadingLayerMounted, slotHasContent]);
+
+  if (state.loading) {
+    // Your loading-screen portrait, only when the side AND the index came from
+    // the gameflow session: a champ-select-only slot has no side, so the pet
+    // stays in the bottom third and the card bottom-right. The card is present
+    // for the whole load: numbers when this load's history has landed, a
+    // pending/neutral line until then.
+    const loadingSlot = state.loadingSlot ?? null;
+    const loadingHome =
+      loadingSlot && loadingSlot.source === 'gameflow-session' && loadingSlot.side
+        ? cardRect(loadingSlot.side, loadingSlot.index, loadingSlot.teamSize, viewport.vw, viewport.vh)
+        : null;
+    return (
+      <HudSkinChromeProvider value={hudSkinChromeValue}>
+        <div className="w-screen h-screen pointer-events-none bg-transparent">
+          <div className="ov-handoff-loading" data-ov-loading-layer style={{ opacity: 1 }}>
+            <OverlayPet preference={activePet} home={loadingHome} />
+            {state.loadingStats ? (
+              <LoadingCard
+                championName={loadingChampionName}
+                stats={state.loadingStats}
+                home={loadingHome}
+                viewport={viewport}
+                queueKnown={state.queueId != null}
+              />
+            ) : (
+              <LoadingCard
+                championName={loadingChampionName}
+                stats={null}
+                home={loadingHome}
+                viewport={viewport}
+                queueKnown={state.queueId != null}
+              />
+            )}
+          </div>
+        </div>
+      </HudSkinChromeProvider>
+    );
+  }
+
   if (!state.inGame || !slot) {
-    return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
+    return (
+      <HudSkinChromeProvider value={hudSkinChromeValue}>
+        <div className="w-screen h-screen pointer-events-none bg-transparent">{loadingLayer}</div>
+      </HudSkinChromeProvider>
+    );
   }
 
   const liveCompact = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -1198,6 +1551,11 @@ export const OverlayApp: React.FC = () => {
   const showSums = showSumsRail;
   const showGank = hudModules.gank && !!gankStatus && !inAram;
   const showVision = hudModules.vision && !!wardStatus && !mayhemPanelActive;
+  const objectiveTimers = state.objectiveTimers;
+  const showObjectives =
+    !inAram &&
+    !!objectiveTimers &&
+    (objectiveTimers.dragon || objectiveTimers.baron || objectiveTimers.herald);
   const mayhemOnThisWindow =
     !lockedSlot ||
     slotHasModule('mayhem') ||
@@ -1206,18 +1564,26 @@ export const OverlayApp: React.FC = () => {
     slot?.id === 'slot-0';
   const showMayhem = mayhemPanelActive && mayhemOnThisWindow;
   const showRightRail =
-    showGank || showVision || showAction || showBuy || !profileMatchesLocal;
+    showGank || showVision || showAction || showBuy || showObjectives || !profileMatchesLocal;
 
   return (
-    <div
-      className={`w-screen h-screen bg-transparent overflow-hidden select-none${
-        clickThrough && !alignMode ? ' pointer-events-none' : ''
-      }`}
-      style={{
-        ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
-        ['--ov-text-scale' as string]: String(overlayTextScale),
-      }}
-    >
+    <HudSkinChromeProvider value={hudSkinChromeValue}>
+      <div className="w-screen h-screen bg-transparent">
+        {loadingLayer}
+        <div
+          data-ov-hud-root
+          className={`w-screen h-screen bg-transparent overflow-hidden select-none${
+            clickThrough && !alignMode ? ' pointer-events-none' : ''
+          }`}
+          style={{
+            ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
+            ['--ov-text-scale' as string]: String(overlayTextScale),
+            // During the handoff the in-game HUD fades in under the loading layer.
+            opacity: hudHiddenForHandoff ? 0 : 1,
+            transition:
+              handoffActive && !reducedMotion ? `opacity ${HUD_FADE_MS}ms ease-out` : undefined,
+          }}
+        >
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}
@@ -1228,6 +1594,14 @@ export const OverlayApp: React.FC = () => {
         gameWidth={gameWidth}
         gameHeight={gameHeight}
       />
+
+      {inMayhem && state.mayhemOcrHint ? (
+        <div className="hud-overlay-scale hud-overlay-scale--right absolute top-2 right-3 z-40 pointer-events-none">
+          <div className="hud-overlay-panel !px-2 !py-1 text-[11px] text-[var(--ov-amber)]">
+            {state.mayhemOcrHint}
+          </div>
+        </div>
+      ) : null}
 
       {alignMode && (
       <div className="hud-overlay-controls absolute top-3 left-1/2 -translate-x-1/2 pointer-events-auto z-10">
@@ -1277,6 +1651,7 @@ export const OverlayApp: React.FC = () => {
           >
             <div className="hud-rail-stack" data-hud-rail="sums">
               <section className="hud-rail-card" data-hud-section="summoners">
+                <HudSkinOrnaments skin={activeHudSkin} ornaments={hudSkin.hudSkinOrnaments} />
                 <h3 className="hud-rail-label">
                   <span className="hud-rail-label-text">Summoners</span>
                   <span className="hud-rail-label-meta">
@@ -1289,6 +1664,7 @@ export const OverlayApp: React.FC = () => {
               </section>
               {showRespawns && (
                 <section className="hud-rail-card" data-hud-section="respawns">
+                  <HudSkinOrnaments skin={activeHudSkin} ornaments={hudSkin.hudSkinOrnaments} />
                   <h3 className="hud-rail-label">
                     <span className="hud-rail-label-text">Respawns</span>
                   </h3>
@@ -1306,8 +1682,23 @@ export const OverlayApp: React.FC = () => {
             <GankRailPanel status={gankStatus} style={gankStyle} />
           )}
 
-          {showVision && slotHasModule('vision') && (
-            <VisionRailPanel status={wardStatus} style={visionStyle} />
+          {(showVision || showObjectives) && slotHasModule('vision') && (
+            <div
+              ref={visionStackRef}
+              className="hud-overlay-scale hud-overlay-scale--right flex flex-col gap-1.5 min-w-0"
+              style={visionStackStyle}
+            >
+              {showVision && <VisionRailPanel status={wardStatus} />}
+              {showObjectives && (
+                <OverlayChromePanel className="ov-panel--short">
+                  <div className="relative z-10 px-2 py-1.5 text-[11px] space-y-0.5">
+                    {objectiveTimers?.dragon ? <div>Dragon {objectiveTimers.dragon.inSec}s</div> : null}
+                    {objectiveTimers?.baron ? <div>Baron {objectiveTimers.baron.inSec}s</div> : null}
+                    {objectiveTimers?.herald ? <div>Herald {objectiveTimers.herald.inSec}s</div> : null}
+                  </div>
+                </OverlayChromePanel>
+              )}
+            </div>
           )}
 
           {showAction && slotHasModule('action') && (
@@ -1426,6 +1817,8 @@ export const OverlayApp: React.FC = () => {
         </OverlayChromePanel>
       </div>
       )}
-    </div>
+      </div>
+      </div>
+    </HudSkinChromeProvider>
   );
 };

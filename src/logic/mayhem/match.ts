@@ -1,11 +1,41 @@
 import type { MayhemAugment } from './types';
 
+/** Max Levenshtein distance (relative to name length) that still counts as a match. */
+export const MAYHEM_FUZZY_MAX_DISTANCE_RATIO = 0.32;
+
+/** Fuzzy score (0–1) a single offer needs before the HUD trusts it alone. */
+export const MAYHEM_HIGH_CONFIDENCE_SCORE = 0.9;
+
+/** Fuzzy score (0–1) that lets auto OCR accept one match instead of two. */
+export const MAYHEM_AUTO_RELAX_SCORE = 0.85;
+
+/** Auto mode normally needs two matched cards per roll (one word is often UI chrome). */
+export const MAYHEM_AUTO_MIN_MATCHES = 2;
+
+/** Auto mode needs this many non-empty OCR lines before it relaxes to one match. */
+export const MAYHEM_AUTO_MIN_LINES = 3;
+
+/** Case/punctuation-insensitive form used for exact and substring comparisons. */
 function normalizeName(s: string): string {
   return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/['']/g, '')
+    .replace(/[''`]/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+/**
+ * Additional folding for OCR noise: common character confusions and the
+ * rn→m ligature. Only used for fuzzy scoring, never for corpus lookups.
+ */
+function normalizeForOcr(s: string): string {
+  return normalizeName(s)
+    .replace(/rn/g, 'm')
+    .replace(/0/g, 'o')
+    .replace(/1/g, 'l')
+    .replace(/i/g, 'l');
 }
 
 function levenshtein(a: string, b: string): number {
@@ -25,6 +55,15 @@ function levenshtein(a: string, b: string): number {
     }
   }
   return row[b.length];
+}
+
+/** 0–1 similarity after OCR noise folding (1 = identical). */
+export function fuzzyNameScore(a: string, b: string): number {
+  const left = normalizeForOcr(a);
+  const right = normalizeForOcr(b);
+  const maxLen = Math.max(left.length, right.length);
+  if (!maxLen) return 0;
+  return 1 - levenshtein(left, right) / maxLen;
 }
 
 const UI_NOISE_LINE =
@@ -63,9 +102,9 @@ function scoreLine(line: string, aug: MayhemAugment): number {
     if (shorter.length < longer.length * 0.65) return 999;
     return 2;
   }
-  const dist = levenshtein(ln, name);
+  const dist = levenshtein(normalizeForOcr(line), normalizeForOcr(aug.name));
   const maxLen = Math.max(ln.length, name.length);
-  if (maxLen > 0 && dist / maxLen <= 0.32) return 3 + dist;
+  if (maxLen > 0 && dist / maxLen <= MAYHEM_FUZZY_MAX_DISTANCE_RATIO) return 3 + dist;
   return 999;
 }
 
@@ -167,4 +206,50 @@ export function matchAugmentsFromOcr(ocrText: string, augments: MayhemAugment[])
   }
 
   return out;
+}
+
+/** How many non-noise OCR lines the frame produced (auto-mode relax needs three). */
+export function countOcrContentLines(ocrText: string): number {
+  return ocrText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 3 && !isMayhemOcrNoiseLine(l)).length;
+}
+
+/**
+ * Best fuzzy score (0–1) any OCR line reaches against an augment name.
+ * A card read cleanly scores ~1; unrelated UI text stays well below the
+ * single-offer threshold.
+ */
+export function bestAugmentMatchConfidence(ocrText: string, augments: MayhemAugment[]): number {
+  const lines = ocrText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 3 && !isMayhemOcrNoiseLine(l));
+  let best = 0;
+  for (const line of lines) {
+    for (const aug of augments) {
+      const score = fuzzyNameScore(line, aug.name);
+      if (score > best) best = score;
+    }
+  }
+  return Math.round(best * 1000) / 1000;
+}
+
+/**
+ * Auto OCR usually demands two matches per roll. A confident three-line read
+ * (score ≥ 0.85) may accept a single match instead — one blurred card must not
+ * hide a real offer.
+ */
+export function effectiveAutoMinMatches(input: {
+  configured: number;
+  fuzzyScore: number;
+  contentLines: number;
+}): number {
+  const configured = Math.max(1, Math.floor(input.configured));
+  if (configured <= 1) return 1;
+  if (input.fuzzyScore >= MAYHEM_AUTO_RELAX_SCORE && input.contentLines >= MAYHEM_AUTO_MIN_LINES) {
+    return 1;
+  }
+  return configured;
 }

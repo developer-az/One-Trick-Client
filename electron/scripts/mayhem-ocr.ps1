@@ -6,18 +6,203 @@ param(
   [double]$LeftFrac = 0.08,
   [double]$TopFrac = 0.18,
   [double]$WidthFrac = 0.84,
-  [double]$HeightFrac = 0.62
+  [double]$HeightFrac = 0.62,
+  # Screen-space rectangles to black out before OCR: "x,y,w,h;x,y,w,h" (physical pixels).
+  [string]$MaskRects = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Capture-RectRegion {
+function Write-Marker {
+  param([string]$Name, [string]$Detail = '')
+  if ($Detail) {
+    Write-Output "__OT_${Name} ${Detail}__"
+  } else {
+    Write-Output "__OT_${Name}__"
+  }
+}
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public class OTMayhemWin32 {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT pt);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  public struct POINT { public int X; public int Y; }
+}
+"@
+
+# Match Electron's physical-pixel coordinates: window rects, CopyFromScreen and
+# the mask rects all come from the same DPI-aware space.
+try { [void][OTMayhemWin32]::SetProcessDPIAware() } catch { }
+
+function Get-ClientScreenRect {
+  param([IntPtr]$Handle)
+  $client = New-Object OTMayhemWin32+RECT
+  if (-not [OTMayhemWin32]::GetClientRect($Handle, [ref]$client)) { return $null }
+  $topLeft = New-Object OTMayhemWin32+POINT
+  $bottomRight = New-Object OTMayhemWin32+POINT
+  $bottomRight.X = $client.Right
+  $bottomRight.Y = $client.Bottom
+  if (-not [OTMayhemWin32]::ClientToScreen($Handle, [ref]$topLeft)) { return $null }
+  if (-not [OTMayhemWin32]::ClientToScreen($Handle, [ref]$bottomRight)) { return $null }
+  $w = $bottomRight.X - $topLeft.X
+  $h = $bottomRight.Y - $topLeft.Y
+  if ($w -lt 200 -or $h -lt 200) { return $null }
+  return [pscustomobject]@{
+    Left = $topLeft.X
+    Top = $topLeft.Y
+    Width = $w
+    Height = $h
+  }
+}
+
+function Find-GameWindow {
+  $script:found = $null
+  $callback = [OTMayhemWin32+EnumWindowsProc]{
+    param([IntPtr]$hWnd, [IntPtr]$lParam)
+    if (-not [OTMayhemWin32]::IsWindowVisible($hWnd)) { return $true }
+    $sb = New-Object System.Text.StringBuilder 256
+    [void][OTMayhemWin32]::GetClassName($hWnd, $sb, 256)
+    $className = $sb.ToString()
+    $processId = [uint32]0
+    [void][OTMayhemWin32]::GetWindowThreadProcessId($hWnd, [ref]$processId)
+    if ($processId -eq 0) { return $true }
+    $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if (-not $proc) { return $true }
+    # The game itself draws in RiotWindowClass and its executable process is
+    # "League of Legends"; some builds report the name with .exe. Accept either
+    # signal, but never the launcher/client (LeagueClientUx).
+    $isRiotClass = $className -eq 'RiotWindowClass'
+    $isGameProcess = $proc.ProcessName -match '^League of Legends(\.exe)?$'
+    if (-not ($isRiotClass -or $isGameProcess)) { return $true }
+    if ($proc.ProcessName -match 'Client|Launcher|UX') { return $true }
+    $rect = Get-ClientScreenRect -Handle $hWnd
+    if (-not $rect) { return $true }
+    $area = $rect.Width * $rect.Height
+    if (-not $script:found -or $area -gt $script:found.Area) {
+      $script:found = [pscustomobject]@{
+        Handle = $hWnd
+        ProcessId = [int]$processId
+        Exe = $proc.ProcessName
+        Class = $className
+        Area = $area
+        Left = $rect.Left
+        Top = $rect.Top
+        Width = $rect.Width
+        Height = $rect.Height
+      }
+    }
+    return $true
+  }
+  [void][OTMayhemWin32]::EnumWindows($callback, [IntPtr]::Zero)
+  return $script:found
+}
+
+function Set-MaskRectangles {
+  param(
+    [System.Drawing.Bitmap]$Bitmap,
+    [int]$CaptureLeft,
+    [int]$CaptureTop,
+    [string]$Spec
+  )
+  if (-not $Spec) { return }
+  $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
+  $g = [System.Drawing.Graphics]::FromImage($Bitmap)
+  try {
+    foreach ($part in $Spec.Split(';')) {
+      $numbers = $part.Split(',')
+      if ($numbers.Count -ne 4) { continue }
+      $mx = 0; $my = 0; $mw = 0; $mh = 0
+      if (-not [int]::TryParse($numbers[0], [ref]$mx)) { continue }
+      if (-not [int]::TryParse($numbers[1], [ref]$my)) { continue }
+      if (-not [int]::TryParse($numbers[2], [ref]$mw)) { continue }
+      if (-not [int]::TryParse($numbers[3], [ref]$mh)) { continue }
+      $localX = $mx - $CaptureLeft
+      $localY = $my - $CaptureTop
+      $left = [Math]::Max(0, $localX)
+      $top = [Math]::Max(0, $localY)
+      $right = [Math]::Min($Bitmap.Width, $localX + $mw)
+      $bottom = [Math]::Min($Bitmap.Height, $localY + $mh)
+      if ($right -le $left -or $bottom -le $top) { continue }
+      $g.FillRectangle($brush, $left, $top, ($right - $left), ($bottom - $top))
+    }
+  } finally {
+    $g.Dispose()
+    $brush.Dispose()
+  }
+}
+
+function Test-BlackFrame {
+  param([System.Drawing.Bitmap]$Bitmap)
+  $stepX = [Math]::Max(1, [int]($Bitmap.Width / 48))
+  $stepY = [Math]::Max(1, [int]($Bitmap.Height / 48))
+  $samples = 0
+  $dark = 0
+  for ($y = 0; $y -lt $Bitmap.Height; $y += $stepY) {
+    for ($x = 0; $x -lt $Bitmap.Width; $x += $stepX) {
+      $c = $Bitmap.GetPixel($x, $y)
+      $samples += 1
+      $luma = [int](0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B)
+      if ($luma -lt 12) { $dark += 1 }
+    }
+  }
+  if ($samples -eq 0) { return $false }
+  return ($dark / $samples) -ge 0.98
+}
+
+# A crop rect given in screen coordinates, translated into the local pixels of
+# the bitmap captured at $CaptureLeft/$CaptureTop and clipped to that bitmap.
+# The crop arguments name the area to keep; the capture origin is where the
+# bitmap starts, so the local offset is the difference, never the raw value.
+# Pure: no bitmap is touched, so the verifier runs this straight from the AST.
+# verify_ocr_geometry_actual.ts exercises it with positive and negative origins.
+function ConvertTo-CropRect {
+  param(
+    [int]$CropLeft,
+    [int]$CropTop,
+    [int]$CropWidth,
+    [int]$CropHeight,
+    [int]$CaptureLeft,
+    [int]$CaptureTop,
+    [int]$BitmapWidth,
+    [int]$BitmapHeight
+  )
+  $cx = [Math]::Max(0, $CropLeft - $CaptureLeft)
+  $cy = [Math]::Max(0, $CropTop - $CaptureTop)
+  $cw = [Math]::Min($CropWidth, $BitmapWidth - $cx)
+  $ch = [Math]::Min($CropHeight, $BitmapHeight - $cy)
+  return [pscustomobject]@{
+    X = $cx
+    Y = $cy
+    Width = $cw
+    Height = $ch
+  }
+}
+
+function Capture-Region {
   param(
     [int]$Left,
     [int]$Top,
     [int]$Width,
     [int]$Height,
-    [string]$OutPath
+    [string]$OutPath,
+    # Optional post-mask crop, in the SAME screen coordinates as $Left/$Top.
+    [int]$CropLeft = -1,
+    [int]$CropTop = -1,
+    [int]$CropWidth = 0,
+    [int]$CropHeight = 0
   )
   Add-Type -AssemblyName System.Drawing
   $rw = [Math]::Max(64, $Width)
@@ -26,8 +211,58 @@ function Capture-RectRegion {
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.CopyFromScreen($Left, $Top, 0, 0, (New-Object System.Drawing.Size $rw, $rh))
   $g.Dispose()
-  $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  Set-MaskRectangles -Bitmap $bmp -CaptureLeft $Left -CaptureTop $Top -Spec $MaskRects
+  $black = Test-BlackFrame -Bitmap $bmp
+  $out = $bmp
+  if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
+    # Crop AFTER capturing and masking the whole frame: the mask rects already
+    # live in $Left/$Top screen space, then the offer band is cut out.
+    $crop = ConvertTo-CropRect -CropLeft $CropLeft -CropTop $CropTop `
+      -CropWidth $CropWidth -CropHeight $CropHeight `
+      -CaptureLeft $Left -CaptureTop $Top `
+      -BitmapWidth $bmp.Width -BitmapHeight $bmp.Height
+    if ($crop.Width -gt 0 -and $crop.Height -gt 0) {
+      $rect = New-Object System.Drawing.Rectangle $crop.X, $crop.Y, $crop.Width, $crop.Height
+      $out = $bmp.Clone($rect, $bmp.PixelFormat)
+    }
+  }
+  $out.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  if (-not [object]::ReferenceEquals($out, $bmp)) { $out.Dispose() }
   $bmp.Dispose()
+  return $black
+}
+
+# Every fractional pixel value is truncated toward zero, never rounded to
+# nearest. PowerShell's [int] cast rounds (1920 * 0.84 = 1612.8 -> 1613, and
+# 1920 * 0.08 = 153.6 -> 154), while the verified mirror
+# src/logic/mayhem/captureRegion.ts truncates, so a cast shifted the production
+# crop a pixel off the geometry the app and its tests reason about.
+# verify_ocr_geometry_actual.ts runs this function straight out of this file.
+function ConvertTo-TruncatedPixels {
+  param([double]$Value)
+  return [int][Math]::Truncate($Value)
+}
+
+# The offer band of a bounds rect. The game-window capture, the primary-screen
+# fallback and the reported frame size all go through here: one policy, so they
+# cannot disagree about where the band is.
+function Get-OfferGeometry {
+  param(
+    [int]$BoundsX,
+    [int]$BoundsY,
+    [int]$BoundsWidth,
+    [int]$BoundsHeight
+  )
+  $width = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsWidth * $WidthFrac)))
+  $height = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsHeight * $HeightFrac)))
+  $left = $BoundsX + (ConvertTo-TruncatedPixels ($BoundsWidth * $LeftFrac))
+  $top = $BoundsY + (ConvertTo-TruncatedPixels ($BoundsHeight * $TopFrac))
+  return [pscustomobject]@{
+    Left = $left
+    Top = $top
+    Width = $width
+    Height = $height
+  }
 }
 
 function Capture-FractionRegion {
@@ -38,57 +273,71 @@ function Capture-FractionRegion {
     [int]$BoundsHeight,
     [string]$OutPath
   )
-  $rw = [Math]::Max(64, [int]($BoundsWidth * $WidthFrac))
-  $rh = [Math]::Max(64, [int]($BoundsHeight * $HeightFrac))
-  $rx = $BoundsLeft + [int]($BoundsWidth * $LeftFrac)
-  $ry = $BoundsTop + [int]($BoundsHeight * $TopFrac)
-  Capture-RectRegion -Left $rx -Top $ry -Width $rw -Height $rh -OutPath $OutPath
+  $geo = Get-OfferGeometry -BoundsX $BoundsLeft -BoundsY $BoundsTop -BoundsWidth $BoundsWidth -BoundsHeight $BoundsHeight
+  return (Capture-Region -Left $geo.Left -Top $geo.Top -Width $geo.Width -Height $geo.Height -OutPath $OutPath)
 }
 
-function Capture-CenterRegion {
+function Capture-PrimaryScreen {
   param([string]$OutPath)
   Add-Type -AssemblyName System.Windows.Forms
-  $pt = [System.Windows.Forms.Cursor]::Position
-  $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
-  if (-not $scr) { $scr = [System.Windows.Forms.Screen]::PrimaryScreen }
-  $b = $scr.Bounds
-  Capture-FractionRegion -BoundsLeft $b.X -BoundsTop $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height -OutPath $OutPath
+  # Fallback (no game window matched): capture the PRIMARY screen's complete
+  # bounds — never the monitor under the cursor — and mask in that space. Then
+  # cut the same offer-band crop a matched game window would use, relative to
+  # the primary bounds: with no window to measure, the game is assumed to fill
+  # the primary screen, so the offers are centred there.
+  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $geo = Get-OfferGeometry -BoundsX $b.X -BoundsY $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height
+  $rw = $geo.Width
+  $rh = $geo.Height
+  $rx = $geo.Left
+  $ry = $geo.Top
+  return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath `
+    -CropLeft $rx -CropTop $ry -CropWidth $rw -CropHeight $rh)
 }
 
-function Capture-LeagueClientRegion {
-  param([string]$OutPath)
-  Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class OTWin32 {
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-}
-"@
-  $proc = Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'League of Legends' } |
-    Select-Object -First 1
-  if (-not $proc) { return $false }
-  $rect = New-Object OTWin32+RECT
-  if (-not [OTWin32]::GetWindowRect($proc.MainWindowHandle, [ref]$rect)) { return $false }
-  $w = $rect.Right - $rect.Left
-  $h = $rect.Bottom - $rect.Top
-  if ($w -lt 200 -or $h -lt 200) { return $false }
-  Capture-FractionRegion -BoundsLeft $rect.Left -BoundsTop $rect.Top -BoundsWidth $w -BoundsHeight $h -OutPath $OutPath
-  return $true
-}
+$blackFrame = $false
+$target = $null
 
 if ($CaptureScreen) {
   if (-not $ImagePath) {
-    $ImagePath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "onetrick-mayhem-cap.png")
+    $ImagePath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'onetrick-mayhem-cap.png')
   }
   $captured = $false
   if ($UseGameWindow) {
-    $captured = Capture-LeagueClientRegion -OutPath $ImagePath
+    $target = Find-GameWindow
+    if ($target) {
+      $blackFrame = Capture-FractionRegion -BoundsLeft $target.Left -BoundsTop $target.Top `
+        -BoundsWidth $target.Width -BoundsHeight $target.Height -OutPath $ImagePath
+      $captured = $true
+    } else {
+      # No game window matched: capture the primary screen's full bounds (as the
+      # early builds did), then cut the offer band from it, and mark the frame as
+      # a fallback, never as no-target.
+      Write-Marker 'FALLBACK'
+    }
   }
   if (-not $captured) {
-    Capture-CenterRegion -OutPath $ImagePath
+    $blackFrame = Capture-PrimaryScreen -OutPath $ImagePath
   }
+  if ($target) {
+    $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)
+    $frame = Get-OfferGeometry -BoundsX $target.Left -BoundsY $target.Top -BoundsWidth $target.Width -BoundsHeight $target.Height
+    $frameWidth = $frame.Width
+    $frameHeight = $frame.Height
+    # JSON, not key=value pairs: the game process name is "League of Legends"
+    # (it contains spaces) and the old space-separated marker truncated it.
+    $targetInfo = [ordered]@{
+      pid = [int]$target.ProcessId
+      exe = [string]$target.Exe
+      class = [string]$target.Class
+      rect = "$($target.Left),$($target.Top),$($target.Width),$($target.Height)"
+      frame = "${frameWidth}x${frameHeight}"
+      black = [bool]$blackFrame
+      fg = [bool]$foreground
+    }
+    Write-Output ("__OT_TARGET__" + ($targetInfo | ConvertTo-Json -Compress))
+  }
+  if ($blackFrame) { Write-Marker 'BLACK_FRAME' }
   if (-not (Test-Path -LiteralPath $ImagePath)) { exit 3 }
 }
 
@@ -96,11 +345,13 @@ if (-not $ImagePath -or -not (Test-Path -LiteralPath $ImagePath)) {
   Write-Error 'ImagePath missing or not found'
   exit 4
 }
+$ImagePath = (Resolve-Path -LiteralPath $ImagePath).Path
 
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType = WindowsRuntime]
+$null = [Windows.Globalization.Language, Windows.Globalization, ContentType = WindowsRuntime]
 
 function Await-WinRt {
   param($AsyncOp, [Type]$ResultType)
@@ -112,12 +363,29 @@ function Await-WinRt {
   return $netTask.GetAwaiter().GetResult()
 }
 
+# Prefer English: League's augment cards are English even on other clients, and
+# the matcher's fuzzy normalization is tuned to English letter shapes.
+$engine = $null
+$languageUsed = ''
+try {
+  $english = New-Object Windows.Globalization.Language 'en-US'
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($english)
+  if ($engine) { $languageUsed = 'en-US' }
+} catch {
+  $engine = $null
+}
+if (-not $engine) {
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  if ($engine) { $languageUsed = $engine.RecognizerLanguage.LanguageTag }
+}
+if (-not $engine) { exit 2 }
+if (-not $languageUsed) { $languageUsed = 'profile' }
+Write-Output "__OT_OCR_LANG ${languageUsed}__"
+
 $file = Await-WinRt ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImagePath)) ([Windows.Storage.StorageFile])
 $stream = Await-WinRt ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
 $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if (-not $engine) { exit 2 }
 $result = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 foreach ($line in $result.Lines) {
   if ($line.Text) { Write-Output $line.Text }

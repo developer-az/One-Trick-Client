@@ -12,6 +12,14 @@ html.overlay-root {
   --font-mono: var(--font-body);
   --ov-surface: rgba(9, 9, 11, 0.86);
   --ov-border: rgba(212, 216, 222, 0.14);
+  --ov-border-bright: rgba(212, 216, 222, 0.3);
+  /* Champion accent: one vivid color from the champion's square art, set on
+   * this root by the overlay renderer (src/overlay/champAccent.ts). Chrome
+   * silver is the disciplined default when the champion is unknown. */
+  --ov-champ: #c9ced6;
+  --ov-champ-soft: rgba(201, 206, 214, 0.14);
+  /* Chrome bevel for display text only (the one other allowed gradient). */
+  --ov-chrome: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
   --ov-text: #e7e9ee;
   --ov-text-2: #a7aebb;
   --ov-gold: #e8b84a;
@@ -26,15 +34,52 @@ html.overlay-root {
   --ov-fs: var(--ov-text-scale, 1);
 }
 
+/* ---------- Shared panel language ----------
+ * Every overlay panel: ink fill, 1px hairline, bracketed corners, and a
+ * champion-colored accent hairline at the top edge (2px, fading at both
+ * ends). Static only — no blur, no glow, no animation (R5/R6/R11). The
+ * accent is a background image so it needs no extra element, and the ink is
+ * a background color so both can coexist.
+ */
+html.overlay-root .ov-panel,
 html.overlay-root .hud-overlay-panel {
-  background: var(--ov-surface);
+  background-color: var(--ov-surface);
   border: 1px solid var(--ov-border);
   border-left: 1px solid var(--ov-border);
   border-radius: 5px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   color: var(--ov-text);
+  contain: layout paint;
 }
-/* Bracketed corners, as on dashboard cards. */
+/* Positioning context for the bracket pseudo-elements. `.hud-overlay-panel`
+ * already gets this from index.css; leave that rule alone so a panel that
+ * opts into an absolute anchor keeps its position. */
+html.overlay-root .ov-panel {
+  position: relative;
+}
+html.overlay-root .ov-panel-accent,
+html.overlay-root .hud-overlay-panel {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--ov-champ) 12%,
+    var(--ov-champ) 88%,
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-position: top left;
+  background-size: 100% 2px;
+}
+
+html.overlay-root .hud-overlay-panel--rail {
+  background-color: rgba(8, 8, 11, 0.48);
+  border-color: rgba(212, 216, 222, 0.22);
+  box-shadow: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+/* Bracketed corners, as on dashboard cards — champion-colored. */
+html.overlay-root .ov-panel::before,
+html.overlay-root .ov-panel::after,
 html.overlay-root .hud-overlay-panel::before,
 html.overlay-root .hud-overlay-panel::after {
   content: '';
@@ -42,13 +87,15 @@ html.overlay-root .hud-overlay-panel::after {
   width: 10px;
   height: 10px;
   pointer-events: none;
-  border: 0 solid rgba(212, 216, 222, 0.45);
+  border: 0 solid var(--ov-champ);
 }
+html.overlay-root .ov-panel::before,
 html.overlay-root .hud-overlay-panel::before {
   top: -1px;
   left: -1px;
   border-width: 1px 0 0 1px;
 }
+html.overlay-root .ov-panel::after,
 html.overlay-root .hud-overlay-panel::after {
   right: -1px;
   bottom: -1px;
@@ -63,10 +110,11 @@ html.overlay-root .hud-panel-mark {
 }
 
 html.overlay-root .hud-chrome-header {
-  background: linear-gradient(90deg, rgba(232, 184, 74, 0.12), transparent 70%);
-  border-bottom: 1px solid rgba(232, 184, 74, 0.22);
+  background: var(--ov-champ-soft);
+  border-bottom: 1px solid var(--ov-border);
 }
 
+html.overlay-root .ov-heading,
 html.overlay-root .hud-chrome-title {
   font-family: var(--font-display);
   font-size: 12.5px !important;
@@ -74,7 +122,7 @@ html.overlay-root .hud-chrome-title {
   letter-spacing: 0.08em;
   text-transform: none;
   text-shadow: none;
-  color: var(--ov-text);
+  color: var(--ov-champ);
 }
 
 html.overlay-root .hud-chrome-meta {
@@ -322,15 +370,16 @@ html.overlay-root .hud-buy-next-tag {
   line-height: 1;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--ov-text);
+  color: var(--ov-champ);
   white-space: nowrap;
   background: rgba(8, 8, 11, 0.96);
-  border: 1px solid rgba(242, 179, 80, 0.55);
+  border: 1px solid var(--ov-champ);
   border-radius: 2px;
 }
+/* The one highlighted target: champion color, hairline only (no glow). */
 html.overlay-root .hud-buy-next .hud-buy-icon.is-next {
-  border-color: rgba(242, 211, 130, 0.95);
-  box-shadow: 0 0 10px rgba(242, 179, 80, 0.4);
+  border-color: var(--ov-champ);
+  box-shadow: none;
 }
 
 /* ---------- Readability pass ----------
@@ -341,8 +390,9 @@ html.overlay-root .hud-buy-next .hud-buy-icon.is-next {
 
 html.overlay-root .hud-overlay-panel {
   /* Slightly more opaque than before: the old 0.86 washed out over bright
-   * Rift terrain (river, base floors) at 100% brightness. */
-  background: rgba(8, 8, 11, 0.92);
+   * Rift terrain (river, base floors) at 100% brightness. Background color
+   * only, so the champion accent hairline (background-image) survives. */
+  background-color: rgba(8, 8, 11, 0.92);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   /* Isolate the panel's layout/paint so scaled, right-anchored panels never
    * repaint neighbors or the page while the overlay re-lays out. No blur. */
@@ -514,4 +564,177 @@ html.overlay-root .hud-overlay-panel .truncate,
 html.overlay-root .hud-overlay-panel .hud-chrome-title,
 html.overlay-root .hud-rail-card .truncate {
   overflow: clip;
+}
+
+/* ---------- Pre-match loading card ----------
+ * Pet + your recent form on the champion you are loading in with. Static:
+ * one paint, then nothing moves or pulses. Sits beside your loading-screen
+ * portrait when the slot is known, otherwise bottom-right. No blur, no glow,
+ * no animation.
+ */
+html.overlay-root .ov-loading-card {
+  position: fixed;
+  right: 48px;
+  bottom: 88px;
+  z-index: 20;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px 12px;
+  font-family: var(--font-body);
+  min-width: 0;
+  pointer-events: none;
+  /* Static screen, flat ink: no elevation blur under the card either. */
+  box-shadow: none;
+}
+/* Anchored beside your loading-screen portrait: inline left/top take over. */
+html.overlay-root .ov-loading-card--placed {
+  right: auto;
+  bottom: auto;
+}
+
+/* Full-viewport pet layer: the sprite is a small fixed-size canvas moved by a
+   transform, so a moving pet repaints its own rect and nothing else. */
+html.overlay-root .ov-pet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  overflow: hidden;
+}
+html.overlay-root .ov-pet-body {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform;
+}
+html.overlay-root .ov-loading-eyebrow {
+  font-size: calc(9.5px * var(--ov-fs));
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ov-text-2);
+}
+/* Cinzel chrome text: the card's one display element. */
+html.overlay-root .ov-chrome-text {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  background: var(--ov-chrome);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+html.overlay-root .ov-loading-champ {
+  font-size: calc(17px * var(--ov-fs));
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: clip;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+html.overlay-root .ov-loading-sub {
+  font-size: calc(10px * var(--ov-fs));
+  line-height: 1.3;
+  color: var(--ov-text-2);
+}
+html.overlay-root .ov-loading-stats {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  margin-top: 2px;
+}
+/* Vertical hairline dividers between the three stats. */
+html.overlay-root .ov-loading-stat {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 10px;
+  border-left: 1px solid var(--ov-border);
+}
+html.overlay-root .ov-loading-stat:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+html.overlay-root .ov-loading-value {
+  display: block;
+  font-size: calc(16px * var(--ov-fs));
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--ov-text);
+  font-variant-numeric: tabular-nums;
+}
+html.overlay-root .ov-loading-label {
+  display: block;
+  font-size: calc(8.5px * var(--ov-fs));
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ov-text-2);
+}
+/* Form bar: wins champion-colored, losses blood (existing semantic marks). */
+html.overlay-root .ov-form-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin-top: 4px;
+}
+html.overlay-root .ov-form-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 1px;
+}
+html.overlay-root .ov-form-seg--win {
+  background: var(--ov-champ);
+}
+html.overlay-root .ov-form-seg--loss {
+  background: var(--ov-blood);
+}
+html.overlay-root .ov-form-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: calc(8px * var(--ov-fs));
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--ov-text-2);
+}
+
+/* Loading → game handoff: the loading layer sits above the HUD while the
+ * HUD fades in; it is removed after its own 250 ms opacity fade. Transition
+ * only — no keyframes, so the overlay CSS stays animation-free. */
+html.overlay-root .ov-handoff-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  will-change: opacity;
+}
+
+/* ---------- HUD skin hooks (Brief I) ----------
+ * hud-skins.css sets these variables per `[data-ov-skin]`; the defaults here
+ * reproduce the shipped gothic look exactly. Only cosmetic properties read
+ * them — radius, frame width, clip path and panel backing alpha — so a skin
+ * switch can never move a module box or clip its text. The surface keeps the
+ * R5 floor: --ov-skin-panel-alpha is clamped to 0.80–1 by hudSkins.ts.
+ */
+html.overlay-root .ov-panel,
+html.overlay-root .hud-overlay-panel {
+  border-radius: var(--ov-skin-radius, 5px);
+  border-width: var(--ov-skin-border-width, 1px);
+  clip-path: var(--ov-skin-clip, none);
+}
+html.overlay-root .ov-panel {
+  background-color: rgb(9 9 11 / var(--ov-skin-panel-alpha, 0.86));
+}
+html.overlay-root .hud-overlay-panel {
+  background-color: rgb(8 8 11 / var(--ov-skin-panel-alpha, 0.92));
+}
+/* Left-rail section cards share the skin frame (radius/clip) but keep their
+ * lightweight translucent backing and existing padding: decoration only, so
+ * module boxes and text clipping are unchanged. Corner marks are rendered in
+ * OverlayApp and collision-hidden like every other panel. */
+html.overlay-root .hud-rail-card {
+  border-radius: var(--ov-skin-radius, 5px);
+  clip-path: var(--ov-skin-clip, none);
 }

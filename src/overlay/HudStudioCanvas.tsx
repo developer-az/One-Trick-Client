@@ -2,6 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeChromeColor } from './chromeTheme';
 import { HUD_MODULE_LABELS, HUD_STUDIO_MODULE_IDS, type HudModuleId } from './hudModules';
 import {
+  DEFAULT_HUD_SKIN_SETTINGS,
+  hudSkinVars,
+  normalizeHudSkinSettings,
+  type HudSkin,
+  type HudSkinSettings,
+} from './hudSkins';
+import { HudSkinOrnaments } from './hudSkinOrnaments';
+import './hud-skins.css';
+import {
   layoutStyle,
   upsertLayoutElement,
   upsertSticker,
@@ -148,6 +157,9 @@ export const HudStudioCanvas: React.FC<{
   height?: number;
   /** Logical stage floor so the HUD stays legible on narrow screens (the wrapper scrolls). */
   minStageWidth?: number;
+  /** Resolved HUD skin drawn on the pins (Auto is mapped before this point). */
+  skin?: HudSkin;
+  skinSettings?: HudSkinSettings;
 }> = ({
   layout,
   onChange,
@@ -158,6 +170,8 @@ export const HudStudioCanvas: React.FC<{
   width = 960,
   height = 540,
   minStageWidth = 280,
+  skin = 'gothic',
+  skinSettings = DEFAULT_HUD_SKIN_SETTINGS,
 }) => {
   const hostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -165,6 +179,7 @@ export const HudStudioCanvas: React.FC<{
   const [dragId, setDragId] = useState<string | null>(null);
   const dragOffsetRef = useRef({ dx: 0, dy: 0 });
   const color = normalizeChromeColor(chromeColor);
+  const skinValues = useMemo(() => normalizeHudSkinSettings(skinSettings), [skinSettings]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -271,8 +286,15 @@ export const HudStudioCanvas: React.FC<{
     <div ref={hostRef} className="hud-studio-fit">
       <div
         ref={stageRef}
-        className={`hud-studio-stage${editable ? ' is-edit' : ''}`}
-        style={{ width: box.w, height: box.h, ['--chrome-frame-color' as string]: color }}
+        className={`hud-studio-stage hud-skin-scope${editable ? ' is-edit' : ''}`}
+        data-ov-skin={skin}
+        data-ov-skin-orn={skinValues.hudSkinOrnaments ? 'on' : 'off'}
+        style={{
+          width: box.w,
+          height: box.h,
+          ['--chrome-frame-color' as string]: color,
+          ...hudSkinVars(skinValues),
+        }}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
@@ -368,6 +390,7 @@ export const HudStudioCanvas: React.FC<{
               onPointerDown={startDrag(el.id)}
               onKeyDown={onPinKeyDown(el.id)}
             >
+              <HudSkinOrnaments skin={skin} ornaments={skinValues.hudSkinOrnaments} />
               {renderStudioModuleContent(el.id as HudModuleId)}
             </button>
           ))}
@@ -387,6 +410,49 @@ export const HudStudioCanvas: React.FC<{
             <StickerMark sticker={sticker} />
           </button>
         ))}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * A live mini preview of one skin, drawn with the real panel classes
+ * (`.ov-panel`, `.hud-chrome-header`, `.hud-chrome-title`) under
+ * `.hud-skin-scope` so the settings cards show the actual CSS, not a drawing.
+ */
+export const HudSkinPreview: React.FC<{
+  skin: HudSkin;
+  settings: HudSkinSettings;
+  className?: string;
+}> = ({ skin, settings, className = '' }) => {
+  const values = normalizeHudSkinSettings(settings);
+  return (
+    <div
+      className={`hud-skin-preview hud-skin-scope ${className}`}
+      data-ov-skin={skin}
+      data-ov-skin-orn={values.hudSkinOrnaments ? 'on' : 'off'}
+      style={{
+        ...hudSkinVars(values),
+        ['--ov-champ' as string]: 'var(--ot-champ, #c9ced6)',
+      }}
+      aria-hidden
+    >
+      <div className="ov-panel ov-panel-accent">
+        <HudSkinOrnaments skin={skin} ornaments={values.hudSkinOrnaments} />
+        <div className="hud-chrome-header">
+          <span className="hud-chrome-title">Summoners</span>
+          <span className="hud-chrome-meta">12:45</span>
+        </div>
+        <div className="hud-skin-preview-body">
+          <div className="hud-skin-preview-row">
+            <span>Flash</span>
+            <span>32s</span>
+          </div>
+          <div className="hud-skin-preview-row">
+            <span>Ignite</span>
+            <span>UP</span>
+          </div>
+        </div>
       </div>
     </div>
   );

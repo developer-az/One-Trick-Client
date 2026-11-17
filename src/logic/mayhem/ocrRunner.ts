@@ -1,14 +1,26 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { parseMayhemOcrOutput } from './ocrOutput';
+import { resolveOcrScriptPath } from './ocrScriptPath';
 
-/** Resolve mayhem-ocr.ps1 from repo root (works in tsx verify without Electron). */
-export function mayhemOcrScriptPath(repoRoot: string): string {
-  const bundled = path.join(repoRoot, 'electron', 'scripts', 'mayhem-ocr.ps1');
-  const dist = path.join(repoRoot, 'dist-electron', 'electron', 'scripts', 'mayhem-ocr.ps1');
-  if (fs.existsSync(bundled)) return bundled;
-  if (fs.existsSync(dist)) return dist;
-  return bundled;
+/**
+ * Resolve mayhem-ocr.ps1 from a repo root or an Electron app root.
+ * In a packaged build the app root is `.../resources/app.asar`, so the
+ * resolved script must come from `app.asar.unpacked` (PowerShell cannot read
+ * inside the archive).
+ */
+export function mayhemOcrScriptPath(
+  repoRoot: string,
+  exists: (candidate: string) => boolean = fs.existsSync
+): string {
+  return resolveOcrScriptPath(
+    [
+      path.join(repoRoot, 'electron', 'scripts', 'mayhem-ocr.ps1'),
+      path.join(repoRoot, 'dist-electron', 'electron', 'scripts', 'mayhem-ocr.ps1'),
+    ],
+    exists
+  );
 }
 
 /** Run Windows.Media.Ocr on a PNG via mayhem-ocr.ps1 (no screen capture). */
@@ -41,7 +53,7 @@ export function runMayhemOcrOnImageFile(imagePath: string, repoRoot: string): Pr
         reject(new Error(err.trim() || `OCR exit ${code}`));
         return;
       }
-      resolve(out);
+      resolve(parseMayhemOcrOutput(out).text);
     });
     ps.on('error', reject);
   });

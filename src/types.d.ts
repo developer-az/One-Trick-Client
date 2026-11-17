@@ -16,11 +16,36 @@ declare global {
     type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
+    /** HUD skin pick (Brief I): a named skin, or auto by champion class. */
+    type HudSkinChoice = 'auto' | 'gothic' | 'bloodmoon' | 'arcane' | 'ironclad' | 'warden' | 'hunter' | 'vanguard';
+
+    interface HudSkinSettings {
+        hudSkin: HudSkinChoice;
+        hudSkinOrnaments: boolean;
+        /** Panel surface alpha percent, clamped to 80–100. */
+        hudSkinOpacity: number;
+        /** Ornament size percent, clamped to 75–150. */
+        hudSkinScale: number;
+        hudSkinUseChampColor: boolean;
+    }
+
     interface LcuStatus {
         state: 'searching' | 'connecting' | 'connected';
         phase: string | null;
         summonerName: string | null;
         connectedAt: number | null;
+    }
+
+    /** LCU-backed champ-select scouting row (rank, mastery, recent form). */
+    interface ScoutingPlayer {
+        summonerId: number;
+        championId: number;
+        teamId: number;
+        rankTier?: string | null;
+        rankDivision?: string | null;
+        masteryLevel?: number | null;
+        recentWins?: number;
+        recentGames?: number;
     }
 
     interface AppSettings {
@@ -42,13 +67,17 @@ declare global {
         autoClip: boolean;
     /** Dashboard appearance (theme/accent/density/radius/glass/type scale). */
     appearance: AppearanceSettings;
+        /** Champions pinned on the orbit rail, in display order (max 6). */
+        pinnedChampions: string[];
         /** Dashboard pixel pet (species + color). Persisted like appearance. */
         pet: PetSettings;
     }
 
     type AppearanceTheme = 'gothic' | 'ember' | 'azure' | 'phantom' | 'ivory';
-    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal';
+    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal' | 'champion';
     type AppearanceDensity = 'compact' | 'comfortable' | 'spacious';
+    type AppearanceLayout = 'compact' | 'showcase';
+    type OrnamentLevel = 'none' | 'light' | 'full';
 
     interface AppearanceSettings {
         /** Surface / type / line palette. */
@@ -63,6 +92,12 @@ declare global {
         glass: number;
         /** Dashboard font scale multiplier, 0.85-1.2. */
         fontScale: number;
+        /** Main champion (Data Dragon id). Empty = follow your most-played champion. */
+        mainChampion: string;
+        /** Compact (current shell) or showcase (larger champion hero). */
+        layoutPreset: AppearanceLayout;
+        /** Ornament intensity, 0-100. 0 = plain chrome, 50 = default, 100 = full filigree. */
+        ornament: number;
     }
 
     type PetSpecies = 'imp' | 'pup' | 'wyrm' | 'blob';
@@ -192,6 +227,7 @@ declare global {
             setOverlayTextScale: (scale: number) => Promise<{ success: boolean; overlayTextScale: number }>;
             setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
             setOverlayHudLayout: (layout: unknown) => Promise<{ success: boolean; hudLayout?: unknown }>;
+            setOverlayHudSkin: (skin: Partial<HudSkinSettings>) => Promise<{ success: boolean; hudSkin: HudSkinSettings }>;
             getCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             refreshCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             syncLeagueScales: () => Promise<{ success: boolean; hudScale: number; mapScale: number; source?: string }>;
@@ -209,6 +245,7 @@ declare global {
                 overlayTextScale?: number;
                 hudModules?: HudModules;
                 hudLayout?: unknown;
+                hudSkin?: HudSkinSettings;
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;
@@ -221,6 +258,7 @@ declare global {
             onLcuStatus?: (callback: (payload: LcuStatus) => void) => () => void;
             getChampSelect?: () => Promise<{ session: unknown | null }>;
             onChampSelect?: (callback: (session: unknown | null) => void) => () => void;
+            getScouting?: () => Promise<{ success: boolean; players: ScoutingPlayer[]; error?: string }>;
 
             getAppSettings?: () => Promise<AppSettings>;
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;

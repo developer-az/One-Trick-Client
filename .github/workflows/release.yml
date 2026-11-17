@@ -111,6 +111,9 @@ jobs:
       - name: Windows packaging metadata
         run: npm run verify:packaging
 
+      - name: Stale launcher cleanup
+        run: npm run verify:stale-launcher
+
       - name: Build TypeScript
         run: npm run electron:build
 

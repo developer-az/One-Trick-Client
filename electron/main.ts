@@ -37,8 +37,9 @@ import {
     refreshLiveCadence,
     triggerManualMayhemOcrFromHotkey,
     dismissMayhemAugmentPanelFromHotkey,
-    isMayhemMatchActive,
+    isAramFamilyMatchActive,
 } from './game-monitor';
+import { routeHotkey, type HotkeyRoute } from '../src/logic/mayhem/hotkey';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
 import { ensureClipperProbed, getClipperStatus, listSavedClips, saveManualClip, syncAutoClip } from './clipper';
@@ -64,6 +65,8 @@ import {
     setHudModules,
     getHudLayout,
     setHudLayout,
+    getHudSkin,
+    setHudSkin,
     syncScalesFromLeague,
     getCalibration,
     adjustCalibration,
@@ -319,8 +322,18 @@ function flashToggleRoles(): { primary: TrackedRole; secondary: TrackedRole } {
     return { primary: 'Bot', secondary: 'Support' };
 }
 
+function hotkeyRoute(key: 'PageUp' | 'PageDown', inGame: boolean, aramFamily: boolean): HotkeyRoute | null {
+    return routeHotkey(key, { inGame, aramFamily });
+}
+
+function logHotkey(key: 'PageUp' | 'PageDown', routed: HotkeyRoute | null): void {
+    overlayLog('hotkey', { key, routed: routed ?? 'none' });
+}
+
 function onFlashPrimary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageUp', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageUp', route);
+    if (route === 'mayhem-dismiss') {
         dismissMayhemAugmentPanelFromHotkey();
         return;
     }
@@ -330,7 +343,9 @@ function onFlashPrimary(): void {
 }
 
 function onFlashSecondary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageDown', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageDown', route);
+    if (route === 'mayhem-scan') {
         void triggerManualMayhemOcrFromHotkey();
         return;
     }
@@ -542,6 +557,16 @@ app.whenReady().then(() => {
 
     ipcMain.handle('lcu-status', () => lcuSocket.summary());
     ipcMain.handle('champ-select-get', () => ({ session: lcuSocket.champSelect }));
+    ipcMain.handle('scouting-get', async () => {
+        if (isCurrentlyInGame()) return { success: true, players: [] as import('./scouting').ScoutingPlayer[] };
+        try {
+            const { fetchScoutingForSession } = await import('./scouting');
+            const players = await fetchScoutingForSession(lcuSocket.champSelect);
+            return { success: true, players };
+        } catch (e) {
+            return { success: false, players: [], error: String(e) };
+        }
+    });
 
     ipcMain.handle('app-settings-get', () => getAppSettings());
     ipcMain.handle('app-settings-set', (_event, patch: unknown) => {
@@ -905,6 +930,10 @@ app.whenReady().then(() => {
         return { success: true, hudLayout: setHudLayout(layout) };
     });
 
+    ipcMain.handle('overlay-set-hud-skin', async (_event, skin: unknown) => {
+        return { success: true, hudSkin: setHudSkin(skin) };
+    });
+
     ipcMain.handle('catalog-get', () => {
         return { success: true, catalog: loadCatalogCache() };
     });
@@ -1013,6 +1042,7 @@ app.whenReady().then(() => {
             overlayTextScale: getOverlayTextScale(),
             hudModules: getHudModules(),
             hudLayout: getHudLayout(),
+            hudSkin: getHudSkin(),
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,

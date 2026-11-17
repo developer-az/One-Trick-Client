@@ -9,6 +9,19 @@ import { isWinAlive, safeCall } from './safe-window';
 import { getAppSettings } from './app-settings';
 import { getKeyHookStatus } from './global-key-hook';
 import { attachNativeSurface, createOsrWindow, type NativeSurfaceHandle } from './overlay-presenter';
+import {
+    pageReadyAfterBeat,
+    resetPageReadiness,
+    type OverlayPageBeat,
+} from './prematch-loading';
+import {
+    DEFAULT_HUD_SKIN_SETTINGS,
+    normalizeHudSkinSettings,
+    type HudSkinSettings,
+} from '../src/overlay/hudSkins';
+
+export type { HudSkinChoice, HudSkinSettings } from '../src/overlay/hudSkins';
+
 export interface FrameCalibration {
     dx: number;
     dy: number;
@@ -160,12 +173,7 @@ let holdDown = false;
 let matchActive = false;
 
 /** Last report from each overlay page, keyed by webContents id. */
-interface OverlayBeat {
-    at: number;
-    frameAt: number | null;
-    pageVisible: boolean;
-}
-const overlayBeats = new Map<number, OverlayBeat>();
+const overlayBeats = new Map<number, OverlayPageBeat>();
 /** Since when the overlay window has been on screen, as seen by the health log. */
 let shownSince: number | null = null;
 let lastHealthSignature = '';
@@ -348,6 +356,30 @@ function forgetSlot(webContentsId: number): void {
     shownSince = null;
 }
 
+/**
+ * A renderer reload keeps the same webContents id, so its beat entry would
+ * survive and the remounted page's first heartbeat would never fire the
+ * page-ready replay. Clear readiness whenever a page mount can start.
+ */
+function resetOverlayPageReadiness(webContentsId: number, reason: string): void {
+    resetPageReadiness(overlayBeats, webContentsId, reason, overlayLog);
+}
+
+/** Arm the fresh-page signals on one overlay webContents (electron or OSR). */
+function armPageReadiness(win: BrowserWindow): void {
+    const contentsId = win.webContents.id;
+    win.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+        if (!isMainFrame) return;
+        resetOverlayPageReadiness(contentsId, 'did-start-navigation');
+    });
+    win.webContents.on('did-finish-load', () => {
+        resetOverlayPageReadiness(contentsId, 'did-finish-load');
+    });
+    win.webContents.on('render-process-gone', () => {
+        resetOverlayPageReadiness(contentsId, 'render-process-gone');
+    });
+}
+
 function reloadOverlayRenderer(win: BrowserWindow): void {
     // isWinAlive wraps both destroy checks in a try/catch, and the explicit
     // webContents check closes the window-destroyed-but-webContents-alive gap.
@@ -380,6 +412,9 @@ function reloadOverlayRenderer(win: BrowserWindow): void {
 function armOverlayRenderer(win: BrowserWindow): void {
     const contentsId = win.webContents.id;
     win.on('closed', () => forgetSlot(contentsId));
+    // A reload/navigation keeps the webContents id: re-arm page readiness so the
+    // remounted page's first heartbeat replays the payload again.
+    armPageReadiness(win);
     win.webContents.on('render-process-gone', (_event, details) => {
         console.warn('[overlay] renderer exited');
         overlayLog('renderer-exited', {
@@ -427,8 +462,9 @@ export function healOverlayWindows(): void {
 /**
  * An overlay page reports that it is alive and whether a frame was produced.
  * This is the only signal that separates "shown" from "actually drawn".
- * It is measurement only: since the single-window remake nothing acts on it
- * automatically — the health line in overlay.log is what a human reads.
+ * The first beat of a page also tells the game monitor the page is mounted, so
+ * it can replay its last payload; the health line in overlay.log is what a
+ * human reads afterwards.
  */
 export function noteOverlayHeartbeat(
     webContentsId: number,
@@ -438,12 +474,18 @@ export function noteOverlayHeartbeat(
     const isElectron = windowHasWebContents(overlayWin, webContentsId);
     if (!isNative && !isElectron) return;
     const now = Date.now();
-    const previous = overlayBeats.get(webContentsId);
-    overlayBeats.set(webContentsId, {
-        at: now,
-        frameAt: beat.frames ? now : previous?.frameAt ?? null,
-        pageVisible: beat.pageVisible,
-    });
+    // `previous` is true when this page mount already reported a beat. Page
+    // reloads clear it (resetOverlayPageReadiness), so the next beat is first
+    // again and gets its own replay.
+    const previous = pageReadyAfterBeat(overlayBeats, webContentsId, beat, now);
+    // First beat of a page: its effects have run, so a replay is actually heard.
+    if (!previous && overlayPageReadyHandler) {
+        try {
+            overlayPageReadyHandler();
+        } catch {
+            // A replay listener must not break the beat path.
+        }
+    }
 }
 
 /**
@@ -556,6 +598,9 @@ const DEFAULT_HUD_MODULES: HudModules = {
 
 let hudModules: HudModules = { ...DEFAULT_HUD_MODULES };
 let hudLayout: unknown = null;
+
+/** HUD skin tweaks (Brief I) — persisted with the overlay settings. */
+let hudSkin: HudSkinSettings = { ...DEFAULT_HUD_SKIN_SETTINGS };
 let settingsLoaded = false;
 
 function normalizeHudModules(value: unknown): HudModules {
@@ -628,15 +673,15 @@ function widgetsFromSettings(): Array<{
     }) : null;
     const defaults = [
         { id: 'sums', visible: true, x: 0.018, y: 0.078, scale: 1, anchor: 'tl' },
-        { id: 'gank', visible: true, x: 0.835, y: 0.078, scale: 1, anchor: 'tr' },
-        { id: 'vision', visible: true, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
-        { id: 'buy', visible: true, x: 0.835, y: 0.42, scale: 1, anchor: 'tr' },
-        { id: 'action', visible: true, x: 0.835, y: 0.54, scale: 1, anchor: 'tr' },
-        { id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'gank', visible: true, x: 0.982, y: 0.078, scale: 1, anchor: 'tr' },
+        { id: 'vision', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'buy', visible: true, x: 0.982, y: 0.42, scale: 1, anchor: 'tr' },
+        { id: 'action', visible: true, x: 0.982, y: 0.54, scale: 1, anchor: 'tr' },
+        { id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
     ];
     const elements = Array.isArray(raw?.elements) && raw.elements.length ? [...raw.elements] : defaults;
     if (!elements.some((el) => el?.id === 'mayhem')) {
-        elements.push({ id: 'mayhem', visible: false, x: 0.835, y: 0.26, scale: 1, anchor: 'tr' });
+        elements.push({ id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' });
     }
     const widgets: Array<{
         id: string;
@@ -734,6 +779,7 @@ function loadSettings(): void {
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
             hudModules?: unknown;
+            hudSkin?: unknown;
             overlayBackend?: unknown;
         };
         // Only override with saved values if user explicitly tuned after import
@@ -765,6 +811,7 @@ function loadSettings(): void {
             interactiveBounds = settings.interactiveBounds;
         }
         hudModules = normalizeHudModules(settings.hudModules);
+        hudSkin = normalizeHudSkinSettings(settings.hudSkin);
         const savedLayout = (settings as { hudLayout?: unknown }).hudLayout;
         if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
         // Backend: saved setting wins; else the packaged build's default
@@ -806,6 +853,7 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
                 calibration,
                 hudModules,
                 hudLayout,
+                hudSkin,
                 overlayBackend: backend,
                 preferLeagueCfg,
             }),
@@ -880,6 +928,18 @@ export function onOverlayWindowCreated(listener: () => void): () => void {
     return () => {
         overlayWindowCreatedListeners.delete(listener);
     };
+}
+
+/**
+ * The page's first heartbeat means its React effects ran and the overlay-update
+ * listener is bound. A payload sent at did-finish-load can be missed when the
+ * bundle mounts late (or the window came from a backend fallback), so the game
+ * monitor replays its last payload here. One call per page, not per beat.
+ */
+let overlayPageReadyHandler: (() => void) | null = null;
+
+export function setOverlayPageReadyHandler(handler: (() => void) | null): void {
+    overlayPageReadyHandler = handler;
 }
 
 /**
@@ -959,6 +1019,9 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
     // webContents is torn down with the window; capture its id before the
     // closed callback can read it after teardown.
     const wcId = win.webContents.id;
+    // The OSR page reloads independently of the Electron overlay: give it the
+    // same fresh-page readiness signals.
+    armPageReadiness(win);
     win.on('closed', () => {
         forgetSlot(wcId);
         if (osrWin === win) osrWin = null;
@@ -1242,15 +1305,68 @@ export function toggleOverlayVisibility(): boolean {
     return !userHidden;
 }
 
-export function setOverlayUserHidden(hidden: boolean): void {
+export interface OverlayUserHiddenDeps {
+    /** The overlay surface is created and visible right now. */
+    isShown: () => boolean;
+    show: () => void;
+    hide: () => void;
+    broadcast: () => void;
+}
+
+/**
+ * "Is the overlay actually on screen?" A live native presenter is not enough:
+ * a healthy presenter can be hidden. Electron visibility is its own signal.
+ */
+export interface OverlaySurfaceProbe {
+    /** The native presenter is the active surface (locked mode). */
+    nativeLocked: boolean;
+    /** The presenter process/socket is alive. */
+    nativeAlive: boolean;
+    /** The presenter was told to show (the actual native visibility). */
+    nativeShown: boolean;
+    /** Any Electron overlay window is visible. */
+    electronShown: boolean;
+}
+
+export function overlaySurfaceShown(probe: OverlaySurfaceProbe): boolean {
+    if (probe.nativeLocked) return probe.nativeAlive && probe.nativeShown;
+    return probe.electronShown;
+}
+
+function defaultUserHiddenDeps(): OverlayUserHiddenDeps {
+    return {
+        isShown: () =>
+            overlaySurfaceShown({
+                nativeLocked: isNativeLocked(),
+                nativeAlive: !!nativeSurface && nativeSurface.isLive(),
+                nativeShown: !!nativeSurface && nativeSurface.isShown(),
+                electronShown: overlayWindows().some((win) => safeCall(() => win.isVisible()) === true),
+            }),
+        show: showOverlay,
+        hide: hideOverlay,
+        broadcast: broadcastOverlayMeta,
+    };
+}
+
+/**
+ * Set the user-hidden flag. Clearing it must never re-show (or re-apply the
+ * bounds of) a window that is already on screen: match start calls this on a
+ * window the loading screen already showed, and showOverlay() would re-apply
+ * locked bounds and flicker the handoff.
+ */
+export function setOverlayUserHidden(hidden: boolean, deps?: OverlayUserHiddenDeps): void {
+    const d = deps ?? defaultUserHiddenDeps();
+    // Unchanged and already in the requested state: a no-op. Hidden=true stays
+    // a no-op even if a stale surface exists; shown=true is the match-start case.
+    if (userHidden === hidden && (hidden || d.isShown())) return;
     userHidden = hidden;
     overlayLog('user-hidden', { hidden, source: 'set' });
     if (hidden) {
-        hideOverlay();
-    } else {
-        showOverlay();
+        d.hide();
+    } else if (!d.isShown()) {
+        d.show();
     }
-    broadcastOverlayMeta();
+    d.broadcast();
 }
 
 function applyFullscreenBounds(): void {
@@ -1419,7 +1535,6 @@ export function getHudLayout(): unknown {
     ensureSettingsLoaded();
     return hudLayout;
 }
-
 export function setHudLayout(next: unknown): unknown {
     ensureSettingsLoaded();
     if (next && typeof next === 'object') {
@@ -1428,6 +1543,20 @@ export function setHudLayout(next: unknown): unknown {
         broadcastOverlayMeta();
     }
     return hudLayout;
+}
+
+export function getHudSkin(): HudSkinSettings {
+    ensureSettingsLoaded();
+    return { ...hudSkin };
+}
+
+/** Merge a tweak patch, clamp it, persist and push to a running overlay. */
+export function setHudSkin(next: unknown): HudSkinSettings {
+    ensureSettingsLoaded();
+    hudSkin = normalizeHudSkinSettings({ ...hudSkin, ...(next && typeof next === 'object' ? next : {}) });
+    saveSettings();
+    broadcastOverlayMeta();
+    return { ...hudSkin };
 }
 
 export function getHudScale(): number {
@@ -1608,6 +1737,8 @@ export function broadcastOverlayMeta(): void {
         alignMode,
         hudModules,
         hudLayout,
+        hudSkin,
+        pet: getAppSettings().pet,
         displayWidth: display.bounds.width,
         displayHeight: display.bounds.height,
         slot: currentSlot(),
@@ -1631,6 +1762,9 @@ interface OverlayUpdatePayload {
 function slimForMainWindow(payload: OverlayUpdatePayload): OverlayUpdatePayload {
     return {
         inGame: payload.inGame,
+        loading: payload.loading,
+        gameTime: payload.gameTime,
+        trustedGameTime: payload.trustedGameTime,
         profileHint: payload.profileHint ?? null,
         enemyBotSummoners: payload.enemyBotSummoners,
         localPlayer: payload.localPlayer

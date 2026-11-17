@@ -1,7 +1,7 @@
 {
   "name": "one-trick",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.7.1-test.9",
   "description": "One Trick — gothic League companion + HUD studio. Authored Pyke / Pantheon / Yone, live catalog for every champion, click-through overlay.",
   "author": "Az040",
   "repository": {
@@ -25,6 +25,9 @@
     ],
     "npmRebuild": false,
     "nodeGypRebuild": false,
+    "asarUnpack": [
+      "electron/scripts/**"
+    ],
     "win": {
       "icon": "build/icon.ico",
       "executableName": "OneTrick",
@@ -88,6 +91,9 @@
     "lint": "eslint .",
     "verify:cues": "npx --yes tsx verify_overlay_cues.ts",
     "verify:cue-labels": "npx --yes tsx verify_cue_labels.ts",
+    "verify:build-boot-slot": "npx --yes tsx verify_build_boot_slot.ts",
+    "verify:cue-rank": "npx --yes tsx verify_cue_rank.ts",
+    "verify:map-scheme": "npx --yes tsx verify_map_scheme.ts",
     "verify:buy-detail": "npx --yes tsx verify_buy_detail.ts",
     "verify:summoner-chip": "npx --yes tsx verify_summoner_chip.ts",
     "verify:enemy-respawns": "npx --yes tsx verify_enemy_respawns.ts",
@@ -115,6 +121,12 @@
     "verify:mayhem-match": "npx --yes tsx verify_mayhem_match.ts",
     "verify:mayhem-visibility": "npx --yes tsx verify_mayhem_visibility.ts",
     "verify:mayhem-ocr": "npx --yes tsx verify_mayhem_ocr.ts",
+    "verify:mayhem-live": "npx --yes tsx verify_mayhem_live.ts",
+    "verify:mayhem-monitor": "npx --yes tsx verify_mayhem_monitor.ts",
+    "verify:ocr-geometry-actual": "npx --yes tsx verify_ocr_geometry_actual.ts",
+    "verify:real-game": "npx --yes tsx verify_real_game_regressions.ts",
+    "verify:overlay-handoff": "node scripts/verify-overlay-handoff.mjs",
+    "verify:hud-skins-dom": "node scripts/verify-hud-skins-dom.mjs",
     "verify:global-hotkeys": "npx --yes tsx verify_global_hotkeys.ts",
     "verify:local-extended": "npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:presenter-live",
     "verify:presenter-live": "node scripts/probe-presenter.mjs",
@@ -130,9 +142,10 @@
     "verify:game-state-live": "npx --yes cross-env OT_LIVE_STATE=1 npm run verify:game-state",
     "verify:electron-paths": "npx --yes tsx verify_electron_paths.ts",
     "verify:packaging": "npx --yes tsx verify_packaging.ts",
+    "verify:stale-launcher": "npx --yes tsx verify_stale_launcher_cleanup.ts",
     "verify:ranked": "npx --yes tsx verify_ranked.ts && npx --yes tsx verify_aram_profile.ts",
     "verify:one-trick": "npx --yes tsx verify_one_trick.ts",
-    "verify:release": "npm run lint && npm run verify:perf-budget && npm run verify:cues && npm run verify:cue-labels && npm run verify:buy-detail && npm run verify:summoner-chip && npm run verify:enemy-respawns && npm run verify:overlay-clock && npm run verify:latency-stats && npm run verify:no-winrate-claims && npm run verify:signal-inventory && npm run verify:vision-validation && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-layout-edges && npm run verify:overlay-bounds && npm run verify:overlay-health && npm run verify:destroyed-guards && npm run verify:native-presenter && npm run verify:presenter-frame && npm run verify:presenter-supervisor && npm run verify:overlay-fallback && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:clipper-lifecycle && npm run verify:game-state && npm run verify:state-service && npm run verify:game-monitor && npm run verify:ipc-surface && npm run verify:hud-geometry && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npx tsc --noEmit && npm run verify:purchase-order && npm run verify:app-density && npm run verify:appearance-settings && npm run verify:pixel-pet && npm run verify:review-fixes",
+    "verify:release": "npm run lint && npm run verify:perf-budget && npm run verify:cues && npm run verify:cue-labels && npm run verify:build-boot-slot && npm run verify:cue-rank && npm run verify:map-scheme && npm run verify:buy-detail && npm run verify:summoner-chip && npm run verify:enemy-respawns && npm run verify:overlay-clock && npm run verify:latency-stats && npm run verify:no-winrate-claims && npm run verify:signal-inventory && npm run verify:vision-validation && npm run verify:icons && npm run verify:catalog && npm run verify:layout && npm run verify:overlay-layout-edges && npm run verify:overlay-bounds && npm run verify:overlay-health && npm run verify:destroyed-guards && npm run verify:native-presenter && npm run verify:presenter-frame && npm run verify:presenter-supervisor && npm run verify:overlay-fallback && npm run verify:summoners && npm run verify:stats && npm run verify:match && npm run verify:jungle && npm run verify:wave && npm run verify:loss-insights && npm run verify:ranked && npm run verify:mayhem && npm run verify:mayhem-match && npm run verify:mayhem-visibility && npm run verify:mayhem-ocr && npm run verify:ocr-geometry-actual && npm run verify:global-hotkeys && npm run verify:augment-schedule && npm run verify:play-moments && npm run verify:coach && npm run verify:clipper && npm run verify:clipper-lifecycle && npm run verify:game-state && npm run verify:state-service && npm run verify:game-monitor && npm run verify:ipc-surface && npm run verify:hud-geometry && npm run verify:pixel-pet && npm run verify:loading-pet && npm run verify:scouting && npm run verify:appearance-settings && npm run electron:build && npm run build && npm run verify:electron-paths && npm run verify:packaging && npm run verify:stale-launcher && npx tsc --noEmit && npm run verify:purchase-order && npm run verify:app-density && npm run verify:review-fixes",
     "catalog:generate": "npx --yes tsx scripts/generate-catalog.ts",
     "preview": "vite preview",
     "electron": "wait-on tcp:5173 && electron .",
@@ -158,7 +171,18 @@
     "verify:app-density": "npx --yes tsx verify_app_density.ts",
     "verify:appearance-settings": "npx --yes tsx verify_appearance_settings.ts",
     "verify:pixel-pet": "npx --yes tsx verify_pixel_pet.ts",
-    "verify:review-fixes": "npx --yes tsx verify_review_fixes.ts"
+    "verify:loading-pet": "npx --yes tsx verify_loading_pet.ts",
+    "verify:loading-card": "npx --yes tsx verify_loading_card.ts",
+    "verify:client-revamp": "npx --yes tsx verify_client_revamp.ts",
+    "verify:orbit-client": "npx --yes tsx verify_orbit_client.ts",
+    "verify:loading-roam": "npx --yes tsx verify_loading_roam.ts",
+    "verify:champ-accent": "npx --yes tsx verify_champ_accent.ts",
+    "verify:prematch-loading": "npx --yes tsx verify_prematch_loading.ts",
+    "verify:prematch-lifecycle": "npx --yes tsx verify_prematch_lifecycle.ts",
+    "verify:scouting": "npx --yes tsx verify_scouting.ts",
+    "verify:scouting-identity": "npx --yes tsx verify_scouting_identity.ts",
+    "verify:review-fixes": "npx --yes tsx verify_review_fixes.ts",
+    "verify:hud-skins": "npx --yes tsx verify_hud_skins.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

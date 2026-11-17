@@ -1,4 +1,4 @@
-﻿/*
+/*
  * One Trick — dashboard design system.
  *
  * Gothic chrome: ink-black surfaces, chrome silver for "yours", blood red as
@@ -13,12 +13,14 @@
 
 html:not(.overlay-root) {
   font-family: var(--ot-font);
-  font-weight: 450;
+  font-weight: var(--ot-weight-body);
   letter-spacing: -0.005em;
   color: var(--ot-text);
   background: var(--ot-bg);
   /* Appearance: rem-based type scales with the font-scale control. */
   font-size: calc(100% * var(--ot-font-scale));
+  line-height: var(--ot-lh-body);
+  text-rendering: optimizeLegibility;
 }
 
 html:not(.overlay-root) body {
@@ -26,6 +28,7 @@ html:not(.overlay-root) body {
   color: var(--ot-text);
   background: var(--ot-bg);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html:not(.overlay-root) ::-webkit-scrollbar {
@@ -53,10 +56,12 @@ html:not(.overlay-root) ::selection {
 
 .ot-shell {
   display: grid;
-  grid-template-rows: 44px 1fr;
-  grid-template-columns: 224px 1fr;
+  grid-template-rows: 44px auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
+  position: relative;
+  background: var(--ot-bg);
 }
 
 .ot-titlebar {
@@ -66,9 +71,16 @@ html:not(.overlay-root) ::selection {
   gap: 14px;
   padding: 0 152px 0 16px; /* right: native window controls (titleBarOverlay) */
   border-bottom: 1px solid var(--ot-border);
-  background: var(--ot-bg);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
   -webkit-app-region: drag;
   user-select: none;
+}
+.ot-titlebar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .ot-titlebar .ot-no-drag {
   -webkit-app-region: no-drag;
@@ -148,8 +160,12 @@ html:not(.overlay-root) ::selection {
 }
 
 .ot-main {
+  position: relative;
+  z-index: 1;
   overflow-y: auto;
-  background: var(--ot-bg-raised);
+  overscroll-behavior: contain;
+  contain: paint;
+  background: transparent;
 }
 .ot-page {
   max-width: 1180px;
@@ -183,6 +199,8 @@ html:not(.overlay-root) ::selection {
   border: 1px solid var(--ot-border);
   border-radius: var(--ot-radius);
   background: var(--ot-surface);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 .ot-card-pad {
   padding: var(--ot-space-card);
@@ -754,12 +772,6 @@ html:not(.overlay-root) ::selection {
  * animation, nothing that repaints on its own.
  */
 
-.ot-main {
-  background:
-    radial-gradient(ellipse 80% 40% at 50% 0%, rgba(180, 36, 58, 0.07), transparent 70%),
-    var(--ot-bg-raised);
-}
-
 .ot-titlebar {
   border-bottom: 1px solid transparent;
   border-image: linear-gradient(90deg, transparent, rgba(212, 216, 222, 0.22) 20%, rgba(180, 36, 58, 0.5) 50%, rgba(212, 216, 222, 0.22) 80%, transparent) 1;
@@ -911,13 +923,21 @@ html:not(.overlay-root) ::selection {
  * (loaded after tokens.css) so equal-specificity overrides win.
  * ========================================================================= */
 
-/* ---- Glass level (0 = opaque, off) ---- */
-html:not(.overlay-root) .ot-card,
-html:not(.overlay-root) .ot-appearance-drawer,
-html:not(.overlay-root) .ot-titlebar,
-html:not(.overlay-root) .ot-toast {
+/* ---- Glass level (0 = opaque, off) — only when glass > 0 (data-ot-glass-on).
+ * Backdrop blur on every card repaints the scroll container; disable while scrolling. */
+html:not(.overlay-root)[data-ot-glass-on] .ot-card,
+html:not(.overlay-root)[data-ot-glass-on] .ot-appearance-drawer,
+html:not(.overlay-root)[data-ot-glass-on] .ot-titlebar,
+html:not(.overlay-root)[data-ot-glass-on] .ot-toast {
   -webkit-backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
   backdrop-filter: blur(calc(var(--ot-glass) * 0.06px));
+}
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-card,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-appearance-drawer,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-titlebar,
+html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* ---- Appearance drawer ---- */
@@ -1136,12 +1156,14 @@ html:not(.overlay-root) .ot-toast {
 .ot-pet-area {
   position: fixed;
   right: 24px;
-  bottom: 18px;
+  bottom: 30px;
   z-index: 30;
   width: 128px;
   height: 72px;
   pointer-events: none;
   user-select: none;
+  contain: layout paint;
+  isolation: isolate;
 }
 .ot-pet-area canvas,
 .ot-pet-preview canvas {
@@ -1158,4 +1180,2047 @@ html:not(.overlay-root) .ot-toast {
   border: 1px dashed var(--ot-border-strong);
   background: var(--ot-bg);
   pointer-events: none;
+}
+
+/* ===========================================================================
+ * Client revamp (G) — ornate gothic framing + champion-driven shell.
+ *
+ * Static ornament only: engraved titles, hairline rules with a centered
+ * diamond, filigree dividers, crest marks, card corner flourishes. Every mark
+ * is drawn with currentColor or a token (--ot-champ) so it tints with the
+ * champion accent. No images, no filters, no blur, no animation loops; the
+ * one motion is a <=200ms splash fade that reduced-motion disables.
+ *
+ * Ornament intensity: --ot-ornament (0..1) scales line weight/opacity and the
+ * data-ot-ornament bucket hides whole layers:
+ *   none  = today's plain chrome (0)
+ *   light = engraved titles + hairline rule (1–74, default 50)
+ *   full  = + crest, filigree, card corner flourishes (75–100)
+ * ========================================================================= */
+
+/* ---- Champion accent: opt-in "champion" palette. ---- */
+[data-ot-accent='champion'] {
+  --ot-gold: var(--ot-champ);
+  --ot-gold-soft: var(--ot-champ-soft);
+  --ot-chrome: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--ot-champ) 45%, #ffffff) 0%,
+    var(--ot-champ) 46%,
+    color-mix(in srgb, var(--ot-champ) 62%, #000000) 54%,
+    color-mix(in srgb, var(--ot-champ) 78%, #ffffff) 100%
+  );
+}
+
+/* The champion mark owns active/selected states and focus rings. */
+.ot-nav.is-active {
+  box-shadow: inset 2px 0 0 var(--ot-champ);
+}
+.ot-btn:focus-visible,
+.ot-nav:focus-visible,
+.ot-input:focus-visible,
+.ot-switch:focus-visible,
+.ot-chip-btn:focus-visible {
+  outline-color: var(--ot-champ);
+}
+.ot-segment button.is-active {
+  box-shadow: inset 0 -2px 0 var(--ot-champ);
+}
+.ot-combobox-option.is-active,
+.ot-combobox-option:hover {
+  background: var(--ot-surface-3);
+  box-shadow: inset 2px 0 0 var(--ot-champ);
+}
+.ot-slot.is-local {
+  border-color: color-mix(in srgb, var(--ot-champ) 55%, transparent);
+  background: linear-gradient(90deg, var(--ot-champ-soft), var(--ot-surface-2) 70%);
+}
+.ot-range {
+  accent-color: var(--ot-champ);
+}
+
+/* ---- Engraved page title: Cinzel, small-caps tracking, chrome rule. ---- */
+.ot-orn-title {
+  font-variant-caps: small-caps;
+  letter-spacing: calc(0.04em + var(--ot-ornament) * 0.05em);
+}
+.ot-page-header::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -2.5px;
+  width: 5px;
+  height: 5px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--ot-champ);
+  opacity: calc(0.35 + var(--ot-ornament) * 0.65);
+  pointer-events: none;
+}
+.ot-page-header::after {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--ot-champ) 70%, transparent) 0%,
+    color-mix(in srgb, var(--ot-champ) 30%, transparent) 26%,
+    var(--ot-border) 68%,
+    transparent 100%
+  );
+}
+.ot-card-title {
+  font-variant-caps: small-caps;
+  letter-spacing: calc(0.12em + var(--ot-ornament) * 0.04em);
+}
+.ot-card-title::before {
+  background: var(--ot-champ);
+}
+.ot-card-heading {
+  letter-spacing: calc(0.02em + var(--ot-ornament) * 0.02em);
+}
+
+/* Card bracket corners: tint with the champion and add a hairline fillet
+   inside each L at the full level. */
+[data-ot-ornament='light'] .ot-card::before,
+[data-ot-ornament='full'] .ot-card::before,
+[data-ot-ornament='light'] .ot-card::after,
+[data-ot-ornament='full'] .ot-card::after {
+  border-color: color-mix(in srgb, var(--ot-champ) 45%, transparent);
+}
+[data-ot-ornament='full'] .ot-card::before {
+  background-image: linear-gradient(
+    135deg,
+    transparent calc(50% - 0.5px),
+    var(--ot-champ) calc(50% - 0.5px),
+    var(--ot-champ) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: 6px 6px;
+  background-position: right bottom;
+  background-repeat: no-repeat;
+}
+[data-ot-ornament='full'] .ot-card::after {
+  background-image: linear-gradient(
+    315deg,
+    transparent calc(50% - 0.5px),
+    var(--ot-champ) calc(50% - 0.5px),
+    var(--ot-champ) calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+  background-size: 6px 6px;
+  background-position: left top;
+  background-repeat: no-repeat;
+}
+/* Full level: every card eyebrow grows a tapering hairline rule. */
+[data-ot-ornament='full'] .ot-card-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  margin-left: 4px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ot-champ) 42%, transparent), transparent);
+}
+
+/* ---- Ornament primitives (shared, never per-view). ---- */
+.ot-orn-crest {
+  flex: none;
+  color: var(--ot-champ);
+  opacity: calc(0.55 + var(--ot-ornament) * 0.45);
+}
+.ot-orn-filigree {
+  display: block;
+  width: 100%;
+  height: 8px;
+  color: var(--ot-champ);
+  opacity: calc(0.2 + var(--ot-ornament) * 0.6);
+}
+.ot-orn-eyebrow {
+  font-family: var(--ot-font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+}
+
+/* ---- Champion banner: Home hero art + the slim strip on other views.
+   Art rides the existing masked .ot-splash; copy sits on an ink scrim. ---- */
+.ot-orn-hero-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--ot-bg) 0%,
+    color-mix(in srgb, var(--ot-bg) 78%, transparent) 46%,
+    transparent 82%
+  );
+}
+.ot-hero > .ot-orn-hero-scrim {
+  position: absolute;
+}
+.ot-orn-hero-crest {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  padding: 2px 9px 2px 7px;
+  width: fit-content;
+  max-width: 100%;
+  border-left: 1px solid var(--ot-champ);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+}
+.ot-orn-hero-name {
+  font-family: var(--ot-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ot-text);
+  line-height: 1.2;
+}
+
+.ot-orn-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 6px 24px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ot-border);
+  background: var(--ot-bg);
+  contain: layout paint;
+}
+.ot-orn-strip > * {
+  position: relative;
+}
+.ot-orn-strip .ot-splash img {
+  width: 52%;
+  right: 0;
+  top: 50%;
+  transform: translateY(-44%);
+  opacity: 0.42;
+}
+.ot-orn-strip-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    var(--ot-bg) 0%,
+    color-mix(in srgb, var(--ot-bg) 82%, transparent) 40%,
+    transparent 88%
+  );
+}
+.ot-orn-strip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 3px 10px;
+  border-left: 1px solid var(--ot-champ);
+  background: color-mix(in srgb, var(--ot-bg) 88%, transparent);
+}
+.ot-orn-strip-name {
+  font-family: var(--ot-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ot-text);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ot-orn-strip .ot-orn-filigree {
+  margin-left: auto;
+  width: min(280px, 34vw);
+  opacity: calc(0.2 + var(--ot-ornament) * 0.5);
+}
+
+/* ---- Layout presets. Showcase grows the hero art (still <= 1/3 viewport)
+   and the strip; compact keeps today's shell untouched. Density stays its own
+   control so the two settings never fight. ---- */
+[data-ot-layout='showcase'] .ot-hero .ot-splash img {
+  width: 82%;
+  opacity: 0.44;
+}
+[data-ot-layout='showcase'] .ot-hero > .flex {
+  padding-top: 8px;
+  padding-bottom: 12px;
+}
+[data-ot-layout='showcase'] .ot-orn-strip {
+  min-height: 58px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+[data-ot-layout='showcase'] .ot-orn-strip .ot-orn-strip-name {
+  font-size: 15px;
+}
+[data-ot-layout='compact'] .ot-orn-strip {
+  min-height: 40px;
+}
+
+/* Short windows: keep the hero inside R7's one-third rule by dropping the
+   crest plate first; the splash art still identifies the champion. */
+@media (max-height: 649px) {
+  .ot-orn-hero-crest {
+    display: none;
+  }
+}
+
+/* ---- Ornament bucket: hide whole layers at 0, full layer at 75+. ---- */
+[data-ot-ornament='none'] .ot-orn-crest,
+[data-ot-ornament='none'] .ot-orn-filigree,
+[data-ot-ornament='none'] .ot-orn-hero-crest,
+[data-ot-ornament='none'] .ot-page-header::before {
+  display: none;
+}
+[data-ot-ornament='light'] .ot-orn-filigree {
+  opacity: calc(0.16 + var(--ot-ornament) * 0.4);
+}
+[data-ot-ornament='full'] .ot-orn-filigree {
+  opacity: calc(0.3 + var(--ot-ornament) * 0.5);
+}
+
+/* ---- Motion: nothing loops and there is no ambient animation. The banner
+   art is static; loaded images paint once. ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ot-nav,
+  .ot-segment button,
+  .ot-orn-strip {
+    transition: none;
+  }
+}
+
+/* ===========================================================================
+ * Brief J — orbital client shell, champion backdrop, app typography.
+ *
+ * The shell is a grid: titlebar / disk / scroll area / footer, over a
+ * full-bleed champion splash masked with an ink vignette. Panels sit on ink
+ * >= 84% so copy never lands on raw art. Static geometry only: no filters, no
+ * blur, no loops; the one motion is a <= 120ms hover/active step.
+ * ========================================================================= */
+
+/* ---- Champion backdrop ---- */
+.ot-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ot-bg-art {
+  position: absolute;
+  inset: 0;
+  opacity: calc(0.62 * var(--ot-bg-art));
+}
+.ot-bg-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 18%;
+  -webkit-mask-image: radial-gradient(ellipse 82% 72% at 52% 14%, #000 18%, rgba(0, 0, 0, 0.55) 52%, transparent 78%);
+  mask-image: radial-gradient(ellipse 82% 72% at 52% 14%, #000 18%, rgba(0, 0, 0, 0.55) 52%, transparent 78%);
+}
+.ot-bg-ink {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 62% 46% at 50% 6%, transparent 12%, color-mix(in srgb, var(--ot-bg) 72%, transparent) 82%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ot-bg) 46%, transparent) 0%,
+      color-mix(in srgb, var(--ot-bg) 86%, transparent) 52%,
+      var(--ot-bg) 88%
+    );
+}
+/* Per-view art strength: Home strongest, dense reading views quieter. */
+.ot-shell[data-ot-view='home'] {
+  --ot-bg-art: 1;
+}
+.ot-shell[data-ot-view='profile'] {
+  --ot-bg-art: 0.8;
+}
+.ot-shell[data-ot-view='stats'],
+.ot-shell[data-ot-view='review'],
+.ot-shell[data-ot-view='draft'],
+.ot-shell[data-ot-view='performance'] {
+  --ot-bg-art: 0.34;
+}
+.ot-shell[data-ot-view='loadout'],
+.ot-shell[data-ot-view='overlay'],
+.ot-shell[data-ot-view='mayhem'] {
+  --ot-bg-art: 0.5;
+}
+
+/* ---- Footer: attribution + licence line (kept from the old sidebar) ---- */
+.ot-shell-foot {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 16px 6px;
+  border-top: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+}
+.ot-shell-foot-rule {
+  flex: none;
+  display: block;
+  width: 140px;
+  height: 6px;
+}
+.ot-shell-foot-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ot-text-3);
+}
+
+/* ---- Profile chip (titlebar, right) ---- */
+.ot-profile-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  max-width: 230px;
+  padding: 0 10px 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+  color: var(--ot-text);
+  text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.ot-profile-chip:hover {
+  background: var(--ot-surface-2);
+  border-color: var(--ot-border-bright);
+}
+.ot-profile-chip[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--ot-champ) 60%, transparent);
+}
+.ot-profile-chip-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  color: var(--ot-champ);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.ot-profile-chip-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ot-profile-chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ot-profile-chip-sub {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--ot-text-3);
+}
+
+/* ---- The disk ---- */
+.ot-disk {
+  position: relative;
+  z-index: 3;
+  justify-self: center;
+  width: min(1040px, calc(100% - 20px));
+  height: var(--ot-disk-h, 184px);
+}
+.ot-disk-plate {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  border: 1px solid var(--ot-border-strong);
+  border-top: 0;
+  border-radius: 0 0 50% 50% / 0 0 66% 66%;
+  background:
+    radial-gradient(120% 150% at 50% 0%, color-mix(in srgb, var(--ot-surface) 52%, transparent), transparent 68%),
+    color-mix(in srgb, var(--ot-bg) 90%, transparent);
+}
+.ot-disk-ring {
+  position: absolute;
+  top: 34px;
+  left: 50%;
+  width: 470px;
+  height: 470px;
+  transform: translateX(-50%);
+  border: 1px dashed var(--ot-border-strong);
+  border-radius: 999px;
+}
+.ot-disk-top {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  max-width: 260px;
+}
+.ot-disk-hub {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  transition: border-color 0.12s ease;
+}
+.ot-disk-hub-portrait {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ot-champ) 70%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 22%, transparent);
+}
+.ot-disk-hub:hover .ot-disk-hub-portrait {
+  border-color: var(--ot-champ);
+}
+.ot-disk-name {
+  font-family: var(--ot-font-display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  color: var(--ot-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+.ot-disk-filigree {
+  width: 120px;
+  height: 6px;
+}
+.ot-orbit {
+  position: absolute;
+  z-index: 2;
+  width: 0;
+  height: 0;
+}
+.ot-orbit-slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+}
+
+/* ---- Nav pills (shared by the arc, the bar and the icon rail) ---- */
+.ot-disk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 18px;
+  border: 1px solid var(--ot-border-strong);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ot-disk-pill.is-arc {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+.ot-disk-pill:hover {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-disk-pill.is-active {
+  color: var(--ot-text);
+  border-color: color-mix(in srgb, var(--ot-champ) 62%, transparent);
+  background: var(--ot-surface-2);
+  box-shadow: inset 0 -2px 0 var(--ot-champ);
+}
+.ot-disk-pill:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-disk-pill svg {
+  flex: none;
+  opacity: 0.9;
+}
+.ot-disk-pill.is-active svg {
+  color: var(--ot-champ);
+  opacity: 1;
+}
+.ot-disk-pill .ot-nav-badge {
+  margin-left: 2px;
+}
+
+/* Bar / icon tiers: hub, segmented bar and pins stack in the disk's flow. */
+.ot-disk.is-bar,
+.ot-disk.is-icons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(920px, calc(100% - 16px));
+  height: auto;
+  min-height: var(--ot-disk-h, 168px);
+  padding: 6px 12px 10px;
+}
+.ot-disk.is-bar .ot-disk-top,
+.ot-disk.is-icons .ot-disk-top {
+  position: static;
+  transform: none;
+  gap: 0;
+}
+.ot-disk.is-bar .ot-disk-plate,
+.ot-disk.is-icons .ot-disk-plate {
+  border-radius: 0 0 26px 26px;
+  border-top: 0;
+}
+.ot-disk.is-bar .ot-disk-filigree,
+.ot-disk.is-icons .ot-disk-filigree {
+  display: none;
+}
+.ot-disk.is-bar .ot-disk-ring,
+.ot-disk.is-icons .ot-disk-ring {
+  display: none;
+}
+.ot-disk-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.ot-disk-pill.is-icon {
+  width: 40px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 12px;
+}
+.ot-disk-pins {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- Pin slots ---- */
+.ot-pin {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+}
+.ot-pin.is-labelled {
+  width: auto;
+  gap: 6px;
+  padding-right: 6px;
+}
+.ot-pin-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  transition: transform 0.12s ease;
+}
+.ot-pin-dot:hover {
+  transform: translateY(-1px);
+}
+.ot-pin-portrait {
+  border-radius: 999px !important;
+}
+.ot-pin.is-active .ot-pin-portrait {
+  border-color: var(--ot-champ);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 55%, transparent);
+}
+.ot-pin.is-dragging {
+  opacity: 0.6;
+}
+.ot-pin-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ot-pin-remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-3);
+  color: var(--ot-text-2);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.ot-pin:hover .ot-pin-remove,
+.ot-pin-remove:focus-visible {
+  opacity: 1;
+}
+.ot-pin-remove:hover {
+  color: var(--ot-text);
+}
+.ot-pin-add-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ot-pin-add {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px dashed var(--ot-border-bright);
+  background: transparent;
+  color: var(--ot-text-2);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.ot-pin-add:hover {
+  border-color: var(--ot-champ);
+  color: var(--ot-text);
+}
+.ot-pin-popover {
+  position: absolute;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  width: 264px;
+  padding: 10px;
+  border-radius: var(--ot-radius);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.ot-pin-popover-head {
+  font-family: var(--ot-font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+  margin-bottom: 6px;
+}
+.ot-pin-popover-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ot-text-3);
+}
+.ot-pin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ot-pin-manage-hint {
+  font-size: 11px;
+  color: var(--ot-text-3);
+}
+
+/* ---- Shared app Button (36/40px, weight 600, no filters) ---- */
+.ot-ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--ot-btn-height);
+  padding: 0 14px;
+  border-radius: var(--ot-btn-radius);
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  font-family: var(--ot-font);
+  font-size: 13px;
+  font-weight: var(--ot-weight-label);
+  line-height: 1;
+  color: var(--ot-text);
+  white-space: nowrap;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.ot-ui-btn-lg {
+  height: var(--ot-btn-height-lg);
+  padding: 0 18px;
+  font-size: 14px;
+}
+.ot-ui-btn:hover:not(:disabled) {
+  background: var(--ot-surface-3);
+  border-color: var(--ot-border-bright);
+}
+.ot-ui-btn-primary {
+  border-color: transparent;
+  background: var(--ot-chrome);
+  color: #0b0b0e;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.ot-ui-btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
+}
+.ot-ui-btn-secondary {
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+}
+.ot-ui-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ot-text-2);
+}
+.ot-ui-btn-ghost:hover:not(:disabled) {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-ui-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ot-ui-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ot-ui-btn:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-ui-btn-icon {
+  display: inline-flex;
+  flex: none;
+}
+.ot-ui-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Numbers: tabular, open digits ---- */
+.ot-num,
+.ot-disk-facts,
+.ot-home-facts,
+.ot-info-card-value {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'ss01' 1;
+}
+
+/* ---- Home: champion title block + actions + 4-card dock ---- */
+.ot-home {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1360px;
+}
+.ot-home-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+  gap: 16px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius);
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+}
+.ot-home-title {
+  min-width: 0;
+}
+.ot-home-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+}
+.ot-home-champion {
+  margin: 2px 0 4px;
+  font-family: var(--ot-font-display);
+  font-size: 46px;
+  font-weight: var(--ot-weight-label);
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  color: var(--ot-text);
+}
+.ot-home-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: var(--ot-fs-body);
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+}
+.ot-home-sep {
+  color: var(--ot-text-3);
+}
+.ot-home-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.ot-home-status-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ot-home-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.ot-home-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ot-home-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ot-home-identity-name {
+  font-family: var(--ot-font-display);
+  font-size: 17px;
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.02em;
+  color: var(--ot-text);
+}
+.ot-home-identity-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ot-home-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ot-home-next {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius);
+  background: color-mix(in srgb, var(--ot-bg) 90%, transparent);
+}
+.ot-info-card-head {
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: var(--ot-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-info-card-value {
+  font-size: 22px;
+  font-weight: var(--ot-weight-strong);
+  line-height: 1.1;
+  color: var(--ot-text);
+}
+.ot-info-card-unit {
+  margin-left: 2px;
+  font-size: 11px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+}
+.ot-info-card-sep {
+  margin: 0 4px;
+  color: var(--ot-text-3);
+}
+.ot-info-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-info-card-empty {
+  font-size: 11px;
+  color: var(--ot-text-3);
+}
+.ot-info-card-items {
+  display: flex;
+  gap: 4px;
+}
+.ot-form-bar {
+  display: flex;
+  gap: 3px;
+  height: 6px;
+}
+.ot-form-pip {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--ot-surface-3);
+}
+.ot-form-pip.is-win {
+  background: var(--ot-teal);
+}
+.ot-form-pip.is-loss {
+  background: var(--ot-blood);
+}
+.ot-home-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+.ot-home-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.ot-home-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ot-home-authored {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ot-home-authored-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+  font-size: 12px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text-2);
+  max-width: 210px;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ot-home-authored-item:hover {
+  background: var(--ot-surface-2);
+  color: var(--ot-text);
+}
+.ot-home-authored-item.is-active {
+  border-color: color-mix(in srgb, var(--ot-champ) 60%, transparent);
+  color: var(--ot-text);
+}
+.ot-home-hotkeys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+.ot-home-hotkey {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.ot-home-note {
+  line-height: 1.35;
+}
+
+/* ---- Profile ---- */
+.ot-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1120px;
+}
+.ot-profile-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ot-profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ot-profile-monogram {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border-strong);
+  background: var(--ot-surface-2);
+  color: var(--ot-champ);
+  font-family: var(--ot-font-display);
+  font-size: 18px;
+  font-weight: var(--ot-weight-strong);
+  letter-spacing: 0.02em;
+}
+.ot-profile-name {
+  font-family: var(--ot-font-display);
+  font-size: 22px;
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  color: var(--ot-text);
+}
+.ot-profile-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ot-text-2);
+}
+.ot-profile-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, auto));
+  gap: 4px 20px;
+}
+.ot-profile-facts dt {
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-profile-facts dd {
+  font-size: 13px;
+  font-weight: var(--ot-weight-label);
+  color: var(--ot-text);
+}
+.ot-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.85fr);
+  gap: 12px;
+  align-items: start;
+}
+.ot-profile-empty p {
+  font-size: var(--ot-fs-body);
+  color: var(--ot-text-2);
+}
+.ot-profile-active {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ot-border);
+}
+.ot-profile-active-name {
+  font-size: 14px;
+  font-weight: var(--ot-weight-label);
+}
+.ot-profile-active-sub {
+  font-size: 11px;
+  color: var(--ot-text-2);
+}
+.ot-profile-active .ot-ui-btn {
+  margin-left: auto;
+}
+.ot-profile-field {
+  display: block;
+  margin-bottom: 10px;
+}
+.ot-profile-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: var(--ot-fs-eyebrow);
+  font-weight: var(--ot-weight-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ot-text-3);
+}
+.ot-profile-key {
+  font-family: var(--ot-font-mono);
+  letter-spacing: 0.08em;
+}
+.ot-profile-note {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--ot-border);
+  border-radius: var(--ot-radius-sm);
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+  color: var(--ot-text-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.ot-profile-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ot-champ);
+}
+
+/* ---- Appearance: pinned-champion rows ---- */
+.ot-appearance-pin {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--ot-border);
+  border-radius: 999px;
+  background: var(--ot-bg);
+}
+.ot-appearance-pin-x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--ot-text-2);
+  font-size: 13px;
+  line-height: 1;
+}
+.ot-appearance-pin-x:hover {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+.ot-appearance-pin-move {
+  display: inline-flex;
+  gap: 2px;
+}
+.ot-appearance-pin-move button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--ot-border);
+  color: var(--ot-text-2);
+  font-size: 12px;
+  line-height: 1;
+}
+.ot-appearance-pin-move button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.ot-appearance-pin-move button:hover:not(:disabled) {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+
+/* ---- Reduced motion: no hover/active stepping ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ot-ui-btn,
+  .ot-disk-pill,
+  .ot-pin-dot,
+  .ot-pin-remove,
+  .ot-pin-add,
+  .ot-profile-chip,
+  .ot-home-authored-item {
+    transition: none;
+  }
+  .ot-ui-btn:active:not(:disabled),
+  .ot-pin-dot:hover {
+    transform: none;
+  }
+}
+
+/* ---- Narrow windows: stack the Home / Profile columns ---- */
+@media (max-width: 1099px) {
+  .ot-home-top,
+  .ot-home-lower,
+  .ot-profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ot-home-champion {
+    font-size: 38px;
+  }
+  .ot-home-side {
+    align-items: flex-start;
+  }
+  .ot-profile-facts {
+    grid-template-columns: repeat(2, minmax(0, auto));
+  }
+}
+
+/* ===========================================================================
+ * Brief K — Home + shell match the approved orbital mockup 1:1.
+ *
+ * The mockup is the spec: full-window champion splash under a radial+linear
+ * ink vignette, a true circle half off the top edge with the hub inside, pins
+ * on the left arc, page pills on the right arc, the hero bottom-left, one
+ * chrome action bottom-right, and a 4-card dock along the bottom. No titlebar
+ * row, no extra panels. Static geometry only: no filters, no blur, no loops.
+ * ========================================================================= */
+
+/* ---- Shell: no titlebar row, everything floats over the art ---- */
+.ot-shell {
+  display: block;
+  position: relative;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--ot-bg);
+}
+
+/* ---- Champion art + the reference's vignette ---- */
+.ot-bg-art {
+  opacity: var(--ot-bg-art, 1);
+}
+.ot-bg-art img {
+  object-position: 50% 20%;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.ot-bg-ink {
+  background:
+    radial-gradient(
+      ellipse 70% 60% at 50% 18%,
+      color-mix(in srgb, var(--ot-bg) 15%, transparent) 0%,
+      color-mix(in srgb, var(--ot-bg) 72%, transparent) 60%,
+      var(--ot-bg) 100%
+    ),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--ot-bg) 55%, transparent) 0%,
+      transparent 18%,
+      transparent 55%,
+      var(--ot-bg) 96%
+    );
+}
+.ot-shell[data-ot-view='home'] {
+  --ot-bg-art: 1;
+}
+.ot-shell[data-ot-view='profile'] {
+  --ot-bg-art: 0.82;
+}
+.ot-shell[data-ot-view='stats'],
+.ot-shell[data-ot-view='review'],
+.ot-shell[data-ot-view='draft'],
+.ot-shell[data-ot-view='performance'] {
+  --ot-bg-art: 0.4;
+}
+.ot-shell[data-ot-view='loadout'],
+.ot-shell[data-ot-view='overlay'],
+.ot-shell[data-ot-view='mayhem'] {
+  --ot-bg-art: 0.55;
+}
+
+/* ---- Frameless window: transparent drag strip; interactive chips below it ---- */
+.ot-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 34px;
+  z-index: 5;
+  -webkit-app-region: drag;
+}
+
+/* ---- Status chip (top-left) ---- */
+.ot-status {
+  position: fixed;
+  left: 16px;
+  top: 18px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+  -webkit-app-region: no-drag;
+  pointer-events: none;
+}
+.ot-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ot-champ);
+}
+
+/* ---- Profile pill (top-right) ---- */
+.ot-profile-chip {
+  position: fixed;
+  right: var(--ot-titlebar-right, 16px);
+  top: var(--ot-titlebar-top, 14px);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 6px 12px 6px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 78%, transparent);
+  color: var(--ot-text);
+  text-align: left;
+  -webkit-app-region: no-drag;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.ot-profile-chip:hover {
+  background: color-mix(in srgb, var(--ot-bg) 88%, transparent);
+  border-color: var(--ot-border-bright);
+}
+.ot-profile-chip[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--ot-champ) 60%, transparent);
+}
+.ot-profile-chip-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-champ);
+  background: var(--ot-surface-2);
+  color: var(--ot-champ);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.ot-profile-chip-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ot-profile-chip-name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ot-profile-chip-sub {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ot-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- The disk: a true circle, half off the top edge ---- */
+.ot-disk {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: var(--ot-disk-size, 300px);
+  height: 0;
+  transform: translateX(-50%);
+  z-index: 6;
+  contain: none;
+}
+.ot-disk-circle {
+  position: absolute;
+  left: 0;
+  top: calc(var(--ot-disk-size, 300px) * -0.5);
+  width: var(--ot-disk-size, 300px);
+  height: var(--ot-disk-size, 300px);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ot-bg) 86%, transparent);
+  border: 1px solid var(--ot-border-bright);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--ot-bg) 50%, transparent), 0 0 0 7px var(--ot-border);
+  pointer-events: none;
+}
+.ot-disk-circle::after {
+  content: '';
+  position: absolute;
+  inset: 12px;
+  border-radius: 50%;
+  border: 1px dashed var(--ot-border);
+}
+.ot-disk-hub {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--ot-disk-size, 300px) * 0.147);
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  z-index: 3;
+}
+.ot-disk-hub-portrait {
+  border-radius: 50% !important;
+  border: 1.5px solid var(--ot-champ) !important;
+  outline: 1px solid var(--ot-border);
+  outline-offset: 4px;
+}
+.ot-disk-name {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--ot-disk-size, 300px) * 0.467);
+  transform: translateX(-50%);
+  z-index: 2;
+  font-family: var(--ot-font-display);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ot-orbit {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 3;
+}
+.ot-orbit-slot {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+}
+
+/* ---- Arc pills: the reference's uppercase 11px tracked pill ---- */
+.ot-disk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--ot-border);
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+  font-family: var(--ot-font);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  color: var(--ot-text-2);
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.ot-disk-pill.is-arc {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+.ot-disk-pill:hover {
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+  border-color: var(--ot-border-strong);
+  color: var(--ot-text);
+}
+.ot-disk-pill.is-active {
+  color: var(--ot-text);
+  border-color: var(--ot-champ);
+  box-shadow: inset 0 -2px 0 var(--ot-champ);
+}
+.ot-disk-pill:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-disk-pill .ot-nav-badge {
+  width: 5px;
+  height: 5px;
+  margin-left: 1px;
+}
+
+/* ---- Bar / icon tiers (< 1100px): pills in a bar under the disk ---- */
+.ot-disk.is-bar,
+.ot-disk.is-icons {
+  height: 0;
+  min-height: 0;
+}
+/* Narrow tiers: the disk is a small half-disc behind the hub, centred — never
+   a stray arc in the top-left corner (brief L). */
+.ot-disk.is-bar,
+.ot-disk.is-icons {
+  width: 100%;
+  padding: 0;
+}
+.ot-disk.is-bar .ot-disk-circle,
+.ot-disk.is-icons .ot-disk-circle {
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.ot-disk-bar {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--ot-disk-size, 300px) * 0.56);
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  width: min(920px, 94vw);
+}
+.ot-disk-pins {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--ot-disk-size, 300px) * 0.56 + 46px);
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ot-disk-pill.is-icon {
+  width: 34px;
+  padding: 9px 0;
+  justify-content: center;
+}
+.ot-disk-pill.is-icon span {
+  display: none;
+}
+
+/* ---- Main scroll area ---- */
+.ot-main {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  contain: paint;
+  background: transparent;
+  padding-top: var(--ot-main-pad, 240px);
+}
+.ot-main.is-home {
+  overflow: hidden;
+  padding-top: 0;
+}
+
+/* Non-Home views: the orbit fan is a reserved header band. The scroll
+ * container's top edge sits at the band's bottom (measured from the lowest
+ * nav/pin/hub node in App.tsx), so content scrolls inside it and is clipped at
+ * that edge — nothing can render under the pills, pins or hub. Home keeps its
+ * full-bleed, non-scrolling composition. */
+.ot-shell:not([data-ot-view='home']) .ot-main {
+  top: var(--ot-shell-band, var(--ot-main-pad, 240px));
+  padding-top: 0;
+  /* Leave the fixed licence line its bottom gutter; content (including the
+   * Profile About card) stops above it at full scroll. */
+  padding-bottom: 28px;
+}
+
+/* ---- Home: exactly the mockup's composition ---- */
+.ot-home {
+  position: relative;
+  height: 100%;
+  max-width: none;
+  display: block;
+}
+.ot-home-hero {
+  position: absolute;
+  left: 40px;
+  bottom: 190px;
+  max-width: 56vw;
+  min-width: 0;
+}
+.ot-home-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ot-champ);
+}
+.ot-home-eyebrow-sep {
+  color: color-mix(in srgb, var(--ot-champ) 70%, transparent);
+}
+.ot-home-eyebrow-main {
+  color: var(--ot-champ);
+}
+.ot-home-champion {
+  margin: 6px 0;
+  font-family: var(--ot-font-display);
+  font-size: 48px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: 0.08em;
+  color: var(--ot-text);
+  max-width: 100%;
+}
+.ot-home-facts {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+}
+.ot-home-play {
+  position: absolute;
+  right: 40px;
+  bottom: 190px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  text-align: right;
+  max-width: 46vw;
+}
+.ot-home-primary {
+  height: 40px;
+  padding: 12px 32px;
+  border-radius: 3px;
+  font-family: var(--ot-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+.ot-home-caption {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+}
+.ot-home-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ot-text-3);
+  padding: 2px 0;
+  transition: color 0.12s ease;
+}
+.ot-home-secondary:hover {
+  color: var(--ot-text);
+}
+.ot-home-secondary:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 3px;
+}
+.ot-home-dock {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  bottom: 24px;
+}
+.ot-info-card {
+  position: relative;
+  display: block;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--ot-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ot-bg) 84%, transparent);
+}
+.ot-info-card::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ot-champ), transparent);
+}
+.ot-info-card-head {
+  margin: 0 0 8px;
+  font-family: var(--ot-font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ot-text-2);
+}
+.ot-info-card-big {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--ot-font-display);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--ot-text);
+}
+.ot-info-card-note {
+  font-family: var(--ot-font);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ot-text-2);
+}
+.ot-info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ot-text);
+  min-width: 0;
+}
+.ot-info-row > span:last-child {
+  color: var(--ot-text-2);
+  text-align: right;
+  min-width: 0;
+}
+.ot-info-win {
+  color: var(--ot-teal);
+}
+.ot-info-loss {
+  color: var(--ot-blood);
+}
+.ot-info-card-empty {
+  font-size: 11px;
+  color: var(--ot-text-3);
+}
+.ot-form-bar {
+  display: flex;
+  gap: 3px;
+  margin-top: 8px;
+  height: 3px;
+}
+.ot-form-pip {
+  flex: 1;
+  height: 3px;
+  background: var(--ot-champ);
+}
+.ot-form-pip.is-win {
+  background: var(--ot-champ);
+}
+.ot-form-pip.is-loss {
+  background: var(--ot-blood);
+}
+
+/* ---- Profile additions (appearance entry + about) ---- */
+.ot-profile-about {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ot-text-2);
+}
+.ot-profile-about:last-child {
+  margin-bottom: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ot-disk-pill,
+  .ot-profile-chip,
+  .ot-home-secondary {
+    transition: none;
+  }
+}
+
+/* Home keeps the pet out of the dock's last card (brief K: nothing overlaps). */
+.ot-shell[data-ot-view='home'] .ot-pet-area {
+  bottom: 148px;
+}
+
+/* The reference's one primary action is neutral chrome, whatever the accent. */
+.ot-home-primary {
+  background: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
+  color: #0a0a0c;
+}
+.ot-home-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
+}
+
+/* The reference's one primary action is neutral chrome, whatever the accent. */
+.ot-home-primary {
+  background: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
+  color: #0a0a0c;
+}
+.ot-home-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
+}
+
+/* The dock wraps to two rows below lg; keep the hero clear of it (brief K). */
+@media (max-width: 1099px) {
+  .ot-home-hero,
+  .ot-home-play {
+    bottom: 250px;
+  }
+}
+
+/* The dock wraps to two rows below lg; keep the hero clear of it (brief K). */
+@media (max-width: 1099px) {
+  .ot-home-hero,
+  .ot-home-play {
+    bottom: 250px;
+  }
+}
+
+/* Narrow Home: the dock wraps to two rows and leaves no free corner, so the pet
+   steps aside (it still rides along on every other view). */
+@media (max-width: 1099px) {
+  .ot-shell[data-ot-view='home'] .ot-pet-area {
+    display: none;
+  }
+}
+
+/* ---- Licence line (visible on every view) ----
+ * FFmpeg is a separate GPL-3.0 program, so its notice must be reachable from
+ * the whole shell, not only Profile. The line is fixed in the bottom-left
+ * gutter (below Home's dock, which ends 24px above the viewport bottom) and
+ * the non-Home .ot-main padding keeps scrolled content above it.
+ * Its Licenses link opens Profile and scrolls to the About card. */
+.ot-licence {
+  position: fixed;
+  left: 16px;
+  bottom: 3px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ot-bg) 55%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: var(--ot-text-3);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ot-licence:hover {
+  color: var(--ot-text-2);
+}
+.ot-licence:focus-visible {
+  outline: 2px solid var(--ot-champ);
+  outline-offset: 2px;
+}
+.ot-licence-link {
+  color: var(--ot-text-2);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* ---- Profile pin chips (brief L): portrait + full name, own actions ---- */
+.ot-pin-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+.ot-pin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--ot-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ot-bg) 70%, transparent);
+}
+.ot-pin-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 4px 0 0;
+  border-radius: 999px;
+  color: var(--ot-text-2);
+  transition: color 0.12s ease;
+}
+.ot-pin-chip-main:hover,
+.ot-pin-chip-main.is-active {
+  color: var(--ot-text);
+}
+.ot-pin-chip-main.is-active .ot-pin-portrait {
+  border-color: var(--ot-champ);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ot-champ) 45%, transparent);
+}
+.ot-pin-chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 132px;
+}
+.ot-pin-chip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ot-pin-chip-btn {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  color: var(--ot-text-3);
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.ot-pin-chip-btn:hover:not(:disabled),
+.ot-pin-chip-btn:focus-visible {
+  background: var(--ot-surface-3);
+  color: var(--ot-text);
+}
+.ot-pin-chip-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.ot-pin-chip-btn.is-remove:hover {
+  color: var(--ot-blood);
+}
+.ot-pin-chip.is-add {
+  padding: 3px;
+}
+.ot-pin-chip .ot-pin-add-wrap,
+.ot-pin-chip .ot-pin-add {
+  width: 26px;
+  height: 26px;
+  border-width: 1px;
+  font-size: 14px;
+}
+.ot-pin-row.is-manage {
+  display: block;
+  min-width: 0;
+}
+.ot-pin-row.is-manage .ot-pin-manage-hint {
+  display: block;
+  margin-top: 8px;
 }

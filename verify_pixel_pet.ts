@@ -1,16 +1,17 @@
 /**
- * verify_pixel_pet.ts — E4: small canvas sprite pet for the dashboard.
+ * verify_pixel_pet.ts — E4: dashboard pixel pet plus the overlay loading-screen pet.
  *
  * The authoring sandbox has no browser, so the visual "look-check" (idle,
- * queue pop, loading, game transition, both window sizes) is replaced by
- * structural checks: the pet is a fixed, bounded, pointer-events-none canvas
- * that only mounts in the dashboard shell, drawn with canvas primitives only
- * (no image assets), with the pure simulation in pixelPetLogic.ts exercised
- * directly for behaviour.
+ * queue pop, loading, game transition) is replaced by structural checks: the
+ * dashboard shell mounts PixelPet as a fixed, bounded, pointer-events-none
+ * canvas — stage-driven for the live pet and static for the appearance
+ * preview — while the overlay mounts OverlayPet only on its loading screen.
+ * Both components reuse the shared canvas primitives and the pure
+ * pixelPetLogic.ts simulation, which is exercised directly for behaviour.
  *
  * Covered:
- *   1. Stage transitions — the pet is visible only during idle / queue /
- *      loading and disappears in game (and draft/post/offline/…).
+ *   1. Stage transitions — the dashboard pet is visible in every league stage
+ *      except an active game (`game`), and stops rendering there.
  *   2. Animation selection — idle → wander → sleep timeline, queue-pop
  *      one-shot reaction ("react once when stage enters queue/ReadyCheck,
  *      then settle"), re-arm on re-entry, bounded walk that stays inside its
@@ -21,8 +22,9 @@
  *      phase clock freezes under prefers-reduced-motion and wandering stops.
  *   5. Persistence through the E3 settings path (electron/app-settings.ts),
  *      including deep-merge, flush to disk and relaunch survival.
- *   6. Structural checks — canvas primitives only, no overlay / League-client
- *      coupling, fixed bounded area, passive (pointer-events: none).
+ *   6. Structural checks — canvas primitives only, no League-client coupling;
+ *      the overlay never mounts the dashboard PixelPet, while its loading
+ *      screen deliberately mounts OverlayPet with the shared logic.
  *
  * Run: npx --yes tsx verify_pixel_pet.ts
  */
@@ -116,17 +118,17 @@ function moodsOver(initial: PetState, count: number, opts: Parameters<typeof ste
 async function main(): Promise<void> {
   console.log('\n— 1. stage transitions: dashboard-only, gone in game —');
   for (const stage of ALL_STAGES) {
-    const visible = stage === 'idle' || stage === 'queue' || stage === 'loading';
+    const visible = stage !== 'game';
     check(`petVisibleForStage('${stage}') === ${visible}`, petVisibleForStage(stage) === visible);
   }
   deepEqual(
-    'PET_VISIBLE_STAGES is exactly {idle, queue, loading}',
+    'PET_VISIBLE_STAGES is every stage except game',
     [...PET_VISIBLE_STAGES].sort(),
-    ['idle', 'loading', 'queue']
+    ALL_STAGES.filter((stage) => stage !== 'game').sort()
   );
   const gameStep = stepPet(createPetState(0, 'idle'), { stage: 'game', now: 100, hidden: false, reducedMotion: false, width: 140 });
   check('stepping into game hides the pet', gameStep.mood === 'hidden' && petPoseFromState(gameStep).mood === 'hidden');
-  check('draft hides the pet', stepPet(createPetState(0, 'queue'), { stage: 'draft', now: 100, hidden: false, reducedMotion: false, width: 140 }).mood === 'hidden');
+  check('draft keeps the pet visible', stepPet(createPetState(0, 'queue'), { stage: 'draft', now: 100, hidden: false, reducedMotion: false, width: 140 }).mood !== 'hidden');
   // ReadyCheck arrives as stage 'queue' (leagueStatus folds Matchmaking/ReadyCheck together).
   const statusSrc = fs.readFileSync('src/app/status.ts', 'utf8');
   check('status.ts folds ReadyCheck into the queue stage', /QUEUE_PHASES\s*=\s*new Set\(\[[^\]]*'ReadyCheck'/.test(statusSrc));
@@ -341,10 +343,24 @@ async function main(): Promise<void> {
   check('electron/app-settings.ts exports normalizePet', /export function normalizePet/.test(electronSrc));
   check('electron defaults include pet', /pet:\s*PET_DEFAULTS/.test(electronSrc));
 
+  const overlayAppSrc = fs.readFileSync('src/overlay/OverlayApp.tsx', 'utf8');
+  check(
+    'OverlayApp intentionally mounts OverlayPet for the loading screen',
+    /import\s*\{[^}]*OverlayPet[^}]*\}\s*from\s*['"]\.\/OverlayPet['"]/.test(overlayAppSrc) &&
+      overlayAppSrc.includes('<OverlayPet')
+  );
+  const overlayPetSrc = fs.readFileSync('src/overlay/OverlayPet.tsx', 'utf8');
+  check(
+    'OverlayPet reuses the shared pixelPetLogic rules',
+    /from\s+['"]\.\.\/app\/pixelPetLogic['"]/.test(overlayPetSrc)
+  );
   const overlayFiles = fs.readdirSync('src/overlay').filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'));
   for (const f of overlayFiles) {
     const src = fs.readFileSync(`src/overlay/${f}`, 'utf8');
-    check(`overlay/${f} never mounts the pet`, !src.includes('PixelPet') && !src.includes('pixelPetLogic'));
+    check(
+      `overlay/${f} never mounts the dashboard PixelPet component`,
+      !/<PixelPet\b/.test(src) && !/from\s+['"][^'"]*\/PixelPet['"]/.test(src)
+    );
   }
 
   console.log(`\nverify_pixel_pet: ${pass} passed, ${fail} failed`);

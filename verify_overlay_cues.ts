@@ -47,7 +47,36 @@ const state: OverlayState = {
   ],
 };
 
-const cues = buildInGameCues(state, { analysis, profileId: 'pyke-support' });
+const build = {
+  core: [
+    { id: '3179', name: 'Umbral Glaive' },
+    { id: '3877', name: 'Bloodsong' },
+  ],
+  boots: { id: '3158', name: 'Ionian Boots of Lucidity' },
+  situational: [{ id: '3107', name: 'Redemption' }],
+};
+
+const componentState: OverlayState = {
+  ...state,
+  gameTime: 20 * 60,
+  localPlayer: {
+    ...state.localPlayer!,
+    level: 11,
+    items: [
+      { itemID: 3865, displayName: 'World Atlas', count: 1, slot: 0 },
+      { itemID: 3158, displayName: 'Ionian Boots', count: 1, slot: 1 },
+      { itemID: 1036, displayName: 'Long Sword', count: 1, slot: 2 },
+      { itemID: 1037, displayName: 'Pickaxe', count: 1, slot: 3 },
+      { itemID: 1028, displayName: 'Ruby', count: 1, slot: 4 },
+      { itemID: 1033, displayName: 'Amplifying Tome', count: 1, slot: 5 },
+      { itemID: 3364, displayName: 'Oracle Lens', count: 1, slot: 6 },
+    ],
+  },
+};
+
+const cues = buildInGameCues(state, { analysis, profileId: 'pyke-support', build });
+const componentCues = buildInGameCues(componentState, { analysis, profileId: 'pyke-support', build });
+const bootSell = componentCues.find((c) => c.id === 'boot-slot-sell');
 const coach = cues.filter((c) => isCoachCueId(c.id) || c.id.startsWith('pro-tip') || c.id === 'matchup-doctrine');
 const long = cues.filter((c) => c.label.length > 18);
 const withDetail = cues.filter((c) => (c.detail || '').trim().length > 0);
@@ -63,6 +92,10 @@ if (long.length > 0) {
 }
 if (withDetail.length > 0) {
   console.error('Cue details should be empty on HUD:', withDetail.map((c) => c.id));
+  failed = true;
+}
+if (bootSell) {
+  console.error('boot-slot-sell leaked with component-only inventory');
   failed = true;
 }
 
