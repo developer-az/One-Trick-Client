@@ -17,6 +17,8 @@ export interface MatchSummary {
     at: number;
     durationSec: number;
     queueId: number;
+    /** LCU map id (12 = Howling Abyss). */
+    mapId?: number;
     championId: number;
     win: boolean;
     kills: number;
@@ -56,15 +58,31 @@ interface RawGame {
     gameCreation?: number;
     gameDuration?: number;
     queueId?: number;
+    mapId?: number;
     participants?: RawParticipant[];
     participantIdentities?: Array<{ participantId?: number; player?: { puuid?: string } }>;
 }
 
 /** Summoner's Rift queues: draft, ranked solo/flex, blind, quickplay, swiftplay. */
 export const RIFT_QUEUES = new Set([400, 420, 430, 440, 480, 490]);
+/** Classic ARAM and ARAM Mayhem queues. */
+export const ARAM_HISTORY_QUEUES = new Set([450, 100, 2400]);
+/** Howling Abyss map id — catches Mayhem queues the client has not named yet. */
+export const HOWLING_ABYSS_MAP_ID = 12;
 /** Games shorter than this were remakes. */
 const MIN_DURATION_SEC = 300;
 const SMITE = 11;
+
+/**
+ * Which games the companion's history window keeps: Rift as before, plus the
+ * whole ARAM family (classic, Mayhem and any unknown queue on Howling Abyss).
+ * The loading card then scopes its fold by the current queue.
+ */
+export function isSupportedHistoryGame(queueId: number, mapId?: number | null): boolean {
+    if (RIFT_QUEUES.has(queueId)) return true;
+    if (ARAM_HISTORY_QUEUES.has(queueId)) return true;
+    return mapId === HOWLING_ABYSS_MAP_ID;
+}
 
 export function roleOf(p: RawParticipant | undefined): MatchSummary['role'] {
     const lane = (p?.timeline?.lane || '').toUpperCase();
@@ -102,6 +120,7 @@ export function summarize(game: RawGame, puuid: string | null): MatchSummary | n
         at: game.gameCreation ?? 0,
         durationSec: seconds,
         queueId: game.queueId ?? 0,
+        mapId: typeof game.mapId === 'number' ? game.mapId : undefined,
         championId: me.championId,
         win: !!me.stats?.win,
         kills: me.stats?.kills ?? 0,
@@ -280,7 +299,10 @@ async function load(
 
     const out = games
         .map((g) => summarize(g, puuid))
-        .filter((g): g is MatchSummary => !!g && RIFT_QUEUES.has(g.queueId) && g.durationSec >= MIN_DURATION_SEC)
+        .filter(
+            (g): g is MatchSummary =>
+                !!g && isSupportedHistoryGame(g.queueId, g.mapId) && g.durationSec >= MIN_DURATION_SEC
+        )
         .sort((a, b) => b.at - a.at);
 
     // Summaries only never need the detail cache (and must not touch the disk

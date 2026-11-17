@@ -71,7 +71,7 @@ const MODE_TABLE: Array<{ signals: MayhemModeSignals; expect: string }> = [
   { signals: { gameMode: 'KIWI', mapName: 'Map12', queueId: 2400, mapId: 12 }, expect: 'mayhem' },
   { signals: { gameMode: 'ARAM', mapName: 'Map12', queueId: 450, mapId: 12 }, expect: 'aram' },
   { signals: { gameMode: 'ARAM', mapName: 'Map12', queueId: 2400, mapId: 12 }, expect: 'mayhem' },
-  { signals: { gameMode: 'ARAM', mapName: 'Map12', queueId: null, mapId: 12 }, expect: 'aram' },
+  { signals: { gameMode: 'ARAM', mapName: 'Map12', queueId: null, mapId: 12 }, expect: 'mayhem-likely' },
   { signals: { gameMode: 'CLASSIC', mapName: 'Map11', queueId: 420, mapId: 11 }, expect: 'other' },
 ];
 for (const row of MODE_TABLE) {

@@ -26,6 +26,7 @@ import {
   resolveAllyMidName,
   resolveAllyJungleName,
   resolveProfileId,
+  resolveChampionProfileId,
   shouldRunMayhemDismissTick,
   shouldRunOverlayClock,
   situationFromState,
@@ -76,7 +77,7 @@ import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
 import { cardRect, type Rect } from './loadingScreenGeometry';
-import { mergeLoadingPayload } from './loadingStats';
+import { mergeLoadingPayload, type LoadingStats } from './loadingStats';
 import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveChampionAccent } from './champAccent';
 import { resolveChampionRef } from '../data/championCatalog';
 import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
@@ -461,8 +462,28 @@ export const OverlayApp: React.FC = () => {
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
   );
+  const inMayhem = isMayhemGame(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
+  const inAram = isAramOrMayhem(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
+  });
   const resolvedProfileId = useMemo(() => resolveProfileId(state), [state]);
-  const profile = useMemo(() => getProfile(resolvedProfileId), [resolvedProfileId]);
+  /** In an ARAM-family game the live champion must own the profile. */
+  const aramProfileId = useMemo(
+    () => (inAram ? resolveChampionProfileId(state) : null),
+    [inAram, state]
+  );
+  const profile = useMemo(
+    () => getProfile(aramProfileId ?? resolvedProfileId),
+    [aramProfileId, resolvedProfileId]
+  );
+  /** Unknown champion in ARAM: never draw another champion's build/buy rail. */
+  const championProfileKnown = !inAram || aramProfileId !== null;
 
   // 1 Hz clock: the gating decision stays here, but the tick writes to the
   // external clock store instead of component state — only useOverlayClock()
@@ -687,17 +708,6 @@ export const OverlayApp: React.FC = () => {
     [situationKey, enemyKey]
   );
 
-  const inMayhem = isMayhemGame(state.gameMode, state.mapName, {
-    queueId: state.queueId,
-    mapId: state.mapId,
-    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
-  });
-  const inAram = isAramOrMayhem(state.gameMode, state.mapName, {
-    queueId: state.queueId,
-    mapId: state.mapId,
-    augmentOffersDetected: (state.mayhemOfferIds?.length ?? 0) >= 2,
-  });
-
   const build: Build | null = useMemo(() => {
     const base = profile.calculateBuild(enemyChampions, adcForProfile, allyPartner, situation);
     if (inMayhem && base) {
@@ -853,7 +863,7 @@ export const OverlayApp: React.FC = () => {
   const [latchedMayhemOffers, setLatchedMayhemOffers] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!inMayhem || !state.mayhemAugmentWindow || state.mayhemAugmentDismissedAt) {
+    if ((!inMayhem && !inAram) || !state.mayhemAugmentWindow || state.mayhemAugmentDismissedAt) {
       setLatchedMayhemOffers([]);
       return;
     }
@@ -869,7 +879,7 @@ export const OverlayApp: React.FC = () => {
         return incoming.slice(0, 3);
       });
     }
-  }, [inMayhem, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
+  }, [inMayhem, inAram, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
 
   const displayMayhemOfferIds = useMemo(() => {
     if (!state.mayhemAugmentWindow) return [];
@@ -884,10 +894,10 @@ export const OverlayApp: React.FC = () => {
   }, [state.mayhemOfferIds, state.mayhemAugmentWindow, latchedMayhemOffers]);
 
   const mayhemRanked = useMemo(() => {
-    if (!mayhemChampion || !inMayhem || !displayMayhemOfferIds.length) return [];
+    if (!mayhemChampion || (!inMayhem && !inAram) || !displayMayhemOfferIds.length) return [];
     const owned = state.mayhemOwnedIds || [];
     return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
-  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem]);
+  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram]);
 
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
   // value the 120 s dismiss window never expired until some unrelated update
@@ -921,7 +931,7 @@ export const OverlayApp: React.FC = () => {
   );
 
   const mayhemPanelActive =
-    inMayhem &&
+    (inMayhem || inAram) &&
     hudModules.mayhem &&
     !!state.mayhemAugmentWindow &&
     !mayhemDismissedRecently &&
@@ -1039,6 +1049,7 @@ export const OverlayApp: React.FC = () => {
       (!mayhemPanelActive && hudModules.vision && !!wardStatus && slotHasModule('vision')) ||
       (!inAram && hudModules.action && cues.length > 0 && slotHasModule('action')) ||
       ((!inAram || inMayhem) &&
+        championProfileKnown &&
         !mayhemPanelActive &&
         hudModules.buy &&
         buyQueue.length > 0 &&
@@ -1047,10 +1058,6 @@ export const OverlayApp: React.FC = () => {
         (slotHasModule('mayhem') || slotHasModule('vision') || slot?.id === 'slot-center' || slot?.id === 'slot-0'))
     );
   })();
-
-  useEffect(() => {
-    window.electronAPI?.reportOverlayContent?.(state.loading || slotHasContent);
-  }, [state.loading, slotHasContent]);
 
   const activePet = state.pet ? normalizePet(state.pet) : petPreference;
 
@@ -1088,7 +1095,11 @@ export const OverlayApp: React.FC = () => {
 
   const showAction = hudModules.action && cues.length > 0 && !inAram;
   const showBuy =
-    hudModules.buy && buyQueue.length > 0 && (!inAram || inMayhem) && !mayhemPanelActive;
+    hudModules.buy &&
+    championProfileKnown &&
+    buyQueue.length > 0 &&
+    (!inAram || inMayhem) &&
+    !mayhemPanelActive;
 
   const buyRow = useMemo(() => {
     if (!showBuy) return null;
@@ -1336,6 +1347,118 @@ export const OverlayApp: React.FC = () => {
     return resolveChampionRef({ key: state.championId })?.name || '';
   }, [state.championName, state.championId]);
 
+  /* ------------------------------------------------- loading → game handoff */
+  /*
+   * The load and the first in-game frame are two payloads a few ms apart. The
+   * loading pet/card stay mounted through that gap and fade out over 250 ms
+   * while the HUD fades in, so the switch never blinks the window or the
+   * champion art. Reduced motion skips the fade.
+   */
+  const loadingSnapshotRef = useRef<{
+    championName: string;
+    stats: LoadingStats | null;
+    slot: typeof state.loadingSlot;
+    queueId: number | null;
+    pet: PetSettings;
+  } | null>(null);
+  const [handoffVisible, setHandoffVisible] = useState(false);
+  const [handoffFading, setHandoffFading] = useState(false);
+  const [hudFadedIn, setHudFadedIn] = useState(true);
+
+  useEffect(() => {
+    if (state.loading === true) {
+      loadingSnapshotRef.current = {
+        championName: loadingChampionName,
+        stats: state.loadingStats ?? null,
+        slot: state.loadingSlot ?? null,
+        queueId: state.queueId ?? null,
+        pet: activePet,
+      };
+      setHandoffVisible(false);
+      setHandoffFading(false);
+      setHudFadedIn(false);
+      return;
+    }
+    if (!state.inGame) {
+      // Match ended: drop any pending handoff so the next game cannot replay
+      // this one's loading layer.
+      loadingSnapshotRef.current = null;
+      if (handoffVisible) setHandoffVisible(false);
+      if (handoffFading) setHandoffFading(false);
+      if (!hudFadedIn) setHudFadedIn(true);
+      return;
+    }
+    if (!state.inGame || !loadingSnapshotRef.current || handoffVisible) return;
+    setHandoffVisible(true);
+    const raf = window.requestAnimationFrame(() => setHudFadedIn(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, [state.loading, state.inGame, state.loadingStats, state.loadingSlot, state.queueId, state.championName, state.championId, loadingChampionName, activePet, handoffVisible, handoffFading, hudFadedIn]);
+
+  useEffect(() => {
+    if (!handoffVisible || handoffFading || !slot) return;
+    // Two frames: one to paint the opaque layer, one to start the transition.
+    let inner = 0;
+    const outer = window.requestAnimationFrame(() => {
+      inner = window.requestAnimationFrame(() => setHandoffFading(true));
+    });
+    return () => {
+      window.cancelAnimationFrame(outer);
+      window.cancelAnimationFrame(inner);
+    };
+  }, [handoffVisible, handoffFading, slot]);
+
+  useEffect(() => {
+    if (!handoffFading) return;
+    const reduced =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const id = window.setTimeout(() => {
+      setHandoffVisible(false);
+      setHandoffFading(false);
+      loadingSnapshotRef.current = null;
+    }, reduced ? 0 : 250);
+    return () => window.clearTimeout(id);
+  }, [handoffFading]);
+
+  const showHandoffLayer =
+    !!loadingSnapshotRef.current &&
+    !state.loading &&
+    state.inGame &&
+    (handoffVisible || !hudFadedIn);
+
+  // Content stays reported through the handoff: the loading layer is still
+  // mounted, so the window must not hide in the gap before the HUD paints.
+  useEffect(() => {
+    window.electronAPI?.reportOverlayContent?.(state.loading || showHandoffLayer || slotHasContent);
+  }, [state.loading, showHandoffLayer, slotHasContent]);
+
+  const handoffLayer = (() => {
+    if (!showHandoffLayer || !loadingSnapshotRef.current) return null;
+    const snap = loadingSnapshotRef.current;
+    const home: Rect | null =
+      snap.slot && snap.slot.source === 'gameflow-session' && snap.slot.side
+        ? cardRect(snap.slot.side, snap.slot.index, snap.slot.teamSize, viewport.vw, viewport.vh)
+        : null;
+    return (
+      <div
+        className="ov-handoff-loading"
+        style={{
+          opacity: handoffFading ? 0 : 1,
+          transition: handoffFading ? 'opacity 250ms ease-out' : undefined,
+        }}
+      >
+        <OverlayPet preference={snap.pet} home={home} />
+        <LoadingCard
+          championName={snap.championName}
+          stats={snap.stats}
+          home={home}
+          viewport={viewport}
+          queueKnown={snap.queueId != null}
+        />
+      </div>
+    );
+  })();
+
   if (state.loading) {
     // Your loading-screen portrait, only when the side AND the index came from
     // the gameflow session: a champ-select-only slot has no side, so the pet
@@ -1356,6 +1479,7 @@ export const OverlayApp: React.FC = () => {
             stats={state.loadingStats}
             home={loadingHome}
             viewport={viewport}
+            queueKnown={state.queueId != null}
           />
         ) : (
           <LoadingCard
@@ -1363,6 +1487,7 @@ export const OverlayApp: React.FC = () => {
             stats={null}
             home={loadingHome}
             viewport={viewport}
+            queueKnown={state.queueId != null}
           />
         )}
       </div>
@@ -1370,7 +1495,9 @@ export const OverlayApp: React.FC = () => {
   }
 
   if (!state.inGame || !slot) {
-    return <div className="w-screen h-screen pointer-events-none bg-transparent" />;
+    return (
+      <div className="w-screen h-screen pointer-events-none bg-transparent">{handoffLayer}</div>
+    );
   }
 
   const liveCompact = (state.localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -1411,8 +1538,12 @@ export const OverlayApp: React.FC = () => {
         style={{
           ['--overlay-scale' as string]: `${0.75 + hudScale / 200}`,
           ['--ov-text-scale' as string]: String(overlayTextScale),
+          // During the handoff the in-game HUD fades in under the loading layer.
+          opacity: showHandoffLayer && !hudFadedIn ? 0 : 1,
+          transition: showHandoffLayer ? 'opacity 200ms ease-out' : undefined,
         }}
       >
+        {handoffLayer}
       <ChromeGameHud
         hudScale={Number.isFinite(hudScale) ? hudScale : 20}
         mapScale={Number.isFinite(mapScale) ? mapScale : 33}

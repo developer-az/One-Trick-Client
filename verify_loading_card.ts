@@ -104,12 +104,13 @@ ok(!/animation\s*:/.test(css) && !/@keyframes/.test(css), 'overlay CSS ships no 
 ok(/\.ov-loading-card\s*\{/.test(css), 'overlay CSS styles the loading card');
 ok(/\.ov-form-seg--win\s*\{[^}]*var\(--ov-champ\)/.test(css), 'win segments use the champion accent');
 ok(/\.ov-form-seg--loss\s*\{[^}]*var\(--ov-blood\)/.test(css), 'loss segments stay blood');
-ok(/\.ov-pet-ground\s*\{/.test(css), 'the pet walks on a hairline ground line');
+ok(!/\.ov-pet-ground\s*\{/.test(css), 'the loading pet no longer draws a ground rule');
+ok(/\.ov-handoff-loading\s*\{/.test(css), 'the loading layer has a handoff fade layer');
 ok(/\.ov-loading-stat\s*\{[^}]*border-left:\s*1px solid var\(--ov-border\)/.test(css), 'stats are split by vertical hairlines');
 ok(/\.ov-loading-champ\s*\{[^}]*\.ov-chrome-text|\.ov-chrome-text\s*\{[^}]*background-clip:\s*text/.test(css), 'the champion name uses chrome text');
 
 const pet = fs.readFileSync('src/overlay/OverlayPet.tsx', 'utf8');
-ok(pet.includes('ov-pet-ground'), 'OverlayPet renders the ground line');
+ok(!pet.includes('ov-pet-ground'), 'OverlayPet no longer renders the ground line');
 ok(pet.includes('PET_FRAME_MS = 125'), 'pet keeps its ~8 fps cap');
 
 if (failures) {

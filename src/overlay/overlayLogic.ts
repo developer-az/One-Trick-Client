@@ -1,6 +1,7 @@
 import type { Build, MatchupAnalysis } from '../logic/pykeLogic';
 import { profileIdFromChampion, isSupportStyleProfile, profileFocusLane, type ProfileId } from '../logic/profiles';
 import { roleFromLivePosition } from '../catalog/roles';
+import { resolveChampionRef } from '../data/championCatalog';
 import { formatCd } from '../logic/summonerSpells';
 import { formatCannonEta, nextCannon, shouldShowCannonCue } from '../logic/waveLogic';
 import { assessJungleThreat } from '../logic/jungleLogic';
@@ -351,6 +352,31 @@ export function resolveProfileId(state: OverlayState, fallback?: ProfileId): Pro
   if (state.profileHint) return state.profileHint;
   if (state.isYone) return 'yone-mid';
   return fallback || 'pyke-support';
+}
+
+/**
+ * The live champion's own profile, or null when it cannot be resolved. Used by
+ * ARAM-family HUDs so an unknown champion never renders another champion's
+ * build (and the buy rail can hide instead of inventing a support path).
+ */
+export function resolveChampionProfileId(state: OverlayState): ProfileId | null {
+  const liveName = (state.localPlayer?.championName || '').trim();
+  if (!liveName) return null;
+  // An unreadable/unknown name must not become "another champion's" build.
+  if (!resolveChampionRef({ name: liveName })) return null;
+  const aramStyle = isAramOrMayhem(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+  });
+  const role = aramStyle ? null : roleFromLivePosition(state.localPlayer?.position);
+  const id = profileIdFromChampion(liveName, role);
+  if (id === 'pyke-support') {
+    // profileIdFromChampion falls back to Pyke for an unknown champion; only a
+    // real Pyke may keep that profile.
+    const compact = liveName.toLowerCase().replace(/[^a-z]/g, '');
+    if (compact !== 'pyke') return null;
+  }
+  return id;
 }
 
 /** Behind / even / ahead read straight off the live payload. */

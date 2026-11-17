@@ -187,7 +187,6 @@ export const OverlayPet: React.FC<{ preference: PetSettings; home?: RoamRect | n
         style={{ width: PET_LOGICAL_W, height: PET_LOGICAL_H, transform: initialTransform }}
       >
         <canvas ref={canvasRef} width={PET_LOGICAL_W} height={PET_LOGICAL_H} className="block" />
-        <span className="ov-pet-ground" />
       </div>
     </div>
   );

@@ -700,15 +700,15 @@ html.overlay-root .ov-form-axis {
   color: var(--ov-text-2);
 }
 
-/* Hairline ground line the loading pet walks on. */
-html.overlay-root .ov-pet-ground {
+/* Loading → game handoff: the loading layer sits above the HUD while the
+ * HUD fades in; it is removed after its own 250 ms opacity fade. Transition
+ * only — no keyframes, so the overlay CSS stays animation-free. */
+html.overlay-root .ov-handoff-loading {
   position: absolute;
-  left: -16px;
-  right: -16px;
-  bottom: 4px;
-  height: 1px;
-  background: var(--ov-border-bright);
+  inset: 0;
+  z-index: 60;
   pointer-events: none;
+  will-change: opacity;
 }
 
 /* ---------- HUD skin hooks (Brief I) ----------

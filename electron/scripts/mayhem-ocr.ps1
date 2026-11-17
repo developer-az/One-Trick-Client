@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 function Write-Marker {
   param([string]$Name, [string]$Detail = '')
   if ($Detail) {
-    Write-Output "__OT_${Name} $Detail__"
+    Write-Output "__OT_${Name} ${Detail}__"
   } else {
     Write-Output "__OT_${Name}__"
   }
@@ -76,15 +76,18 @@ function Find-GameWindow {
     $sb = New-Object System.Text.StringBuilder 256
     [void][OTMayhemWin32]::GetClassName($hWnd, $sb, 256)
     $className = $sb.ToString()
-    # The game itself draws in RiotWindowClass; the launcher/client is LeagueClientUx.
-    if ($className -ne 'RiotWindowClass') { return $true }
     $processId = [uint32]0
     [void][OTMayhemWin32]::GetWindowThreadProcessId($hWnd, [ref]$processId)
     if ($processId -eq 0) { return $true }
     $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
     if (-not $proc) { return $true }
-    # Game executable process name is "League of Legends" — never the client.
-    if ($proc.ProcessName -ne 'League of Legends') { return $true }
+    # The game itself draws in RiotWindowClass and its executable process is
+    # "League of Legends"; some builds report the name with .exe. Accept either
+    # signal, but never the launcher/client (LeagueClientUx).
+    $isRiotClass = $className -eq 'RiotWindowClass'
+    $isGameProcess = $proc.ProcessName -match '^League of Legends(\.exe)?$'
+    if (-not ($isRiotClass -or $isGameProcess)) { return $true }
+    if ($proc.ProcessName -match 'Client|Launcher|UX') { return $true }
     $rect = Get-ClientScreenRect -Handle $hWnd
     if (-not $rect) { return $true }
     $area = $rect.Width * $rect.Height
@@ -221,7 +224,9 @@ if ($CaptureScreen) {
         -BoundsWidth $target.Width -BoundsHeight $target.Height -OutPath $ImagePath
       $captured = $true
     } else {
-      Write-Marker 'NO_TARGET'
+      # No game window matched: capture the full primary screen (as the early
+      # builds did) and mark the frame as a fallback, never as no-target.
+      Write-Marker 'FALLBACK'
     }
   }
   if (-not $captured) {

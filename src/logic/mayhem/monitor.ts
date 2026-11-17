@@ -55,6 +55,8 @@ export interface MayhemMonitorRead {
   fuzzyScore: number;
   blackFrame: boolean;
   foreground: boolean;
+  /** Capture used the primary-screen fallback (no game window matched). */
+  fallback?: boolean;
 }
 
 export interface MayhemDiscoveryState {
@@ -282,7 +284,9 @@ export async function runMayhemMonitorScan(
       next.counter = observeMayhemPickScan(next.counter, {
         offerCount: offers,
         isDead: input.isDead,
-        foreground: read.foreground,
+        // A fallback frame may show offers but cannot prove the game is on top,
+        // so it never counts picks.
+        foreground: read.foreground && read.fallback !== true,
         blackFrame: read.blackFrame,
         liveAugmentIds: input.liveAugmentIds,
       });

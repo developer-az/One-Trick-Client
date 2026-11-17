@@ -37,8 +37,9 @@ import {
     refreshLiveCadence,
     triggerManualMayhemOcrFromHotkey,
     dismissMayhemAugmentPanelFromHotkey,
-    isMayhemMatchActive,
+    isAramFamilyMatchActive,
 } from './game-monitor';
+import { routeHotkey, type HotkeyRoute } from '../src/logic/mayhem/hotkey';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
 import { ensureClipperProbed, getClipperStatus, listSavedClips, saveManualClip, syncAutoClip } from './clipper';
@@ -321,8 +322,18 @@ function flashToggleRoles(): { primary: TrackedRole; secondary: TrackedRole } {
     return { primary: 'Bot', secondary: 'Support' };
 }
 
+function hotkeyRoute(key: 'PageUp' | 'PageDown', inGame: boolean, aramFamily: boolean): HotkeyRoute | null {
+    return routeHotkey(key, { inGame, aramFamily });
+}
+
+function logHotkey(key: 'PageUp' | 'PageDown', routed: HotkeyRoute | null): void {
+    overlayLog('hotkey', { key, routed: routed ?? 'none' });
+}
+
 function onFlashPrimary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageUp', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageUp', route);
+    if (route === 'mayhem-dismiss') {
         dismissMayhemAugmentPanelFromHotkey();
         return;
     }
@@ -332,7 +343,9 @@ function onFlashPrimary(): void {
 }
 
 function onFlashSecondary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageDown', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageDown', route);
+    if (route === 'mayhem-scan') {
         void triggerManualMayhemOcrFromHotkey();
         return;
     }

@@ -10,7 +10,7 @@
 export type LoadingForm = 'W' | 'L';
 
 /** Which slice the numbers came from, so the card can label them honestly. */
-export type LoadingScope = 'ranked' | 'rift';
+export type LoadingScope = 'ranked' | 'rift' | 'aram' | 'mayhem' | 'aram-family';
 
 export interface LoadingStats {
   /** Games on this champion in the scope below (ranked first, then Rift). */
@@ -35,12 +35,22 @@ export interface LoadingMatchLike {
   assists: number;
   /** LCU queue id. Missing is treated as a Rift game (callers already filter). */
   queueId?: number;
+  /** LCU map id; 12 = Howling Abyss, so an unknown Mayhem queue still scopes. */
+  mapId?: number;
 }
 
 /** Ranked solo (420) and ranked flex (440). */
 export const RANKED_QUEUES = new Set([420, 440]);
 /** Summoner's Rift queues, mirroring electron/match-history's RIFT_QUEUES. */
 export const RIFT_QUEUES = new Set([400, 420, 430, 440, 480, 490]);
+/** Classic ARAM queues (no augments). */
+export const ARAM_QUEUES = new Set([450, 100]);
+/** ARAM Mayhem queue. */
+export const MAYHEM_QUEUES = new Set([2400]);
+/** Howling Abyss map id. */
+export const HOWLING_ABYSS_MAP_ID = 12;
+/** Below this many Mayhem games the card widens to ARAM & Mayhem. */
+export const MAYHEM_THIN_GAMES = 3;
 
 /** The card's form bar is 10 segments. */
 export const FORM_SEGMENTS = 10;
@@ -51,7 +61,9 @@ function count(value: unknown): number {
 
 export function computeLoadingStats(
   matches: ReadonlyArray<LoadingMatchLike> | null | undefined,
-  championId: number | null | undefined
+  championId: number | null | undefined,
+  queueId?: number | null,
+  mayhemLikely = false
 ): LoadingStats {
   const empty: LoadingStats = { games: 0, winRate: 0, streak: null, kda: 0, form: [], scope: null };
   if (!Array.isArray(matches) || typeof championId !== 'number' || !Number.isFinite(championId)) {
@@ -60,20 +72,58 @@ export function computeLoadingStats(
   const onChampion = matches.filter((match) => !!match && match.championId === championId);
   if (onChampion.length === 0) return empty;
 
-  // Ranked first: the card is a ranked form line. With no ranked game on this
-  // champion, fall back to the whole Rift window (the history source is already
-  // Rift-only; an absent queueId counts as Rift for fixture callers).
-  const ranked = onChampion.filter(
-    (game): boolean => typeof game.queueId === 'number' && RANKED_QUEUES.has(game.queueId)
-  );
-  const scoped =
-    ranked.length > 0
-      ? ranked
-      : onChampion.filter(
-          (game) => typeof game.queueId !== 'number' || RIFT_QUEUES.has(game.queueId)
-        );
+  let scoped: LoadingMatchLike[];
+  let scope: LoadingScope;
+  const mayhemScope = (): { scoped: LoadingMatchLike[]; scope: LoadingScope } => {
+    const mayhem = onChampion.filter((game) => game.queueId === 2400);
+    if (mayhem.length >= MAYHEM_THIN_GAMES) return { scoped: mayhem, scope: 'mayhem' };
+    return {
+      scoped: onChampion.filter(
+        (game) =>
+          (typeof game.queueId === 'number' && ARAM_QUEUES.has(game.queueId)) ||
+          MAYHEM_QUEUES.has(game.queueId ?? -1) ||
+          game.mapId === HOWLING_ABYSS_MAP_ID
+      ),
+      scope: 'aram-family',
+    };
+  };
+  if (queueId === undefined) {
+    // Legacy fixture callers: ranked first, then the whole Rift window.
+    const ranked = onChampion.filter(
+      (game): boolean => typeof game.queueId === 'number' && RANKED_QUEUES.has(game.queueId)
+    );
+    scoped =
+      ranked.length > 0
+        ? ranked
+        : onChampion.filter(
+            (game) => typeof game.queueId !== 'number' || RIFT_QUEUES.has(game.queueId)
+          );
+    scope = ranked.length > 0 ? 'ranked' : 'rift';
+  } else if (queueId == null || !Number.isFinite(queueId)) {
+    if (!mayhemLikely) {
+      // The queue is not known yet: show no stats rather than a ranked line.
+      return empty;
+    }
+    ({ scoped, scope } = mayhemScope());
+  } else if (MAYHEM_QUEUES.has(queueId)) {
+    ({ scoped, scope } = mayhemScope());
+  } else if (ARAM_QUEUES.has(queueId)) {
+    scoped = onChampion.filter(
+      (game): boolean => typeof game.queueId === 'number' && ARAM_QUEUES.has(game.queueId)
+    );
+    scope = 'aram';
+  } else if (RANKED_QUEUES.has(queueId)) {
+    scoped = onChampion.filter(
+      (game): boolean => typeof game.queueId === 'number' && RANKED_QUEUES.has(game.queueId)
+    );
+    scope = 'ranked';
+  } else {
+    scoped = onChampion.filter(
+      (game): boolean => typeof game.queueId !== 'number' || RIFT_QUEUES.has(game.queueId)
+    );
+    scope = 'rift';
+  }
   if (scoped.length === 0) return empty;
-  const scope: LoadingScope = ranked.length > 0 ? 'ranked' : 'rift';
 
   let wins = 0;
   let kills = 0;
@@ -106,6 +156,25 @@ export function computeLoadingStats(
     form,
     scope,
   };
+}
+
+/**
+ * "Last N ARAM games on this champion" etc. One place, so the card's wording
+ * follows the slice the numbers came from.
+ */
+export function loadingScopeLabel(scope: LoadingScope | null): string {
+  switch (scope) {
+    case 'ranked':
+      return 'ranked ';
+    case 'aram':
+      return 'ARAM ';
+    case 'mayhem':
+      return 'Mayhem ';
+    case 'aram-family':
+      return 'ARAM & Mayhem ';
+    default:
+      return '';
+  }
 }
 
 /* ------------------------------------------------------- the loading card */

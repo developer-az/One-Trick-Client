@@ -19,6 +19,11 @@ export interface MayhemOcrOutput {
   language: string | null;
   /** The game window was not found at all. */
   noTarget: boolean;
+  /**
+   * No game window matched, so the full primary screen was captured instead.
+   * The read is still usable, but it cannot prove what was on top.
+   */
+  fallback: boolean;
 }
 
 const MARKER = /^__OT_([A-Z0-9_]+)(?:\s+(.*))?__$/;
@@ -101,6 +106,7 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
   let blackFrame = false;
   let language: string | null = null;
   let noTarget = false;
+  let fallback = false;
 
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -118,9 +124,10 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
     const rest = marker[2] || '';
     if (name === 'BLACK_FRAME') blackFrame = true;
     else if (name === 'NO_TARGET') noTarget = true;
+    else if (name === 'FALLBACK') fallback = true;
     else if (name === 'OCR_LANG') language = rest.trim() || null;
     else if (name === 'TARGET') target = parseTarget(rest);
   }
 
-  return { text: kept.join('\n'), target, blackFrame, language, noTarget };
+  return { text: kept.join('\n'), target, blackFrame, language, noTarget, fallback };
 }

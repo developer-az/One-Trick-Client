@@ -276,7 +276,11 @@ export interface PrematchStatsCache {
      * stay null: "no games found" and "history never loaded" are different
      * states on the loading card (pet only vs. First game).
      */
-    statsFor(championId: number | null | undefined): LoadingStats | null;
+    statsFor(
+      championId: number | null | undefined,
+      queueId?: number | null,
+      mayhemLikely?: boolean
+    ): LoadingStats | null;
     loaded(): boolean;
     reset(): void;
 }
@@ -338,9 +342,13 @@ export function createPrematchStatsCache(deps: {
                 });
             return inFlight;
         },
-        statsFor(championId: number | null | undefined): LoadingStats | null {
-            if (!matches || typeof championId !== 'number' || !Number.isFinite(championId)) return null;
-            return computeLoadingStats(matches, championId);
+        statsFor(
+          championId: number | null | undefined,
+          queueId?: number | null,
+          mayhemLikely?: boolean
+        ): LoadingStats | null {
+          if (!matches || typeof championId !== 'number' || !Number.isFinite(championId)) return null;
+          return computeLoadingStats(matches, championId, queueId, mayhemLikely);
         },
         loaded(): boolean {
             return matches !== null;

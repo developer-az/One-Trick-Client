@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { loadingCardState, type LoadingStats } from './loadingStats';
+import { loadingCardState, loadingScopeLabel, type LoadingStats } from './loadingStats';
 import { LOADING_PANEL_SIZE, loadingPanelRect, type Rect } from './loadingScreenGeometry';
 
 /**
@@ -18,8 +18,11 @@ export const LoadingCard: React.FC<{
   home?: Rect | null;
   /** Current viewport, so an anchored card stays on-screen. */
   viewport: { vw: number; vh: number };
-}> = ({ championName, stats, home, viewport }) => {
-  const state = loadingCardState(championName, stats);
+  /** false while the queue is still unknown: show the neutral line, not ranked. */
+  queueKnown?: boolean;
+}> = ({ championName, stats, home, viewport, queueKnown = true }) => {
+  const state =
+    queueKnown === false && championName ? 'neutral' : loadingCardState(championName, stats);
   const placement = useMemo(
     () => (home ? loadingPanelRect(home, viewport.vw, viewport.vh, LOADING_PANEL_SIZE) : null),
     [home, viewport]
@@ -39,7 +42,8 @@ export const LoadingCard: React.FC<{
       {hasGames ? (
         <>
           <div className="ov-loading-sub">
-            Last {games} {stats.scope === 'ranked' ? 'ranked ' : ''}game{games === 1 ? '' : 's'} on this champion
+            Last {games} {stats.scope === 'ranked' ? 'ranked ' : loadingScopeLabel(stats.scope)}game
+            {games === 1 ? '' : 's'} on this champion
           </div>
           <div className="ov-loading-stats">
             <div className="ov-loading-stat">

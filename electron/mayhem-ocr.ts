@@ -65,6 +65,8 @@ export interface MayhemOcrRead {
   blackFrame: boolean;
   /** The game window owned the foreground when it was captured. */
   foreground: boolean;
+  /** The capture fell back to the primary screen because no game window matched. */
+  fallback?: boolean;
 }
 
 export function getMayhemOcrDebug(): {
@@ -119,6 +121,13 @@ function logCaptureTarget(parsed: MayhemOcrOutput): void {
     logOcrError('game window not found (League of Legends / RiotWindowClass)');
     return;
   }
+  if (parsed.fallback) {
+    if (loggedTargetSignature !== 'fallback') {
+      loggedTargetSignature = 'fallback';
+      overlayLog('ocr-target', { target: 'fallback', source: 'fallback' });
+    }
+    return;
+  }
   const target = parsed.target;
   if (!target) return;
   const signature = `${target.pid}|${target.rect}|${target.frame}`;
@@ -127,6 +136,8 @@ function logCaptureTarget(parsed: MayhemOcrOutput): void {
   // Pending in-game verification: the process name, window class and client
   // rect are inferred from the game executable, not yet confirmed live.
   overlayLog('ocr-target', {
+    target: 'window',
+    source: 'window',
     pid: target.pid ?? 'unknown',
     exe: target.exe ?? 'unknown',
     class: target.className ?? 'unknown',
@@ -235,10 +246,10 @@ async function readScreenText(): Promise<MayhemOcrOutput> {
   }
   const png = await captureCenterRegionPng();
   if (!png) {
-    return { text: '', target: null, blackFrame: false, language: null, noTarget: true };
+    return { text: '', target: null, blackFrame: false, language: null, noTarget: true, fallback: false };
   }
   const text = await runWindowsOcrOnFile(png);
-  return { text, target: null, blackFrame: false, language: null, noTarget: false };
+  return { text, target: null, blackFrame: false, language: null, noTarget: false, fallback: true };
 }
 
 /**
@@ -261,6 +272,7 @@ export async function detectMayhemOffers(
     fuzzyScore: lastFuzzyScore,
     blackFrame: blackFrameSeen,
     foreground: true,
+    fallback: false,
   };
   if (process.platform !== 'win32') return idle;
   const now = Date.now();
@@ -277,8 +289,15 @@ export async function detectMayhemOffers(
       overlayLog('ocr-black-frame', { reason: 'exclusive-fullscreen-or-hidden-window' });
     }
     // A foreground read is only trusted when the game window itself was
-    // captured; the desktop fallback cannot prove what was on top.
-    const foreground = parsed.target ? parsed.target.foreground !== false : false;
+    // captured. A fallback (no game window matched) captured the full primary
+    // screen: usable, but it cannot prove what was on top. Assume foreground
+    // for manual scans; the counter refuses to count picks from a fallback
+    // frame (see runMayhemMonitorScan).
+    const foreground = parsed.fallback
+      ? true
+      : parsed.target
+        ? parsed.target.foreground !== false
+        : false;
     const base: MayhemOcrRead = {
       ids: lastOfferIds,
       candidateIds: [],
@@ -288,6 +307,7 @@ export async function detectMayhemOffers(
       fuzzyScore: lastFuzzyScore,
       blackFrame: parsed.blackFrame,
       foreground,
+      fallback: parsed.fallback,
     };
     if (parsed.noTarget) {
       lastCaptureMethod = 'none';
@@ -317,6 +337,7 @@ export async function detectMayhemOffers(
       fuzzyScore,
       blackFrame: parsed.blackFrame,
       foreground,
+      fallback: parsed.fallback,
     };
   } catch (error) {
     logOcrError(String(error));

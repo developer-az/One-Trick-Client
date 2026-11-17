@@ -82,8 +82,10 @@ import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
 import {
+    HOWLING_ABYSS_MAP_ID,
     detectMayhemMode,
     isAramOrMayhem,
+    isMayhemMode,
     type MayhemMode,
     type MayhemModeSignals,
 } from '../src/logic/mayhem/mode';
@@ -206,6 +208,8 @@ let champSelectSlot: LoadingSlot | null = null;
 /** Queue + map for this game, captured at load entry and kept all match (Step H). */
 let matchQueueId: number | null = null;
 let matchMapId: number | null = null;
+/** Increments once per beginMatch; scopes the one in-game queue GET. */
+let matchStartToken = 0;
 /** Load token whose one reconnect summaries prefetch already ran (0 = none). */
 let reconnectSummaryPrefetched = 0;
 /**
@@ -261,7 +265,18 @@ export function isCurrentlyInGame(): boolean {
 }
 
 export function isMayhemMatchActive(): boolean {
-    return inGame && !!lastGoodPayload && currentMayhemMode() === 'mayhem';
+    return inGame && !!lastGoodPayload && isMayhemMode(currentMayhemMode());
+}
+
+/** Howling Abyss / ARAM-ish live game (Mayhem, mayhem-likely or classic ARAM). */
+export function isAramFamilyMatchActive(): boolean {
+    if (!inGame || !lastGoodPayload) return false;
+    const signals = currentMayhemSignals();
+    return isAramOrMayhem(signals.gameMode, signals.mapName, {
+        queueId: signals.queueId,
+        mapId: signals.mapId,
+        augmentOffersDetected: false,
+    });
 }
 
 /** The overlay is showing the pre-match loading screen right now. */
@@ -397,7 +412,14 @@ function prefetchHistoryForChampSelect(): void {
 
 /** Cache-only fold: no LCU request, and null stays "unknown" (pet only). */
 function prematchStatsFromCache(championId: number | null | undefined): LoadingStats | null {
-    return prematchHistoryCache.statsFor(championId);
+    const mayhemLikely = matchQueueId == null && matchMapId === HOWLING_ABYSS_MAP_ID;
+    return prematchHistoryCache.statsFor(championId, matchQueueId, mayhemLikely);
+}
+
+/** The session read just taught us the queue: re-fold the card for it. */
+function refreshPrematchStatsForQueue(): void {
+    if (!prematchLoading) return;
+    prematchStats = prematchStatsFromCache(loadingChampion?.championId ?? null);
 }
 
 /** Send the loading payload for the champion currently known (if any). */
@@ -467,6 +489,7 @@ async function resolvePrematchChampionFromSession(): Promise<void> {
     if (token !== prematchStatsToken || !prematchLoading || !session) return;
     applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
     applyQueueMetadata(session);
+    refreshPrematchStatsForQueue();
     if (!champion || loadingChampion) {
         // The slot/queue ids alone are worth a refinement payload.
         sendPrematchLoadingPayload();
@@ -504,6 +527,7 @@ async function resolveLoadingSlotFromSession(): Promise<void> {
     if (token !== prematchStatsToken || !prematchLoading || !session) return;
     applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
     applyQueueMetadata(session);
+    refreshPrematchStatsForQueue();
     sendPrematchLoadingPayload();
 }
 
@@ -533,7 +557,12 @@ async function prefetchHistoryForReconnect(token: number, championId: number): P
         loadingChampionId: loadingChampion?.championId ?? null,
     });
     if (!refresh) return;
-    prematchStats = computeLoadingStats(matches, championId);
+    prematchStats = computeLoadingStats(
+        matches,
+        championId,
+        matchQueueId,
+        matchQueueId == null && matchMapId === HOWLING_ABYSS_MAP_ID
+    );
     sendPrematchLoadingPayload();
     overlayLog('prematch-loading stats', { source: 'reconnect-prefetch', championId });
 }
@@ -1318,7 +1347,7 @@ function scheduleMayhemPoll(delayMs: number): void {
 
 function nextMayhemPollDelayMs(): number {
     if (!lastGoodPayload) return 15_000;
-    if (currentMayhemMode() !== 'mayhem') {
+    if (!isMayhemMode(currentMayhemMode())) {
         // Discovery is deliberately slow: one foreground scan per 10 s.
         return mayhemDiscoveryLive(mayhemMonitorState.discovery, Date.now()) ? 10_000 : 15_000;
     }
@@ -1416,16 +1445,17 @@ async function tickMayhemOcr(): Promise<void> {
     if (!inGame || !lastGoodPayload) return;
     const signals = currentMayhemSignals();
     const mode = currentMayhemMode();
+    const active = isMayhemMode(mode);
     const now = Date.now();
     // Unknown-queue ARAM: scan at a slow, bounded cadence so offer cards can
     // classify the match. Classic ARAM (450) and other maps never qualify.
     const discovery =
-        mode !== 'mayhem' &&
+        !active &&
         isUnknownQueueAram(signals) &&
         mayhemDiscoveryLive(mayhemMonitorState.discovery, now);
-    if (mode !== 'mayhem' && !discovery) return;
+    if (!active && !discovery) return;
 
-    if (mode === 'mayhem') {
+    if (active) {
         syncMayhemPickPhaseFromPayload();
         pushMayhemOverlayPatch();
     }
@@ -1437,7 +1467,7 @@ async function tickMayhemOcr(): Promise<void> {
     if (!bundle?.augments?.length) return;
 
     let minGap = 0;
-    if (mode === 'mayhem') {
+    if (active) {
         if (!shouldRunMayhemAutoOcr(level)) {
             if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
             pushMayhemOverlayPatch();
@@ -1468,7 +1498,7 @@ async function tickMayhemOcr(): Promise<void> {
             isDead: !!lastGoodPayload?.localPlayer?.isDead,
             signals,
             liveAugmentIds: mayhemLiveAugmentIds,
-            autoOcrAllowed: mode === 'mayhem' ? shouldRunMayhemAutoOcr(level) : true,
+            autoOcrAllowed: active ? shouldRunMayhemAutoOcr(level) : true,
             manualScanActive: mayhemManualScanActive(),
         },
         (minMatches) =>
@@ -1855,9 +1885,10 @@ function maybeKeepOverlayOnTop(): void {
     keepOverlayOnTop();
 }
 
-function beginMatch(): void {
+function beginMatch(live?: LiveClientAllGameData | null): void {
     console.info('[match] started');
     inGame = true;
+    matchStartToken += 1;
     // A live board arrived: the load screen is over, no hide (this is a match).
     exitPrematchLoading('match-start', false);
     let windowMode: string | null = null;
@@ -1866,7 +1897,16 @@ function beginMatch(): void {
     } catch {
         windowMode = null;
     }
-    overlayLog('match-start', { windowMode });
+    const gameMode = live?.gameData?.gameMode ?? lastGoodPayload?.gameMode ?? null;
+    const mapName = live?.gameData?.mapName ?? lastGoodPayload?.mapName ?? null;
+    overlayLog('match-start', {
+        mode: detectMayhemMode({ gameMode, mapName, queueId: matchQueueId, mapId: matchMapId }),
+        queueId: matchQueueId ?? 'unknown',
+        mapId: matchMapId ?? 'unknown',
+        gameMode: gameMode ?? 'unknown',
+        mapName: mapName ?? 'unknown',
+        windowMode,
+    });
     lastMatchEndReason = null;
     playMomentSnapshot = null;
     lastSentOverlayPayload = null;
@@ -1886,15 +1926,49 @@ function beginMatch(): void {
     setOverlayUserHidden(false);
     if (settingsForTick().overlayEnabled) {
         syncScalesFromLeague();
-        createOverlayWindow();
-        showOverlay();
+        // The load screen already created and showed this window. Re-creating
+        // or re-showing it at match start flickers the handoff, so reuse it.
+        ensureOverlayShown();
     }
+    // The Live Client often reports no queue yet. One in-game session read
+    // fills queue/map, then the mode is classified again (never during load).
+    void resolveMatchQueueAfterStart(matchStartToken);
     try {
         onMatchStartHotkeys?.();
     } catch {
         // ignore
     }
     onGameStateChange?.(true);
+}
+
+/**
+ * The loading payload usually carries the queue from the champ-select session
+ * read. When it is still unknown at match start, spend exactly one
+ * `/lol-gameflow/v1/session` GET, then re-run mode detection.
+ */
+async function resolveMatchQueueAfterStart(token: number): Promise<void> {
+    if (matchQueueId != null && matchMapId != null) return;
+    let session: unknown = null;
+    try {
+        session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+    } catch {
+        return;
+    }
+    if (token !== matchStartToken || !inGame || !session) return;
+    applyQueueMetadata(session);
+    if (lastGoodPayload) {
+        lastGoodPayload = {
+            ...lastGoodPayload,
+            queueId: matchQueueId,
+            mapId: matchMapId,
+        };
+    }
+    syncMayhemPollForMode({
+        ...currentMayhemSignals(),
+        level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 1,
+        isDead: !!lastGoodPayload?.localPlayer?.isDead,
+    });
+    pushMayhemOverlayPatch();
 }
 
 function syncMayhemPollForMode(signals: {
@@ -1906,7 +1980,7 @@ function syncMayhemPollForMode(signals: {
     isDead?: boolean;
 }): void {
     const mode = logModeDetect({ ...signals, augmentOffersDetected: mayhemOffersDetected() });
-    if (mode === 'mayhem') {
+    if (isMayhemMode(mode)) {
         if (!mayhemPollTimer) startMayhemPoll();
         return;
     }
@@ -2014,7 +2088,7 @@ async function liveTick(): Promise<void> {
         if (live) {
             const gameTime = live.gameData?.gameTime ?? 0;
             const wasInGame = inGame;
-            if (!wasInGame) beginMatch();
+            if (!wasInGame) beginMatch(live);
             // Decide before noteLiveClock updates the trusted clock, so an
             // advancing game cannot look frozen on the same tick.
             considerMatchEnd(gameTime);
