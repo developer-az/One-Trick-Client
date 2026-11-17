@@ -203,6 +203,39 @@ function Capture-Region {
   return $black
 }
 
+# Every fractional pixel value is truncated toward zero, never rounded to
+# nearest. PowerShell's [int] cast rounds (1920 * 0.84 = 1612.8 -> 1613, and
+# 1920 * 0.08 = 153.6 -> 154), while the verified mirror
+# src/logic/mayhem/captureRegion.ts truncates, so a cast shifted the production
+# crop a pixel off the geometry the app and its tests reason about.
+# verify_ocr_geometry_actual.ts runs this function straight out of this file.
+function ConvertTo-TruncatedPixels {
+  param([double]$Value)
+  return [int][Math]::Truncate($Value)
+}
+
+# The offer band of a bounds rect. The game-window capture, the primary-screen
+# fallback and the reported frame size all go through here: one policy, so they
+# cannot disagree about where the band is.
+function Get-OfferGeometry {
+  param(
+    [int]$BoundsX,
+    [int]$BoundsY,
+    [int]$BoundsWidth,
+    [int]$BoundsHeight
+  )
+  $width = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsWidth * $WidthFrac)))
+  $height = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsHeight * $HeightFrac)))
+  $left = $BoundsX + (ConvertTo-TruncatedPixels ($BoundsWidth * $LeftFrac))
+  $top = $BoundsY + (ConvertTo-TruncatedPixels ($BoundsHeight * $TopFrac))
+  return [pscustomobject]@{
+    Left = $left
+    Top = $top
+    Width = $width
+    Height = $height
+  }
+}
+
 function Capture-FractionRegion {
   param(
     [int]$BoundsLeft,
@@ -211,11 +244,8 @@ function Capture-FractionRegion {
     [int]$BoundsHeight,
     [string]$OutPath
   )
-  $rw = [Math]::Max(64, [int]($BoundsWidth * $WidthFrac))
-  $rh = [Math]::Max(64, [int]($BoundsHeight * $HeightFrac))
-  $rx = $BoundsLeft + [int]($BoundsWidth * $LeftFrac)
-  $ry = $BoundsTop + [int]($BoundsHeight * $TopFrac)
-  return (Capture-Region -Left $rx -Top $ry -Width $rw -Height $rh -OutPath $OutPath)
+  $geo = Get-OfferGeometry -BoundsX $BoundsLeft -BoundsY $BoundsTop -BoundsWidth $BoundsWidth -BoundsHeight $BoundsHeight
+  return (Capture-Region -Left $geo.Left -Top $geo.Top -Width $geo.Width -Height $geo.Height -OutPath $OutPath)
 }
 
 function Capture-PrimaryScreen {
@@ -227,10 +257,11 @@ function Capture-PrimaryScreen {
   # the primary bounds: with no window to measure, the game is assumed to fill
   # the primary screen, so the offers are centred there.
   $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-  $rw = [Math]::Max(64, [int]($b.Width * $WidthFrac))
-  $rh = [Math]::Max(64, [int]($b.Height * $HeightFrac))
-  $rx = $b.X + [int]($b.Width * $LeftFrac)
-  $ry = $b.Y + [int]($b.Height * $TopFrac)
+  $geo = Get-OfferGeometry -BoundsX $b.X -BoundsY $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height
+  $rw = $geo.Width
+  $rh = $geo.Height
+  $rx = $geo.Left
+  $ry = $geo.Top
   return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath `
     -CropLeft $rx -CropTop $ry -CropWidth $rw -CropHeight $rh)
 }
@@ -260,8 +291,9 @@ if ($CaptureScreen) {
   }
   if ($target) {
     $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)
-    $frameWidth = [Math]::Max(64, [int]($target.Width * $WidthFrac))
-    $frameHeight = [Math]::Max(64, [int]($target.Height * $HeightFrac))
+    $frame = Get-OfferGeometry -BoundsX $target.Left -BoundsY $target.Top -BoundsWidth $target.Width -BoundsHeight $target.Height
+    $frameWidth = $frame.Width
+    $frameHeight = $frame.Height
     # JSON, not key=value pairs: the game process name is "League of Legends"
     # (it contains spaces) and the old space-separated marker truncated it.
     $targetInfo = [ordered]@{
