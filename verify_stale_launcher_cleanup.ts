@@ -49,10 +49,11 @@ function commands(source: string, verb: RegExp): string[] {
 /**
  * electron-builder writes our real shortcuts as bare links (no menuCategory is set):
  * "$SMPROGRAMS\One Trick.lnk" and "$DESKTOP\One Trick.lnk". Any cleanup command that names
- * either path — folder form or bare link — would delete the live shortcut.
+ * either path — folder form or bare link — would delete the live shortcut. The desktop half is
+ * deliberately delimiter-free so a reintroduced "$DESKTOP\One Trick Link.lnk" is caught too.
  */
 function touchesRealShortcut(line: string): boolean {
-    return /\$SMPROGRAMS\\One Trick/i.test(line) || /\$DESKTOP\\One Trick\.lnk/i.test(line);
+    return /\$SMPROGRAMS\\One Trick/i.test(line) || /\$DESKTOP\\One Trick(?:\b|")/i.test(line);
 }
 
 function selfTestGuards(): void {
@@ -70,68 +71,66 @@ function selfTestGuards(): void {
     assert(touchesRealShortcut('Delete "$SMPROGRAMS\\One Trick.lnk"'), 'guard rejects our bare Start Menu link');
     assert(touchesRealShortcut('RMDir /r "$SMPROGRAMS\\One Trick"'), 'guard rejects the real Start Menu folder form');
     assert(touchesRealShortcut('Delete "$DESKTOP\\One Trick.lnk"'), 'guard rejects our real desktop link');
+    assert(touchesRealShortcut('Delete "$DESKTOP\\One Trick Link.lnk"'), 'guard rejects the spaced "One Trick Link" desktop name');
     assert(!touchesRealShortcut('Delete "$SMPROGRAMS\\OneTrickLink.lnk"'), 'guard allows the stale Start Menu root link');
+    assert(!touchesRealShortcut('Delete "$DESKTOP\\OneTrickLink.lnk"'), 'guard allows the stale desktop link');
 }
 
 function main(): void {
     const source = fs.readFileSync(NSH, 'utf8');
     const install = readMacro(source, 'customInstall');
     assert(install.length > 0, `!macro customInstall ... !macroend found in ${NSH}`);
-    const block = install.join('\n');
 
     selfTestGuards();
 
-    /* 0. The cleanup only runs on upgrade: nothing can be stale on a fresh install. */
-    assert(/\$\{if\}\s+\$\{isUpdated\}/i.test(block), 'customInstall must guard the stale-launcher cleanup with ${if} ${isUpdated}');
-    assert(/\$\{endif\}/i.test(block), 'the ${if} ${isUpdated} guard must be closed with ${endif}');
-
-    /* 1. Desktop shortcuts the app never made. */
-    for (const line of [
-        'Delete "$DESKTOP\\OneTrickLink.lnk"',
-        'Delete "$DESKTOP\\OneTrickLink.lnk.lnk"',
-    ]) {
-        assert(block.includes(line), `customInstall must contain: ${line}`);
+    /* 0. No flag guard. Every command here is a no-op when its target is absent, so the cleanup
+     *    has to run on every installer run. An isUpdated guard was dead code: that flag is only
+     *    passed by electron-updater, which this app does not ship, so a newer installer run over
+     *    an old install would never clean anything. Conditionals are therefore rejected outright. */
+    for (const line of install) {
+        assert(
+            !/\$\{(?:if|else|elseif|endif|isUpdated)\b/i.test(line),
+            `customInstall must not conditionally guard the stale-launcher cleanup: ${line}`
+        );
     }
 
-    /* 2. The stale link inside the old "OneTrick" Start Menu group, and in the Start Menu root. */
-    assert(
-        block.includes('Delete "$SMPROGRAMS\\OneTrick\\OneTrickLink.lnk"'),
-        'customInstall must delete "$SMPROGRAMS\\OneTrick\\OneTrickLink.lnk"'
-    );
-    assert(
-        block.includes('Delete "$SMPROGRAMS\\OneTrickLink.lnk"'),
-        'customInstall must delete "$SMPROGRAMS\\OneTrickLink.lnk"'
-    );
+    const indexOf = (predicate: (line: string) => boolean, what: string): number => {
+        const found = install.findIndex(predicate);
+        assert(found !== -1, `customInstall must contain ${what}`);
+        return found;
+    };
 
-    /* 3. That group goes away only when empty: plain RMDir, never RMDir /r. */
+    /* 1. Each required cleanup command, located once so its scope and order can be pinned. */
+    const deleteIndexes = [
+        indexOf((line) => line === 'Delete "$DESKTOP\\OneTrickLink.lnk"', 'Delete "$DESKTOP\\OneTrickLink.lnk"'),
+        indexOf((line) => line === 'Delete "$DESKTOP\\OneTrickLink.lnk.lnk"', 'Delete "$DESKTOP\\OneTrickLink.lnk.lnk"'),
+        indexOf((line) => line === 'Delete "$SMPROGRAMS\\OneTrick\\OneTrickLink.lnk"', 'Delete "$SMPROGRAMS\\OneTrick\\OneTrickLink.lnk"'),
+        indexOf((line) => line === 'Delete "$SMPROGRAMS\\OneTrickLink.lnk"', 'Delete "$SMPROGRAMS\\OneTrickLink.lnk"'),
+    ];
+    const rmdirIndex = indexOf((line) => /^RMDir\s+"\$SMPROGRAMS\\OneTrick"$/i.test(line), 'a non-recursive RMDir "$SMPROGRAMS\\OneTrick"');
+
+    /* 2. That group goes away only when empty: plain RMDir, never RMDir /r. */
     assert(
-        install.some((line) => /^RMDir\s+"\$SMPROGRAMS\\OneTrick"$/i.test(line)),
-        'customInstall must run a non-recursive RMDir "$SMPROGRAMS\\OneTrick"'
-    );
-    assert(
-        !commands(source, /\bRMDir\b/i).some((line) => /\/r\b/i.test(line) && /\$SMPROGRAMS\\OneTrick\b/i.test(line)),
+        !install.some((line) => /\/r\b/i.test(line) && /\$SMPROGRAMS\\OneTrick\b/i.test(line)),
         'the "OneTrick" Start Menu group must never be deleted recursively'
     );
 
-    /* 4. The delete must come before the RMDir, or the empty-group removal silently no-ops. */
-    const linkIndex = install.findIndex((line) => line === 'Delete "$SMPROGRAMS\\OneTrick\\OneTrickLink.lnk"');
-    const rmdirIndex = install.findIndex((line) => /^RMDir\s+"\$SMPROGRAMS\\OneTrick"$/i.test(line));
-    assert(linkIndex !== -1 && rmdirIndex !== -1 && linkIndex < rmdirIndex, 'the stale OneTrick link is deleted before RMDir "$SMPROGRAMS\\OneTrick"');
-
-    /* 5. Never touch our real shortcuts, created under the "One Trick" name. */
-    for (const line of commands(source, /\b(RMDir|Delete)\b/i)) {
-        assert(!touchesRealShortcut(line), `installer cleanup must not touch our real shortcut: ${line}`);
+    /* 3. Every stale link is deleted before the empty-group RMDir, or that RMDir silently no-ops. */
+    for (const index of deleteIndexes) {
+        assert(index < rmdirIndex, 'every stale OneTrick link is deleted before RMDir "$SMPROGRAMS\\OneTrick"');
     }
 
-    /* 6. Legacy protocol registrations, both spellings, user hive only. */
+    /* 4. Legacy protocol registrations, both spellings, user hive only, after the shortcut cleanup. */
     for (const key of ['OneTrickLink', 'otclink']) {
         const call = `reg delete "HKCU\\Software\\Classes\\${key}" /f`;
         const matches = install.filter((line) => /^nsExec::ExecToLog\b/i.test(line) && line.includes(call));
         assert(matches.length === 1, `customInstall must contain one nsExec::ExecToLog with: ${call}`);
         assert(matches[0].includes('|'), `the reg delete for ${key} must pipe away its exit code`);
+        const regIndex = indexOf((line) => line === matches[0], `the nsExec::ExecToLog with: ${call}`);
+        assert(regIndex > rmdirIndex, `the ${key} reg delete must follow the shortcut cleanup`);
     }
 
-    /* 7. Every ExecToLog result is popped: exact stack pairing, not "a Pop exists somewhere". */
+    /* 5. Every ExecToLog result is popped: exact stack pairing, not "a Pop exists somewhere". */
     const execLines = install.filter((line) => /^nsExec::ExecToLog\b/i.test(line));
     const popLines = install.filter((line) => /^Pop\s+\$0$/i.test(line));
     assert(
@@ -139,6 +138,15 @@ function main(): void {
         `every nsExec::ExecToLog must be followed by a Pop $0 (${execLines.length} ExecToLog, ${popLines.length} Pop)`
     );
 
+    /* 6. Never touch our real shortcuts. Scoped to customInstall: the unrelated Pyke Dominator
+     *    cleanup above has no "One Trick" paths, and keeping the check on this block makes any
+     *    failure message about the One Trick cleanup precise. */
+    for (const line of install.filter((line) => /\b(RMDir|Delete)\b/i.test(line))) {
+        assert(!touchesRealShortcut(line), `customInstall must not touch our real shortcut: ${line}`);
+    }
+
+    /* 7. Registry cleanup stays in HKCU and never names the real app. Whole-file scope: a reg
+     *    delete added anywhere in the installer is still our responsibility. */
     const regDeletes = commands(source, /\breg\s+delete\b/i);
     for (const line of regDeletes) {
         assert(!/One Trick/i.test(line), `registry cleanup must not touch the real app name: ${line}`);
