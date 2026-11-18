@@ -10,10 +10,15 @@
  * confidence. The monitor keeps the candidate across scans and promotes it to
  * `ids` only after the same id was read on consecutive qualifying frames.
  *
+ * `frameIds` is the trust path and carries bundle-matched ids only; an
+ * `unknown:` placeholder is a guess from an unrecognised title, so it can be
+ * drawn (`ids`, `placeholderIds`) and ranked, but never latch Mayhem or move
+ * the pick counter.
+ *
  * Pure (no Electron, no disk); mayhem-ocr owns the previous-id/retain state.
  */
 
-import { MAYHEM_HIGH_CONFIDENCE_SCORE } from './match';
+import { MAYHEM_HIGH_CONFIDENCE_SCORE, isUnknownMayhemAugmentId } from './match';
 import { stabilizeMayhemOffers, type MayhemOfferStabilityState } from './offerStability';
 
 export interface MayhemOfferAcceptance {
@@ -21,8 +26,15 @@ export interface MayhemOfferAcceptance {
   ids: string[];
   /** A single high-confidence offer waiting for a consecutive scan. */
   candidateIds: string[];
-  /** Ids matched on this frame only. */
+  /**
+   * Ids matched on this frame only, bundle-matched ones exclusively. This is the
+   * trust path (discovery latch + pick counter): an `unknown:` placeholder is a
+   * guess from an unrecognised title, so it may display but never prove an
+   * offer.
+   */
   frameIds: string[];
+  /** `unknown:` placeholders read on this frame: display/ranking only. */
+  placeholderIds: string[];
 }
 
 export interface MayhemOfferAcceptanceInput {
@@ -43,6 +55,10 @@ export interface MayhemOfferAcceptanceInput {
 
 export function acceptMayhemOfferFrame(input: MayhemOfferAcceptanceInput): MayhemOfferAcceptance {
   const matched = input.matched.filter(Boolean).slice(0, 3);
+  // Display and trust are not the same set: a placeholder row may be drawn and
+  // ranked, but only a bundle-matched id can latch Mayhem or count a pick.
+  const placeholderIds = matched.filter((id) => isUnknownMayhemAugmentId(id));
+  const frameIds = matched.filter((id) => !isUnknownMayhemAugmentId(id));
   const highConfidence = input.fuzzyScore >= MAYHEM_HIGH_CONFIDENCE_SCORE;
   let next: string[];
   let candidateIds: string[] = [];
@@ -64,5 +80,5 @@ export function acceptMayhemOfferFrame(input: MayhemOfferAcceptanceInput): Mayhe
   const ids = input.retain
     ? stabilizeMayhemOffers(input.previousIds, next, input.text, true, input.stability)
     : next;
-  return { ids, candidateIds, frameIds: matched };
+  return { ids, candidateIds, frameIds, placeholderIds };
 }

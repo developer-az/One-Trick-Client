@@ -6,8 +6,8 @@
  * while without ever opening the shop. A pick is only counted when
  *   - the Live Client reports the owned augments (authoritative), or
  *   - offers were read in ≥2 consecutive scans and then gone for ≥2
- *     consecutive scans, while alive, with the game in the foreground and a
- *     non-black captured frame.
+ *     consecutive scans, while alive, from a trusted game-window capture
+ *     (`isTrustedMayhemFrame`) with a non-black frame.
  */
 
 export const MAYHEM_PICK_OFFER_SCANS_REQUIRED = 2;
@@ -25,7 +25,12 @@ export interface MayhemPickScan {
   /** Distinct augment ids matched on this scan (0 when OCR saw no cards). */
   offerCount: number;
   isDead: boolean;
-  /** The game window owns the foreground, so the pick screen was on top. */
+  /**
+   * The scan came from a trusted game-window capture — the OCR read target
+   * passed `isTrustedMayhemFrame` (real game window, fresh read), NOT whether
+   * the game owned the OS foreground. The field keeps the old name because its
+   * writer lives in src/logic/mayhem/monitor.ts.
+   */
   foreground: boolean;
   /** Captured frame was black (exclusive fullscreen blocks BitBlt). */
   blackFrame: boolean;
@@ -96,4 +101,42 @@ export function observeMayhemPickScan(
 
   // A single partial read (one card / an OCR miss) proves nothing either way.
   return state;
+}
+
+/**
+ * How long after a pick an offer gap may still turn out to be a reroll.
+ *
+ * A reroll reads as offers → empty (shop animating) → a disjoint new roll
+ * within a second or two. The next augment level is minutes away, so a
+ * disjoint roll that appears inside this window cannot be the new pick level.
+ */
+export const MAYHEM_REROLL_PICK_WINDOW_MS = 8000;
+
+/**
+ * Undo a pick that a reroll's empty gap produced.
+ *
+ * The counter has to act on the frames it sees; it cannot know at empty-time
+ * whether the shop is refreshing or the player picked. When the next roll is
+ * disjoint from the roll that vanished, the gap was the shop re-dealing: take
+ * the spurious pick back. Returns `reverted: false` (and the same state) for an
+ * overlapping roll (a misread of the same shop) or a roll that arrives after
+ * the window (a real new pick level).
+ */
+export function revertMayhemRerollPick(
+  state: MayhemPickCounterState,
+  previousRollIds: string[],
+  nextRollIds: string[],
+  elapsedSincePickMs: number
+): { state: MayhemPickCounterState; reverted: boolean } {
+  if (state.picksTaken <= 0) return { state, reverted: false };
+  if (!previousRollIds.length || !nextRollIds.length) return { state, reverted: false };
+  if (!Number.isFinite(elapsedSincePickMs)) return { state, reverted: false };
+  if (elapsedSincePickMs < 0 || elapsedSincePickMs > MAYHEM_REROLL_PICK_WINDOW_MS) {
+    return { state, reverted: false };
+  }
+  if (nextRollIds.some((id) => previousRollIds.includes(id))) return { state, reverted: false };
+  return {
+    state: { ...state, picksTaken: state.picksTaken - 1 },
+    reverted: true,
+  };
 }

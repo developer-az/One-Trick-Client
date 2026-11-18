@@ -4,7 +4,9 @@
  * Mayhem now ships on. A store written by an older build has `mayhem: false`
  * because that was the install default, so the main-process settings store
  * flips it once and stamps `mayhemDefaultsMigrated`. A stamped store is left
- * alone — a user who turns Mayhem off stays off.
+ * alone - a user who turns Mayhem off stays off. The store's first-settle
+ * decision (decideSettingsLoad) is asserted behaviourally; only its wiring in
+ * loadSettings is source-guarded.
  *
  * Run: npx --yes tsx verify_mayhem_defaults.ts
  */
@@ -17,6 +19,7 @@ import {
   normalizeHudModules,
 } from './src/overlay/hudModules';
 import { dualRailLayout, layoutToHudModules, normalizeHudLayout } from './src/overlay/hudLayout';
+import { decideSettingsLoad } from './electron/overlay-window';
 
 function ok(cond: boolean, msg: string): void {
   if (!cond) {
@@ -138,18 +141,75 @@ ok(relaunched.migrated === false, 'relaunch sees the marker and skips migration'
 ok(normalizeHudModules(relaunched.settings.hudModules).mayhem === false, 'relaunch keeps the user off switch');
 ok(mayhemElement(relaunched.settings)?.visible === false, 'relaunch keeps the element hidden');
 
-/* --- 5. Main-process copy + store wiring (electron is not importable here). --- */
+/* --- 4b. The settings-load decision itself is proven behaviourally. --- */
+const legacyModules = { ...DEFAULT_HUD_MODULES, mayhem: false };
+const unstamped: Store = {
+  hudModules: legacyModules,
+  hudLayout: { elements: [{ id: 'mayhem', visible: false }] },
+};
+const firstLoad = decideSettingsLoad(false, unstamped);
+ok(firstLoad.migrate === true && firstLoad.write === true, 'no marker: migrate + write on the first load');
+ok(firstLoad.useStoredHudModules === true, 'the first load reads the stored module map');
+ok(firstLoad.log === true, 'the first load logs the settings-migrated outcome');
+
+const stamped: Store = {
+  [MAYHEM_DEFAULTS_MIGRATION_KEY]: true,
+  hudModules: legacyModules,
+};
+const stampedLoad = decideSettingsLoad(false, stamped);
+ok(stampedLoad.migrate === false && stampedLoad.write === false, 'marker present: no migrate and no write');
+ok(stampedLoad.log === true, 'the settling load still logs once when nothing was migrated');
+
+const settledLoad = decideSettingsLoad(true, unstamped);
+ok(
+  settledLoad.useStoredHudModules === false &&
+    settledLoad.migrate === false &&
+    settledLoad.write === false &&
+    settledLoad.log === false,
+  'a settled process re-reads nothing, re-flips nothing and does not log again'
+);
+
+/* A user's stamped mayhem:false survives two loads in one process: the first
+ * reads it, the second must leave the live map alone. */
+{
+  let live = normalizeHudModules(DEFAULT_HUD_MODULES);
+  for (const wasSettled of [false, true]) {
+    const decision = decideSettingsLoad(wasSettled, stamped);
+    if (decision.useStoredHudModules) live = normalizeHudModules(stamped.hudModules);
+    if (decision.migrate) {
+      live = normalizeHudModules(migrateMayhemDefaults(stamped).settings.hudModules);
+    }
+  }
+  ok(live.mayhem === false, 'a stamped user off switch survives two loads');
+}
+
+/* --- 5. Main-process copy + store wiring (thin source guard; behaviour is
+ * proven through decideSettingsLoad above). --- */
 const electronSource = read('electron/overlay-window.ts');
-const defaultsAt = electronSource.indexOf('const DEFAULT_HUD_MODULES: HudModules = {');
-const defaultsEnd = defaultsAt === -1 ? -1 : electronSource.indexOf('};', defaultsAt);
-const defaultsBlock = defaultsAt === -1 || defaultsEnd === -1 ? '' : electronSource.slice(defaultsAt, defaultsEnd + 2);
-ok(/mayhem:\s*true/.test(defaultsBlock), 'main-process DEFAULT_HUD_MODULES ships Mayhem on');
+/* The main process must not keep a private twin of the shared defaults: it
+ * imports src/overlay/hudModules, so the two cannot drift apart. */
+ok(
+  /import\s*\{[^}]*\bDEFAULT_HUD_MODULES\b[^}]*\}\s*from\s*'\.\.\/src\/overlay\/hudModules'/.test(electronSource),
+  'main process imports the shared DEFAULT_HUD_MODULES'
+);
+ok(
+  /import\s*\{[^}]*\bHUD_MODULE_IDS\b[^}]*\}\s*from\s*'\.\.\/src\/overlay\/hudModules'/.test(electronSource),
+  'main process imports the shared HUD_MODULE_IDS'
+);
+ok(!/const DEFAULT_HUD_MODULES\b/.test(electronSource), 'no private DEFAULT_HUD_MODULES literal in the main process');
+ok(!/const HUD_MODULE_IDS\b/.test(electronSource), 'no private HUD_MODULE_IDS literal in the main process');
+ok(!/function normalizeHudModules\(/.test(electronSource), 'main process reuses the shared module normalizer');
 ok(
   !/id:\s*'mayhem',\s*visible:\s*false/.test(electronSource),
   'no main-process widget default hides Mayhem'
 );
 ok(electronSource.includes('migrateMayhemDefaults(settings)'), 'loadSettings runs the one-time migration');
+ok(
+  electronSource.includes('decideSettingsLoad(wasSettled, settings)'),
+  'loadSettings delegates its first-settle decision to decideSettingsLoad'
+);
 ok(electronSource.includes('mayhemDefaultsMigrated: true'), 'saved settings stamp the migration marker');
 ok(electronSource.includes('writeMigratedMayhemSettings('), 'migration result is persisted in place');
+ok(/overlayLog\(\s*'settings-migrated'/.test(electronSource), 'the migration outcome is logged as settings-migrated');
 
 if (!process.exitCode) console.log('verify:mayhem-defaults ok');

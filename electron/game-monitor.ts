@@ -45,7 +45,7 @@ import {
     healOverlayWindows,
     setOverlayMatchActive,
 } from './overlay-window';
-import { overlayLog } from './overlay-log';
+import { overlayLog, formatOverlayLogLine } from './overlay-log';
 import { readLeagueHudScales } from './league-settings';
 import {
     ingestChampSelectTeam,
@@ -92,24 +92,29 @@ import {
 import { planMayhemOcr } from '../src/logic/mayhem/augmentSchedule';
 import {
     computeMayhemPickPhase,
-    nextMayhemPickLevel,
     resolveMayhemPicksTaken,
     type MayhemPickPhase,
 } from '../src/logic/mayhem/pickPhase';
 import {
+    MAYHEM_REROLL_PICK_WINDOW_MS,
     readLiveAugmentIds,
+    revertMayhemRerollPick,
 } from '../src/logic/mayhem/pickCount';
 import {
     createMayhemMonitorState,
-    isMayhemDiscoverySignals,
+    createMayhemPollChain,
+    mayhemAutoOcrWanted,
     mayhemDiscoveryLive,
+    mayhemMonitorMode,
+    isMayhemDiscoverySignals,
     noteMayhemDiscoveryTrigger,
     noteMayhemManualScan,
     runMayhemMonitorScan,
+    type MayhemMonitorResult,
     type MayhemMonitorState,
 } from '../src/logic/mayhem/monitor';
 import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
-import { loadMayhemBundle } from './mayhem-data';
+import { loadMayhemBundle, refreshMayhemBundleIfStale } from './mayhem-data';
 import {
     detectMayhemOffers,
     isMayhemOcrRerollPending,
@@ -595,19 +600,59 @@ function applyChampSelectChampionToLoading(): void {
     sendPrematchLoadingPayload();
 }
 
+export type MayhemHotkeyKey = 'PageUp' | 'PageDown';
+
+export interface MayhemHotkeyRouteDecision {
+    key: MayhemHotkeyKey;
+    /** The hotkey reached its panel/OCR action. */
+    routed: boolean;
+    /** Why it routed, or what stopped it before the action. */
+    reason: string;
+}
+
+/**
+ * One overlay.log line per hotkey route decision. A paste of overlay.log can
+ * then separate "the hotkey was not routed" from "OCR ran and read nothing".
+ * Returns the formatted line so a harness can assert the exact record.
+ */
+export function logMayhemHotkeyRoute(decision: MayhemHotkeyRouteDecision): string {
+    const detail = {
+        key: decision.key,
+        routed: decision.routed,
+        reason: decision.reason,
+    };
+    overlayLog('hotkey', detail);
+    return formatOverlayLogLine(Date.now(), 'hotkey', detail);
+}
+
+/** Why PageUp did or did not dismiss; `panel-shown` means the hotkey routed. */
+export function mayhemDismissRouteReason(input: {
+    inGame: boolean;
+    hasPayload: boolean;
+    aramFamily: boolean;
+    panelShown: boolean;
+}): string {
+    if (!input.inGame) return 'not-in-game';
+    if (!input.hasPayload) return 'no-payload';
+    if (!input.aramFamily) return 'not-aram-family';
+    if (!input.panelShown) return 'panel-hidden';
+    return 'panel-shown';
+}
+
 /** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
 export function dismissMayhemAugmentPanelFromHotkey(): void {
     // Any ARAM-family game with a panel on screen owns PageUp: a manual
     // PageDown scan can show offers in classic ARAM too. Clearing the panel
     // never enables automatic Mayhem or latches the classic queue.
-    if (
-        !canDismissMayhemPanel({
-            inGame,
-            hasPayload: !!lastGoodPayload,
-            aramFamily: isAramFamilyMatchActive(),
-            panelShown: mayhemAugmentHudShouldShow(),
-        })
-    ) {
+    const route = {
+        inGame,
+        hasPayload: !!lastGoodPayload,
+        aramFamily: isAramFamilyMatchActive(),
+        panelShown: mayhemAugmentHudShouldShow(),
+    };
+    const reason = mayhemDismissRouteReason(route);
+    logMayhemHotkeyRoute({ key: 'PageUp', routed: reason === 'panel-shown', reason });
+    if (!canDismissMayhemPanel(route)) {
         return;
     }
     mayhemUserDismissedUntilMs = Date.now() + 120_000;
@@ -630,7 +675,14 @@ export function canDismissMayhemPanel(input: {
 
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
 export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
-    if (!inGame || !lastGoodPayload) return;
+    if (!inGame) {
+        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'not-in-game' });
+        return;
+    }
+    if (!lastGoodPayload) {
+        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'no-payload' });
+        return;
+    }
     const signals = currentMayhemSignals();
     // Manual scan is allowed in any ARAM-family game, including an unknown
     // queue. Only an unknown queue may be classified from it; classic ARAM 450
@@ -640,18 +692,36 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
         mapId: signals.mapId,
         augmentOffersDetected: false,
     });
-    if (!isMayhemMode(currentMayhemMode()) && !aramFamily) return;
+    const modeMayhem = isMayhemMode(currentMayhemMode());
+    if (!modeMayhem && !aramFamily) {
+        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'not-aram-family' });
+        return;
+    }
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
     const bundle = loadMayhemBundle();
-    if (!bundle?.augments?.length) return;
+    if (!bundle?.augments?.length) {
+        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'no-bundle' });
+        return;
+    }
+    // The player asked for this roll: invalidate any auto scan that started
+    // before PageDown, so its tick cannot commit over the manual roll below.
+    mayhemMonitorEpoch += 1;
     resetMayhemOcrCache();
     const read = await detectMayhemOffers(
         bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
         0,
-        { minMatches: 1 }
+        { minMatches: 1, mayhemMatch: modeMayhem }
     );
     const ids = read.ids;
+    logMayhemHotkeyRoute({
+        key: 'PageDown',
+        routed: true,
+        reason: !read.valid ? 'ocr-invalid' : !read.fresh ? 'ocr-throttled' : `offers:${ids.length}`,
+    });
+    // Again after the await: an auto tick that started while the manual capture
+    // ran holds a pre-manual clone and must be refused too, before this write.
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = ids;
     mayhemMonitorState.displayIds = [...ids];
     mayhemMonitorState.fuzzyScore = read.fuzzyScore;
@@ -1085,6 +1155,13 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
 
 let mayhemOfferIds: string[] = [];
 /**
+ * The roll that vanished when the pick counter fired. A reroll re-deals the
+ * shop within seconds; a disjoint roll inside the window means that "pick" was
+ * the shop refreshing, so it is taken back (see revertMayhemRerollPick).
+ */
+let mayhemPickVoidRollIds: string[] = [];
+let mayhemPickVoidAtMs = 0;
+/**
  * Memoized payload `enemies` list: built once per enemy-list signature so a
  * tick whose enemies did not change reuses the previous array instead of
  * rebuilding it (and the objects inside it) every poll.
@@ -1098,7 +1175,16 @@ let lastSentMomentCueContent = '';
 /** Moment-engine runs ride payload sends; this floor also keeps a quiet match warm. */
 const PLAY_MOMENTS_MIN_INTERVAL_MS = 2000;
 
-let mayhemPollTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The match's OCR poll chain. The next poll is armed before a scan is awaited
+ * (see createMayhemPollChain), so a hung capture/OCR can never stop the chain.
+ */
+const mayhemPoll = createMayhemPollChain({
+    runTick: () => tickMayhemOcr(),
+    nextDelayMs: () => nextMayhemPollDelayMs(),
+    isLive: () => inGame,
+    onTickError: (error) => overlayLog('ocr-poll-error', { message: String(error) }),
+});
 /** The one Mayhem poll session of this match (later discovery bursts reuse it). */
 let mayhemPollStartedThisMatch = false;
 let mayhemBurstUntilMs = 0;
@@ -1134,6 +1220,50 @@ let mayhemOfferFuzzyScore = 0;
  * of this module reads.
  */
 let mayhemMonitorState: MayhemMonitorState = createMayhemMonitorState();
+/**
+ * Bumped whenever the engine's display mirror is cleared out of band (a pick, a
+ * dismissal, a match reset) or replaced by an authoritative manual PageDown
+ * scan. A scan clones its state before the slow OCR await; a clone from before
+ * a purge still holds the roll the player just picked (or a manual scan wrote
+ * over), so a finished tick only writes back while this count is unchanged.
+ */
+let mayhemMonitorEpoch = 0;
+
+export interface MayhemScanTicket {
+    /** The engine object the scan started on (identity guards a replaced state). */
+    state: MayhemMonitorState;
+    /** Purge/clear count when the scan started. */
+    epoch: number;
+}
+
+/** Epoch of the display mirror: a purge/clear or a manual scan advances it. */
+export function getMayhemMonitorEpoch(): number {
+    return mayhemMonitorEpoch;
+}
+
+/** Snapshot the engine right before the (slow) capture/OCR await. */
+export function beginMayhemScanTicket(state: MayhemMonitorState): MayhemScanTicket {
+    // The epoch is read here, not by the caller: a ticket whose epoch cannot
+    // disagree with the module by construction cannot be built wrong.
+    return { state, epoch: mayhemMonitorEpoch };
+}
+
+/**
+ * Fold a finished scan into the live engine only when nothing purged or
+ * replaced it while the scan was in flight. A stale result would re-show a roll
+ * the player already picked (its cloned displayIds predate the purge).
+ */
+export function commitMayhemMonitorScan(
+    ticket: MayhemScanTicket,
+    live: { state: MayhemMonitorState; epoch: number },
+    result: MayhemMonitorResult
+): { applied: boolean; state: MayhemMonitorState; displayIds: string[] } {
+    if (ticket.state !== live.state || ticket.epoch !== live.epoch) {
+        return { applied: false, state: live.state, displayIds: [...live.state.displayIds] };
+    }
+    return { applied: true, state: result.state, displayIds: [...result.state.displayIds] };
+}
+
 /** Last `mode-detect` line written this match (dedupe: one line per signal set). */
 let lastModeDetectKey = '';
 
@@ -1147,8 +1277,7 @@ function mayhemOffersDetected(): boolean {
 }
 
 /** One `mode-detect` line per distinct signal set, to overlay.log. */
-function logModeDetect(signals: MayhemModeSignals): MayhemMode {
-    const mode = detectMayhemMode(signals);
+function logModeResult(signals: MayhemModeSignals, mode: MayhemMode): MayhemMode {
     const key = [
         signals.gameMode ?? '',
         signals.mapName ?? '',
@@ -1168,6 +1297,11 @@ function logModeDetect(signals: MayhemModeSignals): MayhemMode {
         });
     }
     return mode;
+}
+
+/** One `mode-detect` line per distinct signal set, to overlay.log. */
+function logModeDetect(signals: MayhemModeSignals): MayhemMode {
+    return logModeResult(signals, detectMayhemMode(signals));
 }
 
 function mayhemModeForLive(live: LiveClientAllGameData | null): MayhemMode {
@@ -1190,8 +1324,25 @@ function currentMayhemSignals(): MayhemModeSignals {
     };
 }
 
+/**
+ * The mode game-monitor routes on.
+ *
+ * mode.ts keeps its own precedence - a classic queue id (450/100) is `aram`
+ * even when augments were seen - and that must not change. But once this
+ * match's discovery latch is set the game IS Mayhem, so the routing answer is
+ * `mayhem` for the rest of the game; otherwise a queue-450 Mayhem game falls
+ * back to `aram` after a pick purges the offers and the poll stops for good.
+ */
+export function mayhemModeForRouting(
+    state: MayhemMonitorState,
+    signals: MayhemModeSignals
+): MayhemMode {
+    return mayhemMonitorMode(state, signals);
+}
+
 function currentMayhemMode(): MayhemMode {
-    return logModeDetect(currentMayhemSignals());
+    const signals = currentMayhemSignals();
+    return logModeResult(signals, mayhemModeForRouting(mayhemMonitorState, signals));
 }
 
 function mayhemManualScanActive(): boolean {
@@ -1207,6 +1358,7 @@ function mayhemAugmentHudShouldShow(): boolean {
 }
 
 function clearMayhemLiveOffers(): void {
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
     setMayhemRollIds([]);
     // Drop the engine's display mirror too: a throttled (non-fresh) scan must
@@ -1233,6 +1385,7 @@ function endMayhemPickSession(): void {
 }
 
 function purgeMayhemOffersFromScreen(): void {
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
     setMayhemRollIds([]);
     mayhemManualScanUntilMs = 0;
@@ -1261,12 +1414,11 @@ function applyMayhemOfferVisibilityAfterOcr(): void {
 
 function shouldRunMayhemAutoOcr(level: number): boolean {
     if (Date.now() < mayhemUserDismissedUntilMs) return false;
-    const ownedCount = mayhemPicksResolved(level);
-    const nextPick = nextMayhemPickLevel(ownedCount);
-    if (nextPick == null) return false;
-    if (level >= nextPick) return true;
-    if (mayhemAugmentHudShouldShow()) return true;
-    return false;
+    return mayhemAutoOcrWanted({
+        level,
+        ownedCount: mayhemPicksResolved(level),
+        hudVisible: mayhemAugmentHudShouldShow(),
+    });
 }
 
 function mayhemPicksResolved(level: number): number {
@@ -1361,19 +1513,11 @@ function syncMayhemPickPhaseFromPayload(): void {
 }
 
 function stopMayhemPoll(): void {
-    if (mayhemPollTimer) {
-        clearTimeout(mayhemPollTimer);
-        mayhemPollTimer = null;
-    }
+    mayhemPoll.stop();
 }
 
 function scheduleMayhemPoll(delayMs: number): void {
-    stopMayhemPoll();
-    mayhemPollTimer = setTimeout(() => {
-        void tickMayhemOcr().finally(() => {
-            if (inGame) scheduleMayhemPoll(nextMayhemPollDelayMs());
-        });
-    }, delayMs);
+    mayhemPoll.start(delayMs);
 }
 
 function nextMayhemPollDelayMs(): number {
@@ -1424,6 +1568,8 @@ function startMayhemPoll(): void {
         mayhemUserDismissedUntilMs = 0;
         mayhemAugmentDismissedAt = 0;
         mayhemLiveAugmentIds = [];
+        mayhemPickVoidRollIds = [];
+        mayhemPickVoidAtMs = 0;
         resetMayhemOcrMatchFlags();
         setMayhemOcrRetainOffers(false);
         resetMayhemMatchState();
@@ -1522,6 +1668,7 @@ async function tickMayhemOcr(): Promise<void> {
         setMayhemOcrRetainOffers(false);
     }
 
+    const scanTicket = beginMayhemScanTicket(mayhemMonitorState);
     const result = await runMayhemMonitorScan(
         mayhemMonitorState,
         {
@@ -1537,13 +1684,53 @@ async function tickMayhemOcr(): Promise<void> {
             detectMayhemOffers(
                 bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
                 minGap,
-                { minMatches }
+                { minMatches, mayhemMatch: active }
             )
     );
-    mayhemMonitorState = result.state;
+    // Only a scan that no purge/reset overtook may write back: its cloned state
+    // predates the purge and would re-show the roll the player already picked.
+    const commit = commitMayhemMonitorScan(
+        scanTicket,
+        { state: mayhemMonitorState, epoch: mayhemMonitorEpoch },
+        result
+    );
+    if (!commit.applied) {
+        overlayLog('mayhem-scan-stale', {
+            level,
+            startedEpoch: scanTicket.epoch,
+            currentEpoch: mayhemMonitorEpoch,
+        });
+        pushMayhemOverlayPatch();
+        return;
+    }
+    mayhemMonitorState = commit.state;
     // Display ids may keep the last roll while the HUD is open; the counter
     // already used this frame's ids only (frameIds) inside the engine.
-    mayhemOfferIds = result.state.displayIds;
+    mayhemOfferIds = commit.displayIds;
+
+    // A reroll re-deals the roll the empty gap just retired: within the reroll
+    // window a disjoint roll means that gap was the shop refreshing, not a
+    // pick. The counter cannot see ahead; undo its count here, once.
+    if (mayhemPickVoidRollIds.length && Date.now() - mayhemPickVoidAtMs > MAYHEM_REROLL_PICK_WINDOW_MS) {
+        mayhemPickVoidRollIds = [];
+    }
+    if (mayhemPickVoidRollIds.length && mayhemOfferIds.length) {
+        const reroll = revertMayhemRerollPick(
+            mayhemMonitorState.counter,
+            mayhemPickVoidRollIds,
+            mayhemOfferIds,
+            Date.now() - mayhemPickVoidAtMs
+        );
+        if (reroll.reverted) {
+            mayhemMonitorState.counter = reroll.state;
+            setMayhemPicksTaken(reroll.state.picksTaken);
+            mayhemPickPhase = { ...mayhemPickPhase, picksTaken: reroll.state.picksTaken };
+            mayhemPickVoidRollIds = [];
+        } else if (mayhemOfferIds.some((id) => mayhemPickVoidRollIds.includes(id))) {
+            // The same roll is back: a misread, not a new pick level.
+            mayhemPickVoidRollIds = [];
+        }
+    }
 
     mayhemOfferScanStreak = result.state.scanStreak;
     mayhemOfferFuzzyScore = result.state.fuzzyScore;
@@ -1551,6 +1738,10 @@ async function tickMayhemOcr(): Promise<void> {
     if (result.counted > 0) {
         setMayhemPicksTaken(result.state.counter.picksTaken);
         mayhemPickPhase = { ...mayhemPickPhase, picksTaken: result.state.counter.picksTaken };
+        // Remember which roll the empty gap retired so a reroll can take the
+        // spurious count back (displayIds still holds it on this frame).
+        mayhemPickVoidRollIds = mayhemOfferIds.slice();
+        mayhemPickVoidAtMs = Date.now();
         purgeMayhemOffersFromScreen();
     } else if (result.scanned) {
         // A single offer stays as a candidate (`keep`) until a second scan
@@ -1575,6 +1766,8 @@ export function getMayhemLiveOfferIds(): string[] {
 }
 
 function resetMatchCaches(): void {
+    mayhemPickVoidRollIds = [];
+    mayhemPickVoidAtMs = 0;
     lastChampSelectEnemies = [];
     lastChampSelectSelf = null;
     loadingChampion = null;
@@ -1946,6 +2139,11 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
     // EventIDs restart at 0 every game, so a stale cursor would swallow the
     // first events of this one.
     resetStateService('match start');
+    // Follow the live patch: a new patch adds augments the offline bundle does
+    // not contain. Offline is fine — cached/bundled data keeps working.
+    void refreshMayhemBundleIfStale().catch(() => {
+        // no network: keep the cached/bundled bundle
+    });
     clearPlayRecap();
     resetJungleThreatClock();
     resetCoachCooldowns();
@@ -2013,26 +2211,27 @@ function syncMayhemPollForMode(signals: {
     level?: number;
     isDead?: boolean;
 }): void {
-    const mode = logModeDetect({ ...signals, augmentOffersDetected: mayhemOffersDetected() });
+    const signalSet = { ...signals, augmentOffersDetected: mayhemOffersDetected() };
+    // Latched discovery is Mayhem even when the queue says 450: mode.ts alone
+    // would say `aram`, which used to stop the poll after a pick purged the
+    // offers and leave nothing able to re-classify the match.
+    const mode = logModeResult(signalSet, mayhemModeForRouting(mayhemMonitorState, signalSet));
     if (isMayhemMode(mode)) {
-        if (!mayhemPollTimer) startMayhemPoll();
+        if (!mayhemPoll.isRunning()) startMayhemPoll();
         return;
     }
     if (isMayhemDiscoverySignals(signals)) {
-        // ARAM-family match that is not classed as Mayhem: open/continue a
-        // bounded discovery burst around the augment windows (level 3/7/11/15
-        // or a death). The queue id does not veto this: real Mayhem can report
-        // 450, and classic ARAM just never reads offers.
-        const burst = noteMayhemDiscoveryTrigger(mayhemMonitorState, {
+        // Keep the poll alive for ANY ARAM-family match, not only while a burst
+        // is live: the level 7/11/15 windows (or a death edge) must still be
+        // able to open a burst after an earlier one read nothing.
+        noteMayhemDiscoveryTrigger(mayhemMonitorState, {
             now: Date.now(),
             level: signals.level ?? 1,
             isDead: signals.isDead === true,
             signals,
         }, { anyAramQueue: true });
-        if (burst) {
-            if (!mayhemPollTimer) startMayhemPoll();
-            return;
-        }
+        if (!mayhemPoll.isRunning()) startMayhemPoll();
+        return;
     }
     stopMayhemPoll();
 }

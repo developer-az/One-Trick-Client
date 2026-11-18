@@ -128,18 +128,23 @@ export class LcuSocket extends EventEmitter {
      * Fold a summoner payload (REST hydrate or WAMP event) into the identity.
      * The client sends an empty object/Delete while it sits on the login screen,
      * so that keeps the last-known account instead of blanking the profile.
-     * puuid is the account key: a different one replaces every field.
+     * puuid is the account key: a different one replaces every field, and a
+     * payload that carries a changed Riot ID but no puuid drops the stored key
+     * rather than reporting account A's puuid under account B's name.
      */
     applySummoner(data: unknown): void {
         const next = mapCurrentSummoner(data);
         if (next && (next.puuid || next.gameName || next.displayName || next.tagLine)) {
             const switched = Boolean(next.puuid && this.identity.puuid && next.puuid !== this.identity.puuid);
             const base = switched ? EMPTY_IDENTITY : this.identity;
+            const nameChanged =
+                (next.gameName != null && next.gameName !== base.gameName) ||
+                (next.tagLine != null && next.tagLine !== base.tagLine);
             this.identity = {
                 summonerName: next.gameName || next.displayName || base.summonerName,
                 gameName: next.gameName ?? base.gameName,
                 tagLine: next.tagLine ?? base.tagLine,
-                puuid: next.puuid ?? base.puuid,
+                puuid: next.puuid ?? (nameChanged ? null : base.puuid),
             };
         }
         this.emit('summoner', data);

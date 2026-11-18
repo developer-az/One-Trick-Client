@@ -6,6 +6,7 @@ import {
   synergyScore,
 } from './synergy';
 import { isLiveMayhemAugment } from './bundleSanitize';
+import { isUnknownMayhemAugmentId, unknownMayhemAugmentLabel } from './match';
 import type { MayhemAugment, MayhemBundle, MayhemVerdict, RankedMayhemChoice } from './types';
 
 function byId(bundle: MayhemBundle): Map<string, MayhemAugment> {
@@ -220,6 +221,12 @@ function applyVerdicts(rows: RankedMayhemChoice[], rollMode: boolean): RankedMay
   });
 }
 
+/**
+ * Score of an offer the bundle does not know. Purely a sentinel: placeholders
+ * are appended after known rows regardless of this value.
+ */
+const MAYHEM_UNKNOWN_AUGMENT_SCORE = -999;
+
 export function rankMayhemChoices(
   champion: Champion,
   ownedIds: string[],
@@ -229,10 +236,14 @@ export function rankMayhemChoices(
   const map = byId(bundle);
   const ownedSet = new Set(ownedIds);
   const owned = resolveAugments(ownedIds, map);
-  const uniqueCandidates = [...new Set(candidateIds)].filter((id) => map.has(id));
+  // Offers from a newer patch than the bundle stay in the roll as placeholders
+  // (see match.ts) instead of vanishing from the panel.
+  const uniqueCandidates = [...new Set(candidateIds)].filter(Boolean);
+  const knownCandidateIds = uniqueCandidates.filter((id) => map.has(id));
+  const unknownCandidateIds = uniqueCandidates.filter((id) => !map.has(id));
   const rollMode = uniqueCandidates.length > 0 && uniqueCandidates.length <= 3;
 
-  const ranked: RankedMayhemChoice[] = uniqueCandidates.map((id) => {
+  const ranked: RankedMayhemChoice[] = knownCandidateIds.map((id) => {
     const aug = map.get(id)!;
     const reasons: string[] = [];
     let score = 0;
@@ -290,7 +301,23 @@ export function rankMayhemChoices(
   });
 
   const sorted = ranked.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-  return applyVerdicts(sorted, rollMode);
+  // Unknown rows are appended after every known augment and never take part in
+  // combo/synergy scoring, so they can never outrank a card the bundle knows.
+  for (const id of unknownCandidateIds) {
+    sorted.push({
+      augmentId: id,
+      name: unknownMayhemAugmentLabel(id) || id,
+      rarity: 'silver',
+      score: MAYHEM_UNKNOWN_AUGMENT_SCORE,
+      reasons: ['Not in the database for this patch'],
+      headline: 'Not in the database for this patch',
+      rank: 0,
+      verdict: 'skip',
+    });
+  }
+  return applyVerdicts(sorted, rollMode).map((row) =>
+    isUnknownMayhemAugmentId(row.augmentId) ? { ...row, verdict: 'skip' as MayhemVerdict } : row
+  );
 }
 
 /** Browse mode: best augments for a champ given what you already have. */

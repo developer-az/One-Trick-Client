@@ -56,6 +56,9 @@ export function resetMayhemMatchState(): void {
   const data = read();
   data.roll = [];
   data.picksTaken = 0;
+  // A finished match's owned augments must never leak into the next match: they
+  // inflate the resolved pick count, which ends the augment scan early.
+  data.owned = [];
   write(data);
 }
 

@@ -708,6 +708,15 @@ async function main(): Promise<void> {
       monitor.includes('noteMayhemDiscoveryTrigger(mayhemMonitorState'),
       'the live tick opens discovery bursts on level/death triggers'
     );
+    /* Real Mayhem can report queue 450 (ARAM's id), so the live call must pass
+     * anyAramQueue or the queue veto silently closes discovery again. */
+    const discoveryCallAt = monitor.indexOf('noteMayhemDiscoveryTrigger(mayhemMonitorState');
+    const discoveryCall =
+      discoveryCallAt === -1 ? '' : monitor.slice(discoveryCallAt, discoveryCallAt + 600);
+    ok(
+      /noteMayhemDiscoveryTrigger\(mayhemMonitorState,[\s\S]*?\{\s*anyAramQueue:\s*true\s*\}/.test(discoveryCall),
+      'the live tick passes { anyAramQueue: true } for queue-450 Mayhem'
+    );
   }
 }
 

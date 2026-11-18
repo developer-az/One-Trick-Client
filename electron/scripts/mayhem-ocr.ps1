@@ -7,8 +7,13 @@ param(
   [double]$TopFrac = 0.18,
   [double]$WidthFrac = 0.84,
   [double]$HeightFrac = 0.62,
-  # Screen-space rectangles to black out before OCR: "x,y,w,h;x,y,w,h" (physical pixels).
-  [string]$MaskRects = ''
+  # The Electron main process that hosts the overlay. Ownership of the
+  # foreground window is one half of the capture-trust decision: a game window
+  # that is behind a browser must not be trusted just because it exists.
+  [int]$OwnerPid = 0,
+  # The overlay root's --overlay-scale (0.75 + hudScale/200). The mayhem panel
+  # footprint is 380x220 CSS px multiplied by this, anchored to the right rail.
+  [double]$PanelScale = 0.85
 )
 
 $ErrorActionPreference = 'Stop'
@@ -110,6 +115,22 @@ function Find-GameWindow {
   return $script:found
 }
 
+# Is the captured game window genuinely on top? Two cases are trusted: the game
+# itself owns the foreground, or our own overlay does (it can steal focus while
+# the game is still the window underneath). Anything else — a browser sitting
+# inside the game rect, for example — means the captured pixels are not the
+# game's augment screen, so the frame must not count a pick.
+function Test-OwnerForeground {
+  param([IntPtr]$GameHandle)
+  $foreground = [OTMayhemWin32]::GetForegroundWindow()
+  if ($foreground -eq [IntPtr]::Zero) { return $false }
+  if ($foreground -eq $GameHandle) { return $true }
+  if ($OwnerPid -le 0) { return $false }
+  $foregroundPid = [uint32]0
+  [void][OTMayhemWin32]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid)
+  return ([int]$foregroundPid -eq $OwnerPid)
+}
+
 function Set-MaskRectangles {
   param(
     [System.Drawing.Bitmap]$Bitmap,
@@ -198,6 +219,15 @@ function Capture-Region {
     [int]$Width,
     [int]$Height,
     [string]$OutPath,
+    # The full game-window (or primary-screen) frame the overlay panel is
+    # anchored to, in the same screen coordinates as $Left/$Top. The captured
+    # bitmap is often only the offer band, so the panel mask is computed in this
+    # frame and then translated into the bitmap. Omitted: the capture rect is
+    # the frame (the primary-screen fallback captures the whole display).
+    [int]$FrameLeft = 0,
+    [int]$FrameTop = 0,
+    [int]$FrameWidth = 0,
+    [int]$FrameHeight = 0,
     # Optional post-mask crop, in the SAME screen coordinates as $Left/$Top.
     [int]$CropLeft = -1,
     [int]$CropTop = -1,
@@ -211,7 +241,17 @@ function Capture-Region {
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.CopyFromScreen($Left, $Top, 0, 0, (New-Object System.Drawing.Size $rw, $rh))
   $g.Dispose()
-  Set-MaskRectangles -Bitmap $bmp -CaptureLeft $Left -CaptureTop $Top -Spec $MaskRects
+  # Mask our own mayhem panel before OCR. The rect is computed from the frame
+  # and translated into this bitmap's pixels, so a game window on another
+  # monitor can never be masked using the cursor display's geometry.
+  if ($FrameWidth -gt 0 -and $FrameHeight -gt 0) {
+    $fx = $FrameLeft; $fy = $FrameTop; $fw = $FrameWidth; $fh = $FrameHeight
+  } else {
+    $fx = $Left; $fy = $Top; $fw = $rw; $fh = $rh
+  }
+  $panel = Get-PanelMaskRect -FrameLeft $fx -FrameTop $fy -FrameWidth $fw -FrameHeight $fh
+  $panelSpec = "$($panel.X),$($panel.Y),$($panel.Width),$($panel.Height)"
+  Set-MaskRectangles -Bitmap $bmp -CaptureLeft $Left -CaptureTop $Top -Spec $panelSpec
   $black = Test-BlackFrame -Bitmap $bmp
   $out = $bmp
   if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
@@ -241,6 +281,34 @@ function Capture-Region {
 function ConvertTo-TruncatedPixels {
   param([double]$Value)
   return [int][Math]::Truncate($Value)
+}
+
+# The overlay's mayhem panel footprint, measured against the game window (or
+# primary screen) the overlay is anchored to: 380x220 CSS px scaled by
+# --overlay-scale (0.75 + hudScale/200), right rail at 0.982 W, top at 0.26 H.
+# The caller captures a sub-rect (the offer band), so Set-MaskRectangles
+# translates this screen-space rect into the bitmap. Computing it here, from
+# the frame this script already found, keeps the mask on the same monitor and
+# window as the pixels — a DIP display rect chosen in Electron for the cursor's
+# monitor could point at a different screen entirely.
+# verify_mayhem_capture_gating.ts pins the constants and the call site.
+function Get-PanelMaskRect {
+  param(
+    [int]$FrameLeft,
+    [int]$FrameTop,
+    [int]$FrameWidth,
+    [int]$FrameHeight
+  )
+  $width = [Math]::Max(1, (ConvertTo-TruncatedPixels (380.0 * $PanelScale)))
+  $height = [Math]::Max(1, (ConvertTo-TruncatedPixels (220.0 * $PanelScale)))
+  $right = $FrameLeft + (ConvertTo-TruncatedPixels ($FrameWidth * 0.982))
+  $top = $FrameTop + (ConvertTo-TruncatedPixels ($FrameHeight * 0.26))
+  return [pscustomobject]@{
+    X = $right - $width
+    Y = $top
+    Width = $width
+    Height = $height
+  }
 }
 
 # The offer band of a bounds rect. The game-window capture, the primary-screen
@@ -274,7 +342,8 @@ function Capture-FractionRegion {
     [string]$OutPath
   )
   $geo = Get-OfferGeometry -BoundsX $BoundsLeft -BoundsY $BoundsTop -BoundsWidth $BoundsWidth -BoundsHeight $BoundsHeight
-  return (Capture-Region -Left $geo.Left -Top $geo.Top -Width $geo.Width -Height $geo.Height -OutPath $OutPath)
+  return (Capture-Region -Left $geo.Left -Top $geo.Top -Width $geo.Width -Height $geo.Height -OutPath $OutPath `
+    -FrameLeft $BoundsLeft -FrameTop $BoundsTop -FrameWidth $BoundsWidth -FrameHeight $BoundsHeight)
 }
 
 function Capture-PrimaryScreen {
@@ -321,6 +390,7 @@ if ($CaptureScreen) {
   }
   if ($target) {
     $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)
+    $owner = Test-OwnerForeground -GameHandle $target.Handle
     $frame = Get-OfferGeometry -BoundsX $target.Left -BoundsY $target.Top -BoundsWidth $target.Width -BoundsHeight $target.Height
     $frameWidth = $frame.Width
     $frameHeight = $frame.Height
@@ -334,6 +404,7 @@ if ($CaptureScreen) {
       frame = "${frameWidth}x${frameHeight}"
       black = [bool]$blackFrame
       fg = [bool]$foreground
+      owner = [bool]$owner
     }
     Write-Output ("__OT_TARGET__" + ($targetInfo | ConvertTo-Json -Compress))
   }

@@ -1,4 +1,5 @@
 import React from 'react';
+import { isUnknownMayhemAugmentId } from '../logic/mayhem/match';
 import type { RankedMayhemChoice } from '../logic/mayhem/types';
 
 /*
@@ -39,7 +40,8 @@ export const OverlayMayhemPanel: React.FC<{
   if (!ranked.length && resolvedMode !== 'reading' && !waitingForDeath && !pickHint) return null;
 
   const best = ranked.reduce<RankedMayhemChoice | null>(
-    (acc, row) => (!acc || row.score > acc.score ? row : acc),
+    (acc, row) =>
+      isUnknownMayhemAugmentId(row.augmentId) ? acc : !acc || row.score > acc.score ? row : acc,
     null
   );
 
@@ -77,8 +79,19 @@ export const OverlayMayhemPanel: React.FC<{
           <ol className="space-y-1">
             {ranked.map((row) => {
               const isBest = row.rank === best?.rank;
-              const verdictTone =
-                row.verdict === 'pick' ? 'var(--ov-teal)' : row.verdict === 'alt' ? 'var(--ov-amber)' : 'var(--ov-red)';
+              const unknown = isUnknownMayhemAugmentId(row.augmentId);
+              const verdictTone = unknown
+                ? 'var(--ov-text-2)'
+                : row.verdict === 'pick'
+                  ? 'var(--ov-teal)'
+                  : row.verdict === 'alt'
+                    ? 'var(--ov-amber)'
+                    : 'var(--ov-red)';
+              const nameTone = isBest
+                ? 'var(--ov-text)'
+                : unknown
+                  ? 'var(--ov-text-2)'
+                  : RARITY_COLOR[row.rarity];
               return (
                 <li
                   key={row.augmentId}
@@ -92,20 +105,23 @@ export const OverlayMayhemPanel: React.FC<{
                     {row.rank}
                   </span>
                   <span className="min-w-0">
-                    <span
-                      className="font-medium"
-                      style={{ color: isBest ? 'var(--ov-text)' : RARITY_COLOR[row.rarity] }}
-                    >
+                    <span className="font-medium" style={{ color: nameTone }}>
                       {row.name}
                     </span>
                     <span
                       className="ml-1 text-[9px] font-bold uppercase tracking-wider"
                       style={{ color: verdictTone }}
                     >
-                      {row.verdict === 'pick' ? 'take' : row.verdict === 'alt' ? 'alt' : 'skip'}
+                      {unknown
+                        ? 'not in database'
+                        : row.verdict === 'pick'
+                          ? 'take'
+                          : row.verdict === 'alt'
+                            ? 'alt'
+                            : 'skip'}
                     </span>
                     <span className="block" style={{ color: 'var(--ov-text-2)' }}>
-                      {shortenReason(row.headline)}
+                      {shortenReason(unknown ? 'New augment — read the card text' : row.headline)}
                     </span>
                   </span>
                 </li>

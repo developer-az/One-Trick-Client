@@ -4,11 +4,25 @@
  * The overlay draws its own HUD panels over the game, and the mayhem panel
  * sits on the right rail — inside the region the OCR crop reads. Rather than
  * toggling capture protection (which would also hide the HUD from the user's
- * recordings), the PowerShell capture paints black over the panel footprint
- * before the frame goes to Windows OCR.
+ * recordings), the capture paints black over the panel footprint before the
+ * frame goes to Windows OCR.
+ *
+ * The PowerShell capture computes that footprint itself from the window it
+ * captured (mayhem-ocr.ps1 / Get-PanelMaskRect), so the mask and the pixels
+ * can never come from different displays. `mayhemPanelMaskRect` below remains
+ * for the desktopCapturer fallback, whose frame is a DIP display thumbnail and
+ * therefore needs the whole-rect DIP → physical conversion.
  *
  * The rect is the shipped right-rail default (`x = 0.982`, `y = 0.26`,
  * 380×220 CSS px, see src/overlay/hudLayout.ts + OverlayApp's mayhem panel).
+ *
+ * Serialisation contract (desktopCapturer fallback): `formatMaskRects` and
+ * `parseMaskRects` speak the `x,y,w,h;x,y,w,h` string that mayhem-ocr.ps1
+ * parses for its mask rectangles. Nothing on the live Electron path uses them —
+ * the PowerShell capture derives its mask internally from the frame it
+ * captured — but they stay the documented shape for a fallback capture that
+ * must ship its mask across the process boundary, and `verify_mayhem_live.ts`
+ * pins the round trip. Do not delete them.
  */
 
 import { DEFAULT_OFFER_FRACTIONS, MIN_CAPTURE_PX } from './captureRegion';
@@ -65,7 +79,12 @@ export function mayhemFallbackCropRect(width: number, height: number): PhysicalR
   };
 }
 
-/** `x,y,w,h;x,y,w,h` — the shape mayhem-ocr.ps1 parses. */
+/**
+ * Serialise mask rects for the PowerShell capture: `x,y,w,h;x,y,w,h`.
+ *
+ * Fallback-path contract only (see the file header); `parseMaskRects` is its
+ * inverse and `verify_mayhem_live.ts` pins the round trip.
+ */
 export function formatMaskRects(rects: PhysicalRect[]): string {
   return rects
     .filter((r) => r.width > 0 && r.height > 0)
@@ -73,6 +92,7 @@ export function formatMaskRects(rects: PhysicalRect[]): string {
     .join(';');
 }
 
+/** Inverse of `formatMaskRects`: the mask rects a fallback capture reported. */
 export function parseMaskRects(spec: string): PhysicalRect[] {
   if (!spec) return [];
   const out: PhysicalRect[] = [];

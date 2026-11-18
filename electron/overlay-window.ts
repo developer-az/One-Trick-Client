@@ -19,7 +19,17 @@ import {
     normalizeHudSkinSettings,
     type HudSkinSettings,
 } from '../src/overlay/hudSkins';
-import { migrateMayhemDefaults } from '../src/overlay/hudModules';
+import {
+    DEFAULT_HUD_MODULES,
+    HUD_MODULE_IDS,
+    MAYHEM_DEFAULTS_MIGRATION_KEY,
+    migrateMayhemDefaults,
+    normalizeHudModules,
+    type HudModuleId,
+    type HudModules,
+} from '../src/overlay/hudModules';
+
+export type { HudModuleId, HudModules } from '../src/overlay/hudModules';
 
 export type { HudSkinChoice, HudSkinSettings } from '../src/overlay/hudSkins';
 
@@ -583,20 +593,6 @@ let gameWidth = 1920;
 let gameHeight = 1080;
 let calibration: OverlayCalibration = { ...DEFAULT_CALIBRATION, ability: { ...DEFAULT_CALIBRATION.ability }, minimap: { ...DEFAULT_CALIBRATION.minimap } };
 
-export type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
-export type HudModules = Record<HudModuleId, boolean>;
-
-const HUD_MODULE_IDS: HudModuleId[] = ['sums', 'gank', 'vision', 'buy', 'action', 'mayhem', 'frames'];
-const DEFAULT_HUD_MODULES: HudModules = {
-    sums: true,
-    gank: true,
-    vision: true,
-    buy: true,
-    action: true,
-    mayhem: true,
-    frames: false,
-};
-
 let hudModules: HudModules = { ...DEFAULT_HUD_MODULES };
 let hudLayout: unknown = null;
 
@@ -605,15 +601,12 @@ let hudSkin: HudSkinSettings = { ...DEFAULT_HUD_SKIN_SETTINGS };
 let settingsLoaded = false;
 /** Persisted marker: the one-time Mayhem defaults migration already ran. */
 let mayhemDefaultsMigrated = false;
-
-function normalizeHudModules(value: unknown): HudModules {
-    const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-    const next: HudModules = { ...DEFAULT_HUD_MODULES };
-    for (const id of HUD_MODULE_IDS) {
-        if (typeof src[id] === 'boolean') next[id] = src[id];
-    }
-    return next;
-}
+/**
+ * In-memory guard: this process has already settled the Mayhem default. A later
+ * loadSettings() (createOverlayWindow re-reads disk) must not re-run the legacy
+ * flip over a choice the user made in this session.
+ */
+let mayhemDefaultsSettled = false;
 
 function normalizeChromeColor(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -674,17 +667,27 @@ function widgetsFromSettings(): Array<{
         elements?: Array<{ id?: string; visible?: boolean; x?: number; y?: number; scale?: number; anchor?: string }>;
         stickers?: Array<{ id?: string; x?: number; y?: number; scale?: number }>;
     }) : null;
+    // Mayhem's place in the rail is fixed; its default visibility is the
+    // shared module default, so the two cannot drift apart.
+    const mayhemDefault = {
+        id: 'mayhem',
+        visible: DEFAULT_HUD_MODULES.mayhem,
+        x: 0.982,
+        y: 0.26,
+        scale: 1,
+        anchor: 'tr',
+    };
     const defaults = [
         { id: 'sums', visible: true, x: 0.018, y: 0.078, scale: 1, anchor: 'tl' },
         { id: 'gank', visible: true, x: 0.982, y: 0.078, scale: 1, anchor: 'tr' },
         { id: 'vision', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
         { id: 'buy', visible: true, x: 0.982, y: 0.42, scale: 1, anchor: 'tr' },
         { id: 'action', visible: true, x: 0.982, y: 0.54, scale: 1, anchor: 'tr' },
-        { id: 'mayhem', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
+        mayhemDefault,
     ];
     const elements = Array.isArray(raw?.elements) && raw.elements.length ? [...raw.elements] : defaults;
     if (!elements.some((el) => el?.id === 'mayhem')) {
-        elements.push({ id: 'mayhem', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' });
+        elements.push({ ...mayhemDefault });
     }
     const widgets: Array<{
         id: string;
@@ -762,6 +765,42 @@ function ensureSettingsLoaded(): void {
     loadSettings();
 }
 
+export interface MayhemSettingsLoadDecision {
+    /** Re-read the stored HUD module map (false once this process settled it). */
+    useStoredHudModules: boolean;
+    /** Run the one-time legacy Mayhem-on flip. */
+    migrate: boolean;
+    /** Persist the migrated store in place, synchronously. */
+    write: boolean;
+    /** Emit the one-per-process `settings-migrated` log line. */
+    log: boolean;
+}
+
+/**
+ * What a `loadSettings()` read may do to the Mayhem defaults.
+ *
+ * A store without the migration marker predates the on-by-default switch: its
+ * `mayhem: false` is the old install default, so it is flipped once and
+ * stamped. A stamped store keeps exactly what the user chose. Once this
+ * process has settled the default, a later disk re-read must change neither the
+ * module map nor the marker.
+ */
+export function decideSettingsLoad(
+    wasSettled: boolean,
+    settings: Record<string, unknown> | null | undefined
+): MayhemSettingsLoadDecision {
+    if (wasSettled) {
+        return { useStoredHudModules: false, migrate: false, write: false, log: false };
+    }
+    const stamped = settings?.[MAYHEM_DEFAULTS_MIGRATION_KEY] === true;
+    return {
+        useStoredHudModules: true,
+        migrate: !stamped,
+        write: !stamped,
+        log: true,
+    };
+}
+
 function loadSettings(): void {
     settingsLoaded = true;
     // Prefer live League game.cfg (your actual Interface scales)
@@ -774,6 +813,8 @@ function loadSettings(): void {
     }
 
     let migratedSettings: Record<string, unknown> | null = null;
+    const wasSettled = mayhemDefaultsSettled;
+    let decision: MayhemSettingsLoadDecision = decideSettingsLoad(wasSettled, null);
     try {
         const settings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as {
             hudScale?: unknown;
@@ -790,9 +831,13 @@ function loadSettings(): void {
         // One-time Mayhem defaults migration: older builds shipped Mayhem off, so
         // a stored `false` is the install default, not a choice. Stores without
         // the marker are flipped on and stamped; a stamped store keeps exactly
-        // what the user saved (turning it off sticks).
-        const migration = migrateMayhemDefaults(settings);
-        if (migration.migrated) migratedSettings = migration.settings;
+        // what the user saved (turning it off sticks). Once this process has
+        // settled the default, a disk re-read must not run the flip again.
+        decision = decideSettingsLoad(wasSettled, settings);
+        const migration = decision.migrate
+            ? migrateMayhemDefaults(settings)
+            : { settings, migrated: false };
+        if (decision.write && migration.migrated) migratedSettings = migration.settings;
         // Only override with saved values if user explicitly tuned after import
         // (preferLeagueCfg false). Default: keep League cfg values.
         if (settings.preferLeagueCfg === false) {
@@ -821,7 +866,9 @@ function loadSettings(): void {
             Number.isFinite(settings.interactiveBounds.height)) {
             interactiveBounds = settings.interactiveBounds;
         }
-        hudModules = normalizeHudModules(migration.settings.hudModules);
+        // A settled process owns the live module map: an unmarked store on disk
+        // would otherwise re-apply the legacy default over a fresh choice.
+        if (decision.useStoredHudModules) hudModules = normalizeHudModules(migration.settings.hudModules);
         hudSkin = normalizeHudSkinSettings(settings.hudSkin);
         const savedLayout = migration.settings.hudLayout;
         if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
@@ -833,7 +880,8 @@ function loadSettings(): void {
             backend = readPackagedOverlayBackend() ?? 'electron';
         }
     } catch {
-        // No saved settings yet.
+        // No saved settings yet: nothing to migrate, the defaults ship Mayhem on.
+        decision = decideSettingsLoad(wasSettled, null);
         backend = readPackagedOverlayBackend() ?? 'electron';
     }
     // A fallback this process already made survives every settings reload.
@@ -841,7 +889,19 @@ function loadSettings(): void {
     // Every later save carries the marker, so the legacy flip can never undo a
     // user's deliberate off switch on the next launch.
     mayhemDefaultsMigrated = true;
-    if (migratedSettings) writeMigratedMayhemSettings(migratedSettings);
+    if (decision.log) {
+        mayhemDefaultsSettled = true;
+        // Written synchronously: a fire-and-forget write could interleave with
+        // the debounced saveSettings() below and leave disk unmarked, which the
+        // next createOverlayWindow() would migrate all over again.
+        const write =
+            decision.write && migratedSettings ? writeMigratedMayhemSettings(migratedSettings) : null;
+        overlayLog('settings-migrated', {
+            migrated: Boolean(migratedSettings),
+            persisted: write ? write.persisted : null,
+            ...(write?.error ? { error: write.error } : {}),
+        });
+    }
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -883,13 +943,19 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
 /**
  * Persist the one-time Mayhem migration in place: the parsed store plus only
  * the flipped Mayhem values and the marker, so unrelated keys stay byte-equal.
+ * Synchronous so it cannot race the debounced writeSettingsNow(); reports the
+ * outcome for the settings-migrated log line instead of only console.warn.
  */
-function writeMigratedMayhemSettings(settings: Record<string, unknown>): void {
+function writeMigratedMayhemSettings(settings: Record<string, unknown>): {
+    persisted: boolean;
+    error?: string;
+} {
     try {
-        void fs.promises.writeFile(settingsPath(), JSON.stringify(settings), 'utf8')
-            .catch((error) => console.warn('[overlay] Failed to save settings:', error));
+        fs.writeFileSync(settingsPath(), JSON.stringify(settings), 'utf8');
+        return { persisted: true };
     } catch (error) {
         console.warn('[overlay] Failed to save settings:', error);
+        return { persisted: false, error: String(error) };
     }
 }
 

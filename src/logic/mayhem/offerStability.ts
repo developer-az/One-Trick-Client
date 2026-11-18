@@ -6,9 +6,36 @@ export interface MayhemOfferStabilityState {
   rerollPending: boolean;
 }
 
+/** Normalize one frame's matched ids: drop blanks, de-dupe, keep card order. */
+function freshOfferIds(matched: string[]): string[] {
+  const out: string[] = [];
+  for (const id of matched) {
+    if (id && !out.includes(id)) out.push(id);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
 /**
- * Keep augment picks stable while the player is deciding (including reroll animations).
- * Never shrink the offer list mid-session unless a full new triple is read.
+ * The shop dealt a new roll.
+ *
+ * The Reroll button sits outside the OCR crop, so the word "reroll" is never
+ * part of the read text. The offers themselves are the signal: a reroll
+ * replaces every card, so the fresh ids share nothing with the previous roll.
+ * A partial read of the SAME roll always keeps at least one shared id.
+ */
+export function isNewMayhemOfferRoll(previous: string[], next: string[]): boolean {
+  if (!previous.length || !next.length) return false;
+  return !next.some((id) => previous.includes(id));
+}
+
+/**
+ * Keep augment picks stable while the player is deciding (including reroll
+ * animations).
+ *
+ * A disjoint offer set is a reroll and is accepted even when only one or two
+ * cards were read — the old roll must not survive a reroll. The never-shrink
+ * rule only protects a partial read of the same roll (overlap).
  */
 export function stabilizeMayhemOffers(
   previous: string[],
@@ -17,11 +44,21 @@ export function stabilizeMayhemOffers(
   sessionActive: boolean,
   state: MayhemOfferStabilityState
 ): string[] {
-  const next = matched.filter(Boolean).slice(0, 3);
+  const next = freshOfferIds(matched);
   if (isMayhemRerollOcrText(ocrText)) state.rerollPending = true;
 
   if (!sessionActive) {
     state.rerollPending = false;
+    return next;
+  }
+
+  // New roll: trust it, even a 1-2 card read, and arm the fast poll until the
+  // full triple is on screen (a partial reroll read must not stall the HUD).
+  // `rerollPending` belongs to the roll, not to the HUD: it outlives a
+  // `setMayhemOcrRetainOffers(false)` tick and is cleared here as soon as the
+  // triple is read (or by `resetMayhemOcrCache` at match start).
+  if (isNewMayhemOfferRoll(previous, next)) {
+    state.rerollPending = next.length < 3;
     return next;
   }
 
@@ -30,6 +67,7 @@ export function stabilizeMayhemOffers(
       state.rerollPending = false;
       return next;
     }
+    // Same roll, incomplete animation read: keep the previous triple.
     return previous.length > 0 ? previous : next;
   }
 

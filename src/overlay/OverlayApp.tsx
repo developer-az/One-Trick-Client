@@ -867,28 +867,21 @@ export const OverlayApp: React.FC = () => {
       setLatchedMayhemOffers([]);
       return;
     }
+    // The OCR engine already decides what the current roll is: it retains the
+    // previous triple for a partial read of the same roll and accepts a
+    // disjoint set as a reroll. The renderer only mirrors that decision — it
+    // must not re-pin `prev` here, or a reroll's fresh 1-2 card read would be
+    // overridden with the old roll (and ranked with its stale ids).
     const incoming = state.mayhemOfferIds ?? [];
-    if (incoming.length >= 3) {
-      setLatchedMayhemOffers(incoming.slice(0, 3));
-      return;
-    }
-    if (incoming.length > 0) {
-      setLatchedMayhemOffers((prev) => {
-        if (prev.length >= 3 && incoming.length < 3) return prev;
-        if (incoming.length < prev.length) return prev;
-        return incoming.slice(0, 3);
-      });
-    }
+    if (incoming.length > 0) setLatchedMayhemOffers(incoming.slice(0, 3));
   }, [inMayhem, inAram, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
 
   const displayMayhemOfferIds = useMemo(() => {
     if (!state.mayhemAugmentWindow) return [];
     const incoming = state.mayhemOfferIds ?? [];
-    if (incoming.length >= 3) return incoming.slice(0, 3);
-    if (incoming.length > 0) {
-      if (latchedMayhemOffers.length >= 3 && incoming.length < 3) return latchedMayhemOffers;
-      return incoming.slice(0, 3);
-    }
+    if (incoming.length > 0) return incoming.slice(0, 3);
+    // Only a fully empty frame falls back to the latched roll (panel stays up
+    // during the reroll animation); a shorter fresh read is the engine's answer.
     if (latchedMayhemOffers.length > 0) return latchedMayhemOffers;
     return [];
   }, [state.mayhemOfferIds, state.mayhemAugmentWindow, latchedMayhemOffers]);

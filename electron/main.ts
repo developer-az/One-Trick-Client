@@ -541,6 +541,14 @@ app.whenReady().then(() => {
         loadCatalogCache();
     });
 
+    // Follow the live patch on startup: refresh cached Mayhem augment data when
+    // the patch moved (or the cache is a day old). Offline keeps the bundle.
+    void import('./mayhem-data')
+        .then(({ refreshMayhemBundleIfStale }) => refreshMayhemBundleIfStale())
+        .catch(() => {
+            // no network / no cache: the bundled data still loads on demand
+        });
+
     // IPC Handlers
     // User-initiated connect: allowed to use the slow process probe once.
     ipcMain.handle('lcu-connect', async () => {

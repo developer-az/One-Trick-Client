@@ -1,4 +1,4 @@
-import { HUD_MODULE_IDS, type HudModuleId, type HudModules } from './hudModules';
+import { DEFAULT_HUD_MODULES, HUD_MODULE_IDS, type HudModuleId, type HudModules } from './hudModules';
 
 export type HudAnchor = 'tl' | 'tr' | 'bl' | 'br' | 'center';
 
@@ -182,15 +182,7 @@ export function normalizeHudLayout(value: unknown): HudLayout {
 }
 
 export function layoutToHudModules(layout: HudLayout): HudModules {
-  const next: HudModules = {
-    sums: true,
-    gank: true,
-    vision: true,
-    buy: true,
-    action: true,
-    mayhem: true,
-    frames: false,
-  };
+  const next: HudModules = { ...DEFAULT_HUD_MODULES };
   for (const id of HUD_MODULE_IDS) {
     const el = layout.elements.find((row) => row.id === id);
     if (el) next[id] = el.visible;
