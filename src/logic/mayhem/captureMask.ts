@@ -11,6 +11,8 @@
  * 380×220 CSS px, see src/overlay/hudLayout.ts + OverlayApp's mayhem panel).
  */
 
+import { DEFAULT_OFFER_FRACTIONS, MIN_CAPTURE_PX } from './captureRegion';
+
 export interface PhysicalRect {
   x: number;
   y: number;
@@ -24,7 +26,14 @@ export const MAYHEM_PANEL_HEIGHT_DIP = 220;
 export const MAYHEM_PANEL_RIGHT_FRAC = 0.982;
 export const MAYHEM_PANEL_TOP_FRAC = 0.26;
 
-/** Panel rect in physical screen pixels for a display's DIP bounds. */
+/**
+ * Panel rect in physical screen pixels for a display's DIP bounds.
+ *
+ * The PS1 sets `SetProcessDPIAware()`, so it works in physical pixels while
+ * Electron's `display.bounds` are DIP. The whole rect — origin, rail anchor and
+ * footprint — must be scaled, or at 125% the mask sits up and to the left of
+ * the rail and covers the augment cards.
+ */
 export function mayhemPanelMaskRect(
   displayBounds: { x: number; y: number; width: number; height: number },
   scaleFactor = 1
@@ -32,9 +41,28 @@ export function mayhemPanelMaskRect(
   const scale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
   const width = Math.round(MAYHEM_PANEL_WIDTH_DIP * scale);
   const height = Math.round(MAYHEM_PANEL_HEIGHT_DIP * scale);
-  const right = Math.round(displayBounds.x + displayBounds.width * MAYHEM_PANEL_RIGHT_FRAC);
-  const top = Math.round(displayBounds.y + displayBounds.height * MAYHEM_PANEL_TOP_FRAC);
+  const right =
+    Math.round(displayBounds.x * scale) +
+    Math.round(displayBounds.width * scale * MAYHEM_PANEL_RIGHT_FRAC);
+  const top =
+    Math.round(displayBounds.y * scale) +
+    Math.round(displayBounds.height * scale * MAYHEM_PANEL_TOP_FRAC);
   return { x: right - width, y: top, width, height };
+}
+
+/**
+ * The offer band cut from a full-screen desktopCapturer frame, in physical
+ * pixels. Mirrors the PowerShell script's `Get-OfferGeometry` (truncated
+ * fractions, 64 px floor) so the fallback crop and the window capture read the
+ * same region of the screen.
+ */
+export function mayhemFallbackCropRect(width: number, height: number): PhysicalRect {
+  return {
+    x: Math.trunc(width * DEFAULT_OFFER_FRACTIONS.leftFrac),
+    y: Math.trunc(height * DEFAULT_OFFER_FRACTIONS.topFrac),
+    width: Math.max(MIN_CAPTURE_PX, Math.trunc(width * DEFAULT_OFFER_FRACTIONS.widthFrac)),
+    height: Math.max(MIN_CAPTURE_PX, Math.trunc(height * DEFAULT_OFFER_FRACTIONS.heightFrac)),
+  };
 }
 
 /** `x,y,w,h;x,y,w,h` — the shape mayhem-ocr.ps1 parses. */

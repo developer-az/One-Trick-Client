@@ -19,6 +19,7 @@ import {
     normalizeHudSkinSettings,
     type HudSkinSettings,
 } from '../src/overlay/hudSkins';
+import { migrateMayhemDefaults } from '../src/overlay/hudModules';
 
 export type { HudSkinChoice, HudSkinSettings } from '../src/overlay/hudSkins';
 
@@ -592,7 +593,7 @@ const DEFAULT_HUD_MODULES: HudModules = {
     vision: true,
     buy: true,
     action: true,
-    mayhem: false,
+    mayhem: true,
     frames: false,
 };
 
@@ -602,6 +603,8 @@ let hudLayout: unknown = null;
 /** HUD skin tweaks (Brief I) — persisted with the overlay settings. */
 let hudSkin: HudSkinSettings = { ...DEFAULT_HUD_SKIN_SETTINGS };
 let settingsLoaded = false;
+/** Persisted marker: the one-time Mayhem defaults migration already ran. */
+let mayhemDefaultsMigrated = false;
 
 function normalizeHudModules(value: unknown): HudModules {
     const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -677,11 +680,11 @@ function widgetsFromSettings(): Array<{
         { id: 'vision', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
         { id: 'buy', visible: true, x: 0.982, y: 0.42, scale: 1, anchor: 'tr' },
         { id: 'action', visible: true, x: 0.982, y: 0.54, scale: 1, anchor: 'tr' },
-        { id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
+        { id: 'mayhem', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' },
     ];
     const elements = Array.isArray(raw?.elements) && raw.elements.length ? [...raw.elements] : defaults;
     if (!elements.some((el) => el?.id === 'mayhem')) {
-        elements.push({ id: 'mayhem', visible: false, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' });
+        elements.push({ id: 'mayhem', visible: true, x: 0.982, y: 0.26, scale: 1, anchor: 'tr' });
     }
     const widgets: Array<{
         id: string;
@@ -770,6 +773,7 @@ function loadSettings(): void {
         gameHeight = league.height;
     }
 
+    let migratedSettings: Record<string, unknown> | null = null;
     try {
         const settings = JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as {
             hudScale?: unknown;
@@ -779,9 +783,16 @@ function loadSettings(): void {
             interactiveBounds?: Electron.Rectangle;
             preferLeagueCfg?: unknown;
             hudModules?: unknown;
+            hudLayout?: unknown;
             hudSkin?: unknown;
             overlayBackend?: unknown;
         };
+        // One-time Mayhem defaults migration: older builds shipped Mayhem off, so
+        // a stored `false` is the install default, not a choice. Stores without
+        // the marker are flipped on and stamped; a stamped store keeps exactly
+        // what the user saved (turning it off sticks).
+        const migration = migrateMayhemDefaults(settings);
+        if (migration.migrated) migratedSettings = migration.settings;
         // Only override with saved values if user explicitly tuned after import
         // (preferLeagueCfg false). Default: keep League cfg values.
         if (settings.preferLeagueCfg === false) {
@@ -810,9 +821,9 @@ function loadSettings(): void {
             Number.isFinite(settings.interactiveBounds.height)) {
             interactiveBounds = settings.interactiveBounds;
         }
-        hudModules = normalizeHudModules(settings.hudModules);
+        hudModules = normalizeHudModules(migration.settings.hudModules);
         hudSkin = normalizeHudSkinSettings(settings.hudSkin);
-        const savedLayout = (settings as { hudLayout?: unknown }).hudLayout;
+        const savedLayout = migration.settings.hudLayout;
         if (savedLayout && typeof savedLayout === 'object') hudLayout = savedLayout;
         // Backend: saved setting wins; else the packaged build's default
         // (extraMetadata.overlayBackend — test builds stamp 'native'); else electron.
@@ -827,6 +838,10 @@ function loadSettings(): void {
     }
     // A fallback this process already made survives every settings reload.
     if (nativeFallbackLatched && backend === 'native') backend = 'electron';
+    // Every later save carries the marker, so the legacy flip can never undo a
+    // user's deliberate off switch on the next launch.
+    mayhemDefaultsMigrated = true;
+    if (migratedSettings) writeMigratedMayhemSettings(migratedSettings);
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -856,9 +871,23 @@ function writeSettingsNow(preferLeagueCfg: boolean): void {
                 hudSkin,
                 overlayBackend: backend,
                 preferLeagueCfg,
+                ...(mayhemDefaultsMigrated ? { mayhemDefaultsMigrated: true } : {}),
             }),
             'utf8'
         ).catch((error) => console.warn('[overlay] Failed to save settings:', error));
+    } catch (error) {
+        console.warn('[overlay] Failed to save settings:', error);
+    }
+}
+
+/**
+ * Persist the one-time Mayhem migration in place: the parsed store plus only
+ * the flipped Mayhem values and the marker, so unrelated keys stay byte-equal.
+ */
+function writeMigratedMayhemSettings(settings: Record<string, unknown>): void {
+    try {
+        void fs.promises.writeFile(settingsPath(), JSON.stringify(settings), 'utf8')
+            .catch((error) => console.warn('[overlay] Failed to save settings:', error));
     } catch (error) {
         console.warn('[overlay] Failed to save settings:', error);
     }

@@ -14,6 +14,18 @@ export interface LeagueStatus {
   stage: 'preview' | 'offline' | 'connecting' | 'idle' | 'queue' | 'draft' | 'loading' | 'game' | 'post';
 }
 
+/** Riot ID for display: `Name#TAG` when the tag is known, else the plain name. */
+export function formatRiotId(
+  gameName: string | null | undefined,
+  tagLine: string | null | undefined,
+  fallbackName?: string | null
+): string | null {
+  const name = gameName?.trim() || fallbackName?.trim() || null;
+  if (!name) return null;
+  const tag = tagLine?.trim();
+  return tag ? `${name}#${tag}` : name;
+}
+
 const QUEUE_PHASES = new Set(['Matchmaking', 'ReadyCheck']);
 const GAME_PHASES = new Set(['InProgress', 'Reconnect']);
 const POST_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
@@ -113,7 +125,8 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
     };
   }
 
-  const who = lcu.summonerName ? ` as ${lcu.summonerName}` : '';
+  const riotId = formatRiotId(lcu.gameName, lcu.tagLine, lcu.summonerName);
+  const who = riotId ? ` as ${riotId}` : '';
   return {
     stage: 'idle',
     tone: 'live',

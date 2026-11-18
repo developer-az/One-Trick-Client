@@ -46,6 +46,6 @@ const yoneMid = resolveProfileId({
 ok(yoneMid === 'yone-mid', `ranked Yone mid profile (${yoneMid})`);
 
 ok(!isMayhemAugmentHudVisible([], false), 'no augment HUD while playing SR');
-ok(DEFAULT_HUD_MODULES.mayhem === false, 'Mayhem overlay module off by default (opt-in beta)');
+ok(DEFAULT_HUD_MODULES.mayhem === true, 'Mayhem overlay module on by default (first-run visible)');
 
 if (!process.exitCode) console.log('verify:ranked ok');

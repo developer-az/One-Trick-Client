@@ -33,6 +33,10 @@ declare global {
         state: 'searching' | 'connecting' | 'connected';
         phase: string | null;
         summonerName: string | null;
+        /** Riot ID name/tag/puuid — structural twin of electron/lcu-socket.ts LcuSummary. */
+        gameName?: string | null;
+        tagLine?: string | null;
+        puuid?: string | null;
         connectedAt: number | null;
     }
 

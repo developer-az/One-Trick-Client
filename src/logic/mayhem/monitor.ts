@@ -6,8 +6,9 @@
  *
  *   1. the normal Mayhem scan schedule for `mayhem` AND `mayhem-likely` (the
  *      queue id is not verified live yet, so a Mayhem game can report a
- *      null/unknown queue on Howling Abyss); bounded discovery survives only
- *      as a fallback for an ARAM signal that is not Howling Abyss;
+ *      null/unknown queue on Howling Abyss); bounded discovery remains for any
+ *      other ARAM-family signal, including real Mayhem that reports a classic
+ *      ARAM queue id;
  *   2. frame-accurate pick counting (only ids matched on the current frame may
  *      move the counter, never the retained display roll);
  *   3. invalid reads (failed capture, no game window, OCR exception) neither
@@ -21,6 +22,7 @@ import {
   ARAM_QUEUE_IDS,
   MAYHEM_QUEUE_IDS,
   detectMayhemMode,
+  isAramMap,
   isMayhemMode,
   type MayhemMode,
   type MayhemModeSignals,
@@ -56,6 +58,7 @@ export interface MayhemMonitorRead {
   valid: boolean;
   fuzzyScore: number;
   blackFrame: boolean;
+  /** Recorded for logs: the game window owned the foreground. Not a trust gate. */
   foreground: boolean;
   /** Capture used the primary-screen fallback (no game window matched). */
   fallback?: boolean;
@@ -115,6 +118,39 @@ export function isUnknownQueueAram(signals: MayhemModeSignals): boolean {
   return !MAYHEM_QUEUE_IDS.includes(queue) && !ARAM_QUEUE_IDS.includes(queue);
 }
 
+/**
+ * An ARAM-family match the bounded discovery path may observe: Howling Abyss
+ * or an ARAM `gameMode`, whatever the queue id says.
+ *
+ * Real Mayhem can report classic ARAM queues (450/100) even though it has
+ * augments, so the queue id cannot veto capture. Discovery still only runs
+ * around its bounded triggers and never changes the mode classification by
+ * itself.
+ */
+export function isMayhemDiscoverySignals(signals: MayhemModeSignals): boolean {
+  const mode = (signals.gameMode || '').toUpperCase();
+  return mode.includes('ARAM') || isAramMap(signals.mapName, signals.mapId);
+}
+
+/**
+ * A frame the monitor may use at all: a fresh, valid, non-black read. Focus is
+ * deliberately ignored — our overlay can own the foreground while the game is
+ * still what was captured. A primary-screen fallback is usable for display
+ * (the offers may be real) but is not target-trustworthy for counting.
+ */
+export function isUsableMayhemFrame(read: MayhemMonitorRead): boolean {
+  return read.fresh && read.valid && !read.blackFrame;
+}
+
+/**
+ * A frame that may move the pick counter: a usable read of the game window
+ * itself. A fallback primary-screen capture cannot prove the offers were on
+ * top, so it never counts. `foreground` stays on the read for logs only.
+ */
+export function isTrustedMayhemFrame(read: MayhemMonitorRead): boolean {
+  return isUsableMayhemFrame(read) && read.fallback !== true;
+}
+
 /** Discovery is live for 90 s after its burst was opened. */
 export function mayhemDiscoveryLive(discovery: MayhemDiscoveryState, now: number): boolean {
   if (discovery.burstStartedAt == null) return false;
@@ -124,15 +160,23 @@ export function mayhemDiscoveryLive(discovery: MayhemDiscoveryState, now: number
 /**
  * Open a discovery burst around a plausible augment window: reaching level
  * 3/7/11/15, or a rising death edge (augments are usually chosen dead or at
- * spawn). Unknown-queue ARAM only; classic ARAM (450) never gets a burst.
+ * spawn).
+ *
+ * By default only an unknown-queue ARAM is eligible. Callers that know real
+ * Mayhem can report a classic queue id pass `anyAramQueue` so an ARAM-family
+ * match is observed regardless of the reported queue.
  * Returns true while a burst is active after this call.
  */
 export function noteMayhemDiscoveryTrigger(
   state: MayhemMonitorState,
-  input: { now: number; level: number; isDead: boolean; signals: MayhemModeSignals }
+  input: { now: number; level: number; isDead: boolean; signals: MayhemModeSignals },
+  options: { anyAramQueue?: boolean } = {}
 ): boolean {
   const discovery = state.discovery;
-  if (!discovery.latched && isUnknownQueueAram(input.signals)) {
+  const eligible = options.anyAramQueue
+    ? isMayhemDiscoverySignals(input.signals)
+    : isUnknownQueueAram(input.signals);
+  if (!discovery.latched && eligible) {
     const levelHit = MAYHEM_DISCOVERY_LEVELS.find(
       (level) => input.level >= level && level > discovery.levelBurst
     );
@@ -154,8 +198,8 @@ export function noteMayhemManualScan(
   signals: MayhemModeSignals,
   read: MayhemMonitorRead
 ): boolean {
-  const trusted = read.fresh && read.valid && read.foreground && !read.blackFrame;
-  if (!isUnknownQueueAram(signals) || !trusted || read.frameIds.length < MAYHEM_DISCOVERY_MIN_OFFERS) {
+  const usable = isUsableMayhemFrame(read);
+  if (!isUnknownQueueAram(signals) || !usable || read.frameIds.length < MAYHEM_DISCOVERY_MIN_OFFERS) {
     return false;
   }
   state.discovery.latched = true;
@@ -187,8 +231,9 @@ export function mayhemDiscoveryDue(state: MayhemMonitorState, now: number): bool
  * Is a scan (normal Mayhem or bounded discovery) wanted right now?
  *
  * `mayhem-likely` (unknown-queue Howling Abyss) is a Mayhem mode: it runs the
- * normal schedule exactly like `mayhem`. Bounded discovery only remains as the
- * fallback for an unknown-queue ARAM signal that is not Howling Abyss.
+ * normal schedule exactly like `mayhem`. Bounded discovery remains as the
+ * fallback for any other ARAM-family signal (including a real Mayhem that
+ * reports a classic queue id), and only while its burst is live.
  */
 export function mayhemMonitorWantsScan(
   state: MayhemMonitorState,
@@ -196,7 +241,7 @@ export function mayhemMonitorWantsScan(
   now: number
 ): 'mayhem' | 'discovery' | 'none' {
   if (isMayhemMode(mayhemMonitorMode(state, signals))) return 'mayhem';
-  if (!isUnknownQueueAram(signals)) return 'none';
+  if (!isMayhemDiscoverySignals(signals)) return 'none';
   if (!mayhemDiscoveryLive(state.discovery, now)) return 'none';
   return 'discovery';
 }
@@ -282,19 +327,21 @@ export async function runMayhemMonitorScan(
   const read = await runOcr(MAYHEM_DISCOVERY_MIN_OFFERS);
   const before = next.counter.picksTaken;
   // A failed capture / missing game window / OCR exception is not a frame at
-  // all: it must not advance or reset either streak.
-  const trusted = read.fresh && read.valid && read.foreground && !read.blackFrame;
+  // all: it must not advance or reset either streak. Focus is not part of the
+  // decision: the overlay may own the foreground while the game is captured.
+  const usable = isUsableMayhemFrame(read);
+  // Only a real game-window frame may count: the primary-screen fallback can
+  // show offers but cannot prove the game was on top.
+  const targetCapture = isTrustedMayhemFrame(read);
   const offers = read.frameIds.length;
   if (read.fresh) {
     next.fuzzyScore = read.fuzzyScore;
-    if (trusted) {
+    if (usable) {
       next.scanStreak = offers > 0 ? next.scanStreak + 1 : 0;
       next.counter = observeMayhemPickScan(next.counter, {
         offerCount: offers,
         isDead: input.isDead,
-        // A fallback frame may show offers but cannot prove the game is on top,
-        // so it never counts picks.
-        foreground: read.foreground && read.fallback !== true,
+        foreground: targetCapture,
         blackFrame: read.blackFrame,
         liveAugmentIds: input.liveAugmentIds,
       });
@@ -312,7 +359,7 @@ export async function runMayhemMonitorScan(
         next.displayIds = read.ids;
       }
     }
-    if (discovery && trusted && offers >= MAYHEM_DISCOVERY_MIN_OFFERS) {
+    if (discovery && usable && offers >= MAYHEM_DISCOVERY_MIN_OFFERS) {
       next.discovery.latched = true;
       next.discovery.burstStartedAt = null;
     }
@@ -324,7 +371,7 @@ export async function runMayhemMonitorScan(
     consecutiveScans: next.scanStreak,
     fuzzyScore: next.fuzzyScore,
   });
-  const hudAction: MayhemHudAction = visible ? 'show' : trusted && offers === 0 ? 'purge' : 'keep';
+  const hudAction: MayhemHudAction = visible ? 'show' : usable && offers === 0 ? 'purge' : 'keep';
 
   // Classification is the monitor's own (latch first, then the frame's offers):
   // `mayhem-likely` stays honest for the unknown queue while still getting the

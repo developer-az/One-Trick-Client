@@ -170,12 +170,52 @@ async function reconnectLCU(): Promise<void> {
     await makeLCURequest('GET', '/lol-summoner/v1/current-summoner', undefined, 4000);
 }
 
-interface CurrentSummoner {
+export interface CurrentSummoner {
     summonerId?: number;
     accountId?: number;
     displayName?: string;
+    /** Riot ID name half ("Name" in Name#TAG); displayName kept as the legacy fallback. */
+    gameName?: string | null;
+    /** Riot ID tag half ("TAG" in Name#TAG). */
+    tagLine?: string | null;
+    /** Stable account identity — the key for detecting an account switch. */
+    puuid?: string | null;
     /** false while the client is still on the login / patcher screen */
     summonerLevel?: number;
+}
+
+function textField(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * GET /lol-summoner/v1/current-summoner answers with an empty object while the
+ * client is booting or on the login screen, and 404 resolves to null. Map the
+ * payload into a partial instead of trusting its shape, so callers never throw
+ * on a half-built summoner. Empty/absent payloads map to null.
+ */
+export function mapCurrentSummoner(raw: unknown): CurrentSummoner | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const data = raw as Record<string, unknown>;
+    const summoner: CurrentSummoner = {};
+
+    const summonerId = Number(data.summonerId);
+    if (Number.isFinite(summonerId) && summonerId > 0) summoner.summonerId = summonerId;
+    const accountId = Number(data.accountId);
+    if (Number.isFinite(accountId) && accountId > 0) summoner.accountId = accountId;
+    const summonerLevel = Number(data.summonerLevel);
+    if (Number.isFinite(summonerLevel)) summoner.summonerLevel = summonerLevel;
+
+    const displayName = textField(data.displayName);
+    if (displayName) summoner.displayName = displayName;
+    const gameName = textField(data.gameName);
+    if (gameName) summoner.gameName = gameName;
+    const tagLine = textField(data.tagLine);
+    if (tagLine) summoner.tagLine = tagLine;
+    const puuid = textField(data.puuid);
+    if (puuid) summoner.puuid = puuid;
+
+    return Object.keys(summoner).length > 0 ? summoner : null;
 }
 
 /**
@@ -187,12 +227,12 @@ async function resolveCurrentSummoner(): Promise<CurrentSummoner> {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
-            const summoner = (await makeLCURequest(
+            const summoner = mapCurrentSummoner(await makeLCURequest(
                 'GET',
                 '/lol-summoner/v1/current-summoner',
                 undefined,
                 5000
-            )) as CurrentSummoner | null;
+            ));
             if (summoner?.summonerId) return summoner;
             lastError = new Error('League client has no active summoner yet');
         } catch (error) {

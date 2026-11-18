@@ -3,7 +3,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { formatMaskRects, mayhemPanelMaskRect } from '../src/logic/mayhem/captureMask';
+import { formatMaskRects, mayhemFallbackCropRect, mayhemPanelMaskRect } from '../src/logic/mayhem/captureMask';
 import {
   bestAugmentMatchConfidence,
   countOcrContentLines,
@@ -207,13 +207,15 @@ async function captureCenterRegionPng(): Promise<Buffer | null> {
       sources[0];
     const img = source?.thumbnail;
     if (!img || img.isEmpty()) return null;
-    const crop = {
-      x: Math.floor(width * 0.1),
-      y: Math.floor(height * 0.2),
-      width: Math.floor(width * 0.8),
-      height: Math.floor(height * 0.55),
-    };
-    const cropped = img.crop(crop);
+    // Same offer band as the PowerShell capture (0.08/0.18/0.84x0.62): a
+    // wider fallback crop could read UI outside the cards the OCR expects.
+    const crop = mayhemFallbackCropRect(width, height);
+    const cropped = img.crop({
+      x: crop.x,
+      y: crop.y,
+      width: crop.width,
+      height: crop.height,
+    });
     lastCaptureMethod = 'desktop';
     return cropped.toPNG();
   } catch (error) {
@@ -254,8 +256,9 @@ async function readScreenText(): Promise<MayhemOcrOutput> {
 
 /**
  * Read augment card titles from the game window (Windows OCR).
- * Returns enough metadata for the pick counter to know whether it may trust
- * this frame (fresh read, foreground, non-black).
+ * Returns enough metadata for the monitor to know whether it may trust this
+ * frame (fresh read, a real game window, non-black). `foreground` is recorded
+ * for logs only: the overlay can steal focus while the game is still captured.
  */
 export async function detectMayhemOffers(
   augments: MayhemAugment[],
@@ -288,9 +291,10 @@ export async function detectMayhemOffers(
       blackFrameSeen = true;
       overlayLog('ocr-black-frame', { reason: 'exclusive-fullscreen-or-hidden-window' });
     }
-    // A foreground read is only trusted when the game window itself was
-    // captured. A fallback (no game window matched) captured the primary screen
-    // and cropped its offer band: usable, but it cannot prove what was on top.
+    // Keep the focus state for logs. It no longer gates trust: our overlay can
+    // own the foreground while the game window is still what was captured.
+    // A fallback (no game window matched) captured the primary screen: its
+    // offers may display, but it never counts a pick.
     // Assume foreground for manual scans; the counter refuses to count picks
     // from a fallback frame (see runMayhemMonitorScan).
     const foreground = parsed.fallback

@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import {
     makeLCURequest,
+    mapCurrentSummoner,
     readLockfileCredentials,
     setLcuCredentials,
     type LcuCredentials,
@@ -48,8 +49,27 @@ export interface LcuSummary {
     state: LcuConnectionState;
     phase: string | null;
     summonerName: string | null;
+    /** Riot ID parts, mirrored into src/types.d.ts LcuStatus (structural twin — no shared type). */
+    gameName?: string | null;
+    tagLine?: string | null;
+    puuid?: string | null;
     connectedAt: number | null;
 }
+
+/** Last-known local player identity, folded from /current-summoner payloads. */
+interface LcuIdentity {
+    summonerName: string | null;
+    gameName: string | null;
+    tagLine: string | null;
+    puuid: string | null;
+}
+
+const EMPTY_IDENTITY: LcuIdentity = {
+    summonerName: null,
+    gameName: null,
+    tagLine: null,
+    puuid: null,
+};
 
 interface LcuEvents {
     state: [LcuConnectionState];
@@ -58,7 +78,7 @@ interface LcuEvents {
     summoner: [unknown | null];
 }
 
-class LcuSocket extends EventEmitter {
+export class LcuSocket extends EventEmitter {
     private ws: WebSocket | null = null;
     private creds: LcuCredentials | null = null;
     private discoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -66,7 +86,7 @@ class LcuSocket extends EventEmitter {
     private stateValue: LcuConnectionState = 'searching';
     private phaseValue: string | null = null;
     private champSelectValue: unknown | null = null;
-    private summonerName: string | null = null;
+    private identity: LcuIdentity = { ...EMPTY_IDENTITY };
     private connectedAt: number | null = null;
     private lockfileMisses = 0;
     /** Date.now() when a non-null phase was last seen; drives the idle probe rate. */
@@ -96,9 +116,33 @@ class LcuSocket extends EventEmitter {
         return {
             state: this.stateValue,
             phase: this.phaseValue,
-            summonerName: this.summonerName,
+            summonerName: this.identity.summonerName,
+            gameName: this.identity.gameName,
+            tagLine: this.identity.tagLine,
+            puuid: this.identity.puuid,
             connectedAt: this.connectedAt,
         };
+    }
+
+    /**
+     * Fold a summoner payload (REST hydrate or WAMP event) into the identity.
+     * The client sends an empty object/Delete while it sits on the login screen,
+     * so that keeps the last-known account instead of blanking the profile.
+     * puuid is the account key: a different one replaces every field.
+     */
+    applySummoner(data: unknown): void {
+        const next = mapCurrentSummoner(data);
+        if (next && (next.puuid || next.gameName || next.displayName || next.tagLine)) {
+            const switched = Boolean(next.puuid && this.identity.puuid && next.puuid !== this.identity.puuid);
+            const base = switched ? EMPTY_IDENTITY : this.identity;
+            this.identity = {
+                summonerName: next.gameName || next.displayName || base.summonerName,
+                gameName: next.gameName ?? base.gameName,
+                tagLine: next.tagLine ?? base.tagLine,
+                puuid: next.puuid ?? base.puuid,
+            };
+        }
+        this.emit('summoner', data);
     }
 
     start(): void {
@@ -203,7 +247,8 @@ class LcuSocket extends EventEmitter {
             if (this.ws !== ws) return;
             this.ws = null;
             this.connectedAt = null;
-            this.summonerName = null;
+            // The identity is kept: a reconnect on the login screen still shows
+            // the last account, and a different puuid replaces it on login.
             setLcuCredentials(null);
             // A dropped socket is not a phase change. While a match is running the
             // client sends nothing, so this socket goes idle and dies mid-game.
@@ -262,12 +307,8 @@ class LcuSocket extends EventEmitter {
             }
         }
         try {
-            const summoner = (await makeLCURequest('GET', '/lol-summoner/v1/current-summoner')) as {
-                gameName?: string;
-                displayName?: string;
-            } | null;
-            this.summonerName = summoner?.gameName || summoner?.displayName || null;
-            this.emit('summoner', summoner);
+            const summoner = await makeLCURequest('GET', '/lol-summoner/v1/current-summoner');
+            this.applySummoner(summoner);
         } catch {
             // Login screen.
         }
@@ -296,12 +337,9 @@ class LcuSocket extends EventEmitter {
             case EVENTS.champSelect:
                 this.setChampSelect(deleted ? null : payload?.data ?? null);
                 break;
-            case EVENTS.summoner: {
-                const data = (deleted ? null : payload?.data) as { gameName?: string; displayName?: string } | null;
-                this.summonerName = data?.gameName || data?.displayName || null;
-                this.emit('summoner', data);
+            case EVENTS.summoner:
+                this.applySummoner(deleted ? null : payload?.data);
                 break;
-            }
             default:
                 break;
         }

@@ -101,7 +101,7 @@ import {
 } from '../src/logic/mayhem/pickCount';
 import {
     createMayhemMonitorState,
-    isUnknownQueueAram,
+    isMayhemDiscoverySignals,
     mayhemDiscoveryLive,
     noteMayhemDiscoveryTrigger,
     noteMayhemManualScan,
@@ -1379,7 +1379,7 @@ function scheduleMayhemPoll(delayMs: number): void {
 function nextMayhemPollDelayMs(): number {
     if (!lastGoodPayload) return 15_000;
     if (!isMayhemMode(currentMayhemMode())) {
-        // Discovery is deliberately slow: one foreground scan per 10 s.
+        // Discovery is deliberately slow: one bounded scan per 10 s.
         return mayhemDiscoveryLive(mayhemMonitorState.discovery, Date.now()) ? 10_000 : 15_000;
     }
     syncMayhemPickPhaseFromPayload();
@@ -1478,11 +1478,12 @@ async function tickMayhemOcr(): Promise<void> {
     const mode = currentMayhemMode();
     const active = isMayhemMode(mode);
     const now = Date.now();
-    // Unknown-queue ARAM: scan at a slow, bounded cadence so offer cards can
-    // classify the match. Classic ARAM (450) and other maps never qualify.
+    // Any ARAM-family match (Howling Abyss / ARAM gameMode) may run the
+    // bounded discovery path: real Mayhem can report a classic queue id, so
+    // the queue must not veto capture. Classic ARAM simply never reads offers.
     const discovery =
         !active &&
-        isUnknownQueueAram(signals) &&
+        isMayhemDiscoverySignals(signals) &&
         mayhemDiscoveryLive(mayhemMonitorState.discovery, now);
     if (!active && !discovery) return;
 
@@ -2017,16 +2018,17 @@ function syncMayhemPollForMode(signals: {
         if (!mayhemPollTimer) startMayhemPoll();
         return;
     }
-    if (isUnknownQueueAram(signals)) {
-        // Unknown queue on Howling Abyss: open/continue a bounded discovery
-        // burst around the augment windows (level 3/7/11/15 or a death).
-        // Classic ARAM (queue 450) never reaches this branch.
+    if (isMayhemDiscoverySignals(signals)) {
+        // ARAM-family match that is not classed as Mayhem: open/continue a
+        // bounded discovery burst around the augment windows (level 3/7/11/15
+        // or a death). The queue id does not veto this: real Mayhem can report
+        // 450, and classic ARAM just never reads offers.
         const burst = noteMayhemDiscoveryTrigger(mayhemMonitorState, {
             now: Date.now(),
             level: signals.level ?? 1,
             isDead: signals.isDead === true,
             signals,
-        });
+        }, { anyAramQueue: true });
         if (burst) {
             if (!mayhemPollTimer) startMayhemPoll();
             return;
