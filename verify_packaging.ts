@@ -215,7 +215,8 @@ async function main(): Promise<void> {
     };
 
     assert(pkg.name === 'one-trick', `package name ${pkg.name}`);
-    assert(pkg.version === '1.7.0', `package version ${pkg.version}`);
+    // guard the shape, not one release; package.json is the source of truth
+    assert(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version), `package version ${pkg.version}`);
     assert(pkg.build.productName === 'One Trick', `productName ${pkg.build.productName}`);
     assert(pkg.build.appId === 'com.onetrick.app', `appId ${pkg.build.appId}`);
     assert(pkg.build.win.executableName === 'OneTrick', `executableName ${pkg.build.win.executableName}`);
