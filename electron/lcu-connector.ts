@@ -170,10 +170,14 @@ async function reconnectLCU(): Promise<void> {
     await makeLCURequest('GET', '/lol-summoner/v1/current-summoner', undefined, 4000);
 }
 
-interface CurrentSummoner {
+export interface CurrentSummoner {
     summonerId?: number;
     accountId?: number;
     displayName?: string;
+    /** Riot ID halves; both are missing while the client sits on the login screen. */
+    gameName?: string;
+    tagLine?: string;
+    puuid?: string;
     /** false while the client is still on the login / patcher screen */
     summonerLevel?: number;
 }
@@ -209,6 +213,64 @@ async function resolveCurrentSummoner(): Promise<CurrentSummoner> {
     throw new Error(
         `Could not read your summoner from the League client${detail} — finish logging in, then retry.`
     );
+}
+
+/**
+ * Read the signed-in summoner without retries. The client answers with `{}`
+ * (or 404) while it is still booting or on the login screen — that is a normal
+ * state, not an error, so callers get an empty object instead of an exception.
+ */
+export async function readCurrentSummoner(): Promise<CurrentSummoner> {
+    try {
+        const summoner = (await makeLCURequest(
+            'GET',
+            '/lol-summoner/v1/current-summoner',
+            undefined,
+            4000
+        )) as CurrentSummoner | null;
+        return summoner && typeof summoner === 'object' ? summoner : {};
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * Platform id (EUW1) for the signed-in account. /lol-platform-config holds the
+ * canonical value; region-locale and the login session are fallbacks for client
+ * versions where that namespace is unavailable. Never throws: null just means
+ * match history has no region to route with yet.
+ */
+const PLATFORM_ID_ENDPOINTS = [
+    '/lol-platform-config/v1/namespaces/LoginDataPacket/platformId',
+    '/riotclient/region-locale',
+    '/lol-login/v1/session',
+];
+
+export function extractPlatformId(raw: unknown): string | null {
+    if (typeof raw === 'string') {
+        const value = raw.trim();
+        return value ? value : null;
+    }
+    if (raw && typeof raw === 'object') {
+        const src = raw as Record<string, unknown>;
+        for (const key of ['platformId', 'platform_id', 'region']) {
+            const value = src[key];
+            if (typeof value === 'string' && value.trim()) return value.trim();
+        }
+    }
+    return null;
+}
+
+export async function readPlatformId(): Promise<string | null> {
+    for (const endpoint of PLATFORM_ID_ENDPOINTS) {
+        try {
+            const platformId = extractPlatformId(await makeLCURequest('GET', endpoint, undefined, 4000));
+            if (platformId) return platformId;
+        } catch {
+            // Try the next source; a missing namespace is expected on some builds.
+        }
+    }
+    return null;
 }
 
 interface LCURunePage {

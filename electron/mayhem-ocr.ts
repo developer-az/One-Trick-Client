@@ -147,17 +147,23 @@ async function readScreenText(): Promise<string> {
 
 /**
  * Read augment card titles from the center of the screen (Windows OCR).
+ *
+ * Returns `null` when no new read happened (not Windows, throttled, a read is
+ * already in flight, the capture failed, or the capture came back empty): the
+ * caller must leave the current roll alone. A completed read always returns an
+ * array — `[]` means the screen really shows no augment cards — so only that
+ * clears the roll.
  */
 export async function detectMayhemOfferIds(
   augments: MayhemAugment[],
   minIntervalMs = 2800,
   opts: { minMatches?: number } = {}
-): Promise<string[]> {
+): Promise<string[] | null> {
   const minMatches = opts.minMatches ?? 1;
-  if (process.platform !== 'win32') return lastOfferIds;
+  if (process.platform !== 'win32') return null;
   const now = Date.now();
-  if (now - lastOcrAt < minIntervalMs) return lastOfferIds;
-  if (ocrInFlight) return lastOfferIds;
+  if (now - lastOcrAt < minIntervalMs) return null;
+  if (ocrInFlight) return null;
   ocrInFlight = true;
   lastOcrAt = now;
   try {
@@ -165,13 +171,13 @@ export async function detectMayhemOfferIds(
     lastOcrSnippet = text.slice(0, 400);
     if (!text.trim()) {
       lastCaptureMethod = 'none';
-      return lastOfferIds;
+      return null;
     }
     const matched = matchAugmentsFromOcr(text, augments);
     return applyMatchedOffers(text, matched, minMatches);
   } catch (error) {
     console.warn('[mayhem-ocr]', error);
-    return lastOfferIds;
+    return null;
   } finally {
     ocrInFlight = false;
   }
@@ -183,7 +189,10 @@ const offerStability: MayhemOfferStabilityState = { rerollPending: false };
 
 export function setMayhemOcrRetainOffers(retain: boolean): void {
   retainOffersOnEmptyMatch = retain;
-  if (!retain) offerStability.rerollPending = false;
+  if (!retain) {
+    offerStability.rerollPending = false;
+    offerStability.missCount = 0;
+  }
 }
 
 export function isMayhemOcrRerollPending(): boolean {
@@ -196,6 +205,12 @@ export function resetMayhemOcrCache(): void {
   lastOcrSnippet = '';
   lastCaptureMethod = 'none';
   offerStability.rerollPending = false;
+  offerStability.missCount = 0;
+}
+
+/** Test-only accessor for the retention counters (checks seed a miss, then reset). */
+export function mayhemOcrStabilityForTest(): MayhemOfferStabilityState {
+  return offerStability;
 }
 
 function applyMatchedOffers(text: string, matched: string[], minMatches: number): string[] {

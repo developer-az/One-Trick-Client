@@ -21,6 +21,15 @@ declare global {
         phase: string | null;
         summonerName: string | null;
         connectedAt: number | null;
+        /** Riot ID halves once the client is logged in; null on the login screen with no stored record. */
+        gameName?: string | null;
+        tagLine?: string | null;
+        puuid?: string | null;
+        platformId?: string | null;
+        /** Routing region derived from platformId (e.g. euw). */
+        region?: string | null;
+        /** `gameName#tagLine`, falling back to summonerName, or null. */
+        riotId?: string | null;
     }
 
     interface AppSettings {

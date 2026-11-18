@@ -1,14 +1,15 @@
 export function isAramMap(mapName?: string | null): boolean {
-  const map = (mapName || '').toLowerCase();
-  return map.includes('howling');
+  const map = (mapName || '').trim().toLowerCase();
+  // Live Client reports Map12 for Howling Abyss and Map11 for Summoner's Rift.
+  return map === 'map12' || map.includes('howling');
 }
 
-/** ARAM: Mayhem — Live Client often reports generic ARAM on Howling Abyss. */
+/** ARAM: Mayhem — Mayhem is signalled by the KIWI/MAYHEM game mode only. */
 export function isMayhemGame(gameMode: string | null | undefined, mapName?: string | null): boolean {
+  // mapName kept for call-site compatibility; Mayhem is mode-only.
+  void mapName;
   const mode = (gameMode || '').toUpperCase();
-  if (mode.includes('KIWI') || mode.includes('MAYHEM')) return true;
-  if (isAramMap(mapName) && mode.includes('ARAM')) return true;
-  return false;
+  return mode.includes('KIWI') || mode.includes('MAYHEM');
 }
 
 /** Howling Abyss — classic ARAM and Mayhem. */

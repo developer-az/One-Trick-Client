@@ -15,6 +15,8 @@ export const DEFAULT_HUD_MODULES: HudModules = {
   vision: true,
   buy: true,
   action: true,
+  // Opt-in beta (product decision, surface it — do not flip): stays false, and
+  // the live gate is shouldShowMayhemPanel in overlayLogic.ts.
   mayhem: false,
   frames: false,
 };

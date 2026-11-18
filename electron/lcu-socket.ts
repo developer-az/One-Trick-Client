@@ -15,10 +15,21 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import {
     makeLCURequest,
+    readCurrentSummoner,
     readLockfileCredentials,
+    readPlatformId,
     setLcuCredentials,
     type LcuCredentials,
 } from './lcu-connector';
+import {
+    activeIdentity,
+    identityFromSummoner,
+    loadIdentityStore,
+    saveIdentityStore,
+    statusFor,
+    upsertIdentity,
+    type RiotIdentityStore,
+} from './riot-identity';
 import { isInGamePhase } from './match-lifecycle';
 
 /** WAMP opcodes used by the LCU. */
@@ -43,6 +54,18 @@ export interface LcuSummary {
     phase: string | null;
     summonerName: string | null;
     connectedAt: number | null;
+    /**
+     * Resolved Riot identity. Optional and duplicated from `LcuStatus` in
+     * src/types.d.ts on purpose: the electron project cannot see that file.
+     */
+    gameName?: string | null;
+    tagLine?: string | null;
+    puuid?: string | null;
+    platformId?: string | null;
+    /** Routing region derived from platformId (e.g. euw), for match history. */
+    region?: string | null;
+    /** `gameName#tagLine`, falling back to summonerName, or null. */
+    riotId?: string | null;
 }
 
 interface LcuEvents {
@@ -63,6 +86,12 @@ class LcuSocket extends EventEmitter {
     private summonerName: string | null = null;
     private connectedAt: number | null = null;
     private lockfileMisses = 0;
+    /** Persisted across restarts: rename keeps the record, switch upserts. */
+    private identityStore: RiotIdentityStore = loadIdentityStore();
+    private liveGameName: string | null = null;
+    private liveTagLine: string | null = null;
+    private livePuuid: string | null = null;
+    private livePlatformId: string | null = null;
 
     override emit<K extends keyof LcuEvents>(event: K, ...args: LcuEvents[K]): boolean {
         return super.emit(event, ...args);
@@ -85,12 +114,63 @@ class LcuSocket extends EventEmitter {
     }
 
     summary(): LcuSummary {
+        const stored = activeIdentity(this.identityStore);
+        const identity = statusFor(
+            {
+                summonerName: this.summonerName,
+                gameName: this.liveGameName,
+                tagLine: this.liveTagLine,
+                puuid: this.livePuuid,
+                platformId: this.livePlatformId,
+            },
+            stored
+        );
         return {
             state: this.stateValue,
             phase: this.phaseValue,
             summonerName: this.summonerName,
             connectedAt: this.connectedAt,
+            gameName: identity.gameName,
+            tagLine: identity.tagLine,
+            puuid: identity.puuid,
+            platformId: identity.platformId,
+            region: identity.region,
+            riotId: identity.label,
         };
+    }
+
+    /**
+     * Fold a summoner payload into the identity store. The puuid is the key:
+     * a rename rewrites the same record, a different account adds a record and
+     * moves the active pointer. Nothing here keys off the client pid, so a
+     * client restart alone never resets the identity.
+     */
+    private applySummoner(summoner: unknown, platformId?: string | null): void {
+        const src = summoner && typeof summoner === 'object'
+            ? (summoner as { gameName?: unknown; displayName?: unknown })
+            : {};
+        const gameName =
+            typeof src.gameName === 'string' && src.gameName
+                ? src.gameName
+                : typeof src.displayName === 'string' && src.displayName
+                    ? src.displayName
+                    : null;
+        this.summonerName = gameName;
+
+        const identity = identityFromSummoner(summoner, platformId ?? this.livePlatformId);
+        if (!identity) return;
+
+        this.liveGameName = identity.gameName;
+        this.liveTagLine = identity.tagLine;
+        this.livePuuid = identity.puuid;
+        if (identity.platformId) this.livePlatformId = identity.platformId;
+
+        this.identityStore = upsertIdentity(this.identityStore, identity);
+        try {
+            saveIdentityStore(this.identityStore);
+        } catch (error) {
+            console.warn('[lcu] could not save Riot identity:', error);
+        }
     }
 
     start(): void {
@@ -188,6 +268,12 @@ class LcuSocket extends EventEmitter {
             this.ws = null;
             this.connectedAt = null;
             this.summonerName = null;
+            // Keep the persisted identity: a dropped socket or a trip to the
+            // login screen should not erase who was last signed in.
+            this.liveGameName = null;
+            this.liveTagLine = null;
+            this.livePuuid = null;
+            this.livePlatformId = null;
             setLcuCredentials(null);
             // A dropped socket is not a phase change. While a match is running the
             // client sends nothing, so this socket goes idle and dies mid-game.
@@ -239,14 +325,15 @@ class LcuSocket extends EventEmitter {
             // Not in champ select.
         }
         try {
-            const summoner = (await makeLCURequest('GET', '/lol-summoner/v1/current-summoner')) as {
-                gameName?: string;
-                displayName?: string;
-            } | null;
-            this.summonerName = summoner?.gameName || summoner?.displayName || null;
+            const summoner = await readCurrentSummoner();
+            // Re-resolve per connection: a different account can log into the
+            // same client, so a cached platformId would carry the wrong region.
+            const platformId = (await readPlatformId()) ?? this.livePlatformId;
+            if (platformId) this.livePlatformId = platformId;
+            this.applySummoner(summoner, platformId);
             this.emit('summoner', summoner);
         } catch {
-            // Login screen.
+            // Login screen / client still booting.
         }
     }
 
@@ -274,8 +361,18 @@ class LcuSocket extends EventEmitter {
                 this.setChampSelect(deleted ? null : payload?.data ?? null);
                 break;
             case EVENTS.summoner: {
-                const data = (deleted ? null : payload?.data) as { gameName?: string; displayName?: string } | null;
-                this.summonerName = data?.gameName || data?.displayName || null;
+                const data = (deleted ? null : payload?.data) ?? null;
+                if (data) {
+                    this.applySummoner(data, this.livePlatformId);
+                } else {
+                    // Logout / login screen: live identity is gone, the stored
+                    // record still describes the last signed-in account.
+                    this.summonerName = null;
+                    this.liveGameName = null;
+                    this.liveTagLine = null;
+                    this.livePuuid = null;
+                    this.livePlatformId = null;
+                }
                 this.emit('summoner', data);
                 break;
             }

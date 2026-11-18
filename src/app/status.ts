@@ -105,7 +105,8 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
     };
   }
 
-  const who = lcu.summonerName ? ` as ${lcu.summonerName}` : '';
+  const tagged = lcu.gameName && lcu.tagLine ? `${lcu.gameName}#${lcu.tagLine}` : null;
+  const who = tagged || lcu.summonerName ? ` as ${tagged || lcu.summonerName}` : '';
   return {
     stage: 'idle',
     tone: 'live',

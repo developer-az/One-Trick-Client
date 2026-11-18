@@ -15,6 +15,7 @@ import {
   resolveAllyMidName,
   resolveAllyJungleName,
   resolveProfileId,
+  shouldShowMayhemPanel,
   situationFromState,
   type OverlayCue,
   type OverlayState,
@@ -515,12 +516,16 @@ export const OverlayApp: React.FC = () => {
     typeof state.mayhemAugmentDismissedAt === 'number' &&
     nowMs - state.mayhemAugmentDismissedAt < 120_000;
 
-  const mayhemPanelActive =
-    inMayhem &&
-    hudModules.mayhem &&
-    !!state.mayhemAugmentWindow &&
-    !mayhemDismissedRecently &&
-    displayMayhemOfferIds.length > 0;
+  // Whole-panel active state (ignores which window owns the slot): this is what
+  // suppresses the vision / buy rails everywhere while the roll is up.
+  const mayhemPanelActive = shouldShowMayhemPanel({
+    inMayhem,
+    moduleEnabled: hudModules.mayhem,
+    augmentWindow: !!state.mayhemAugmentWindow,
+    dismissedRecently: mayhemDismissedRecently,
+    offerCount: displayMayhemOfferIds.length,
+    windowHasMayhemSlot: true,
+  });
 
   const mayhemLayoutPos =
     layoutElement(hudLayout, 'mayhem') ||
@@ -671,7 +676,14 @@ export const OverlayApp: React.FC = () => {
     slotHasModule('vision') ||
     slot?.id === 'slot-center' ||
     slot?.id === 'slot-0';
-  const showMayhem = mayhemPanelActive && mayhemOnThisWindow;
+  const showMayhem = shouldShowMayhemPanel({
+    inMayhem,
+    moduleEnabled: hudModules.mayhem,
+    augmentWindow: !!state.mayhemAugmentWindow,
+    dismissedRecently: mayhemDismissedRecently,
+    offerCount: displayMayhemOfferIds.length,
+    windowHasMayhemSlot: mayhemOnThisWindow,
+  });
   const showRightRail =
     showGank || showVision || showAction || showBuy || !profileMatchesLocal;
 

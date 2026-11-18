@@ -1,5 +1,5 @@
-import { makeLCURequest } from './lcu-connector';
-import { lcuSocket } from './lcu-socket';
+import { makeLCURequest, getLcuCredentials } from './lcu-connector';
+import { lcuSocket, type LcuConnectionState } from './lcu-socket';
 import { findLocalPlayer, type LiveClientAllGameData } from './live-client';
 import {
     getStateServiceStatus,
@@ -166,6 +166,16 @@ export function dismissMayhemAugmentPanelFromHotkey(): void {
     notifyMayhemOverlayStateChanged();
 }
 
+/**
+ * Commit one OCR read as the live roll. Always writes through to the persisted
+ * roll — an empty read must clear it too, or the last stored ids resurrect
+ * offers the screen no longer shows.
+ */
+export function commitMayhemOffers(ids: string[]): void {
+    mayhemOfferIds = [...ids];
+    setMayhemRollIds(mayhemOfferIds);
+}
+
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
 export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
     if (!inGame || !lastGoodPayload) return;
@@ -180,13 +190,18 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
         0,
         { minMatches: 1 }
     );
-    mayhemOfferIds = ids;
-    if (ids.length >= 1) {
-        mayhemManualScanUntilMs = Date.now() + 60_000;
-        setMayhemRollIds(ids);
-        beginMayhemPickSession();
-    } else {
-        mayhemManualScanUntilMs = 0;
+    // `null` means no fresh read (throttled / in flight / failed capture): keep
+    // the roll and the current scan window instead of treating it as a clear.
+    // Same write-through as the auto path: a completed scan that found no cards
+    // clears the persisted roll instead of leaving the old ids to be merged back.
+    if (ids) {
+        commitMayhemOffers(ids);
+        if (ids.length >= 1) {
+            mayhemManualScanUntilMs = Date.now() + 60_000;
+            beginMayhemPickSession();
+        } else {
+            mayhemManualScanUntilMs = 0;
+        }
     }
     applyMayhemOfferVisibilityAfterOcr();
     pushMayhemOverlayPatch();
@@ -436,6 +451,7 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
     return [
         payload.gameflowPhase || '',
         payload.gameMode || '',
+        payload.mapName || '',
         timeBucket,
         lp?.level ?? 0,
         lp?.isDead ? 1 : 0,
@@ -490,8 +506,7 @@ function mayhemAugmentHudShouldShow(): boolean {
 }
 
 function clearMayhemLiveOffers(): void {
-    mayhemOfferIds = [];
-    setMayhemRollIds([]);
+    commitMayhemOffers([]);
     resetMayhemOcrCache();
 }
 
@@ -507,8 +522,7 @@ function endMayhemPickSession(): void {
 }
 
 function purgeMayhemOffersFromScreen(): void {
-    mayhemOfferIds = [];
-    setMayhemRollIds([]);
+    commitMayhemOffers([]);
     mayhemManualScanUntilMs = 0;
     if (mayhemPickSessionActive) {
         endMayhemPickSession();
@@ -727,7 +741,10 @@ async function tickMayhemOcr(): Promise<void> {
     }
 
     const onScreen = mayhemAugmentHudShouldShow();
-    setMayhemOcrRetainOffers(onScreen);
+    // Retain last good offers while the augment pick window is open. HUD
+    // visibility itself depends on the offers, so gating retention on it would
+    // be circular (offers vanish -> no retain -> offers clear).
+    setMayhemOcrRetainOffers(mayhemPickPhase.pickWindowOpen);
     const rerollPending = isMayhemOcrRerollPending();
     const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
     const minGap = onScreen
@@ -744,8 +761,10 @@ async function tickMayhemOcr(): Promise<void> {
         minGap,
         { minMatches: 2 }
     );
-    mayhemOfferIds = ids;
-    if (ids.length) setMayhemRollIds(ids);
+    // Write through only a completed read: `[]` clears the persisted ids, but
+    // `null` (skipped / failed capture) must leave the roll untouched so a
+    // throttled or failed tick cannot erase the offers on screen.
+    if (ids) commitMayhemOffers(ids);
     applyMayhemOfferVisibilityAfterOcr();
     pushMayhemOverlayPatch();
 }
@@ -1009,17 +1028,46 @@ function endGameSession(): void {
     scheduleLive();
 }
 
-/** Should the Live Client be read at all right now, and how often? */
-function liveCadence(): number | null {
-    const phase = lcuSocket.phase;
-    if (inGame || isInGamePhase(phase)) {
-        if (isOverlayUserHidden()) return POLL_INGAME_HIDDEN_MS;
-        const gt = trustedGameTime || lastGoodPayload?.gameTime || 0;
-        return gt >= LATE_GAME_SEC ? POLL_INGAME_LATE_MS : POLL_INGAME_MS;
+/** Inputs to the live poll cadence decision, kept pure so the matrix is testable. */
+export interface LiveCadenceInput {
+    state: LcuConnectionState;
+    phase: string | null;
+    inGame: boolean;
+    /** Trusted game clock is past the late-game mark. */
+    lateGame: boolean;
+    /** Overlay hidden by the user: keep ingesting, but rarely. */
+    hudHidden: boolean;
+    /** Credentials/lockfile are known — the client is booting or running. */
+    hasLockfile: boolean;
+}
+
+/**
+ * Should the Live Client be read at all right now, and how often?
+ * In-game 2500ms, late game 4200ms, hidden 8000ms (wins), searching 5000ms,
+ * client booting with a lockfile 5000ms; otherwise park the sampler.
+ */
+export function nextLiveCadence(input: LiveCadenceInput): number | null {
+    if (input.inGame || isInGamePhase(input.phase)) {
+        if (input.hudHidden) return POLL_INGAME_HIDDEN_MS;
+        return input.lateGame ? POLL_INGAME_LATE_MS : POLL_INGAME_MS;
     }
     // No client to tell us about matches: probe slowly so a running game is still found.
-    if (lcuSocket.state === 'searching') return POLL_PROBE_MS;
+    if (input.state === 'searching') return POLL_PROBE_MS;
+    // The client is booting; the lockfile is the only proof the port will open.
+    if (input.state === 'connecting' && input.hasLockfile) return POLL_PROBE_MS;
+    // Connected and idle: phase events drive the next read.
     return null;
+}
+
+function liveCadence(): number | null {
+    return nextLiveCadence({
+        state: lcuSocket.state,
+        phase: lcuSocket.phase,
+        inGame,
+        lateGame: (trustedGameTime || lastGoodPayload?.gameTime || 0) >= LATE_GAME_SEC,
+        hudHidden: isOverlayUserHidden(),
+        hasLockfile: getLcuCredentials() !== null,
+    });
 }
 
 function scheduleLive(): void {

@@ -144,6 +144,36 @@ export function situationFromState(state: OverlayState): ProfileSituation {
   });
 }
 
+export interface MayhemPanelGateInput {
+  /** Live board is KIWI / Mayhem (classic ARAM must stay off). */
+  inMayhem: boolean;
+  /** User's HUD module toggle — Mayhem is opt-in beta, default off. */
+  moduleEnabled: boolean;
+  /** OCR currently sees augment cards on screen (not "you might be picking"). */
+  augmentWindow: boolean;
+  /** Page Up dismiss window is still suppressing the panel. */
+  dismissedRecently: boolean;
+  /** Offers the panel could rank (latched ids already merged by the caller). */
+  offerCount: number;
+  /** This overlay window owns a Mayhem slot (module or legacy center slot). */
+  windowHasMayhemSlot: boolean;
+}
+
+/**
+ * Single gate for the Mayhem augment panel — both overlay mounts (full rail and
+ * compact panel) render off this, so the two can never disagree.
+ */
+export function shouldShowMayhemPanel(gate: MayhemPanelGateInput): boolean {
+  return (
+    gate.inMayhem &&
+    gate.moduleEnabled &&
+    gate.augmentWindow &&
+    !gate.dismissedRecently &&
+    gate.offerCount > 0 &&
+    gate.windowHasMayhemSlot
+  );
+}
+
 /** Vision read for the standalone ward indicator (never in the cue stack). */
 export function getWardStatus(state: OverlayState, profileId: ProfileId): WardStatus | null {
   if (shouldUseAramOverlay(state)) return getAramWardStatus(state);
