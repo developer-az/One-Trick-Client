@@ -1,3 +1,5 @@
+import { isUnknownMayhemAugmentId } from './match';
+
 export function isMayhemRerollOcrText(ocrText: string): boolean {
   return /\breroll\b/i.test(ocrText);
 }
@@ -35,7 +37,8 @@ export function isNewMayhemOfferRoll(previous: string[], next: string[]): boolea
  *
  * A disjoint offer set is a reroll and is accepted even when only one or two
  * cards were read — the old roll must not survive a reroll. The never-shrink
- * rule only protects a partial read of the same roll (overlap).
+ * rule only protects a partial read of the same roll (overlap). A 1–2 row
+ * placeholder-only frame is exempt from both: it cannot prove a reroll.
  */
 export function stabilizeMayhemOffers(
   previous: string[],
@@ -45,12 +48,28 @@ export function stabilizeMayhemOffers(
   state: MayhemOfferStabilityState
 ): string[] {
   const next = freshOfferIds(matched);
-  if (isMayhemRerollOcrText(ocrText)) state.rerollPending = true;
+  // A frame made only of `unknown:` placeholders proves nothing about the roll:
+  // they are a guess from unrecognised title-case text, which a scoreboard /
+  // kill callout / death screen can produce. Such a frame must never evict a
+  // known roll or arm the fast poll (the `mayhem-likely` classic-ARAM case).
+  // The all-unknown display path still works when no known roll is at stake.
+  const allUnknown = next.length > 0 && next.every((id) => isUnknownMayhemAugmentId(id));
+  // Eviction guard: a 1–2 row placeholder-only frame that would replace a KNOWN
+  // roll is refused (a scoreboard / kill callout / death screen guess). A 3-row
+  // frame is shop-shaped, so an all-unknown roll there is the patch-day reroll
+  // itself and must replace the roll — keeping the retired cards would advise on
+  // a pick the player can no longer take. An all-placeholder roll replacing
+  // another all-placeholder roll is display-only and stays allowed either way.
+  const placeholderOnly =
+    allUnknown && previous.some((id) => !isUnknownMayhemAugmentId(id)) && next.length < 3;
+  if (isMayhemRerollOcrText(ocrText) && !allUnknown) state.rerollPending = true;
 
   if (!sessionActive) {
     state.rerollPending = false;
     return next;
   }
+
+  if (placeholderOnly) return previous;
 
   // New roll: trust it, even a 1-2 card read, and arm the fast poll until the
   // full triple is on screen (a partial reroll read must not stall the HUD).
@@ -58,7 +77,9 @@ export function stabilizeMayhemOffers(
   // `setMayhemOcrRetainOffers(false)` tick and is cleared here as soon as the
   // triple is read (or by `resetMayhemOcrCache` at match start).
   if (isNewMayhemOfferRoll(previous, next)) {
-    state.rerollPending = next.length < 3;
+    // An all-unknown frame cannot prove a reroll (see above), so it never arms
+    // the fast poll — even when there is no known roll to protect.
+    state.rerollPending = !allUnknown && next.length < 3;
     return next;
   }
 

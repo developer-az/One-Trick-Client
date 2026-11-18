@@ -138,6 +138,12 @@ function looksLikeUnknownAugmentTitle(line: string): boolean {
     if (/[bcdfghjklmnpqrstvwxz]{5,}/.test(word)) return false;
     if (!/[aeiouy]/.test(word)) return false;
   }
+  // Every word two letters long ("Ah Ri") is a scoreboard / roster artifact far
+  // more often than a card title: a real title has one word of three letters or
+  // a spread of letters to match (aggregate >= 6 keeps "Ez Real" displayable).
+  const longestWord = Math.max(...words.map((word) => word.length));
+  const letters = words.reduce((total, word) => total + word.length, 0);
+  if (longestWord < 3 && letters < 6) return false;
   return true;
 }
 

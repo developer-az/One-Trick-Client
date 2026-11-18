@@ -1008,13 +1008,44 @@ export function shouldRunOverlayClock(input: {
   );
 }
 
-/** Mayhem dismiss-window tick gate — never tick while the HUD page is hidden. */
+/** How long a PageUp dismissal keeps the augment panel hidden (unchanged). */
+export const MAYHEM_DISMISS_MS = 120_000;
+
+/**
+ * Is the Mayhem augment panel still hidden by a PageUp dismissal?
+ *
+ * Purely wall-clock: expiry is `now >= dismissedAt + MAYHEM_DISMISS_MS` and
+ * never depends on the HUD page being visible. The old renderer read a
+ * clock-store value that only advanced while the page was visible, so once the
+ * panel hid itself (empty frame past the overlay window's hide grace) the
+ * dismissal could never expire and the panel stayed hidden for the match — in
+ * ARAM that was the window's only content.
+ */
+export function isMayhemDismissedRecently(input: {
+  inMayhem: boolean;
+  dismissedAt: number | null | undefined;
+  nowMs: number;
+}): boolean {
+  if (!input.inMayhem) return false;
+  const dismissedAt = input.dismissedAt;
+  if (typeof dismissedAt !== 'number' || !Number.isFinite(dismissedAt)) return false;
+  const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : 0;
+  return nowMs < dismissedAt + MAYHEM_DISMISS_MS;
+}
+
+/**
+ * Mayhem dismiss-window tick gate.
+ *
+ * Visibility deliberately no longer gates this 1 Hz tick: the tick exists to
+ * expire the dismissal, and a hidden page is exactly when it used to freeze.
+ * A hidden overlay keeps ticking (it is cheap), so the panel can re-evaluate
+ * the wall-clock expiry as soon as it is shown again.
+ */
 export function shouldRunMayhemDismissTick(input: {
   inMayhem: boolean;
   dismissedAt: number | null | undefined;
-  pageVisible: boolean;
 }): boolean {
-  return input.pageVisible && input.inMayhem && input.dismissedAt != null;
+  return input.inMayhem && input.dismissedAt != null;
 }
 
 export function formatGameTime(seconds: number): string {

@@ -21,7 +21,10 @@
  *   5. discovery is bounded per match: bursts do not re-arm on every death and
  *      the scan/burst budget stops a classic ARAM from capturing all game;
  *   6. a queue-450 Howling Abyss match (real Mayhem can report 450) qualifies
- *      for the bounded discovery OCR path without reclassifying the mode.
+ *      for the bounded discovery OCR path without reclassifying the mode;
+ *   7. why a call did not capture stays distinct: `throttled` inside the
+ *      interval, `in-flight` while another capture is pending, and
+ *      `unsupported` on a platform with no capture path (not "throttled").
  *
  * Run: npx --yes tsx verify_mayhem_capture_gating.ts
  */
@@ -109,6 +112,7 @@ function frame(
     ids: frameIds,
     candidateIds: [],
     frameIds,
+    frameDisplayCount: frameIds.length,
     fresh: true,
     valid: true,
     fuzzyScore: 0.95,
@@ -260,6 +264,13 @@ async function main(): Promise<void> {
         /0\.26/.test(ps1),
       'the PS1 mask is the 380x220 panel at 0.982 W / 0.26 H, scaled by the overlay'
     );
+    // The parser above is tested against hand-written JSON, so a script that
+    // stopped emitting `owner` would leave the trust gate inert while every
+    // injected assertion stayed green: pin the emission itself.
+    ok(
+      /owner\s*=\s*\[bool\]\$owner/.test(ps1),
+      'the PS1 target marker emits owner as a bool (the field parseTargetOwner reads)'
+    );
     ok(
       ocrSource.includes("'-PanelScale'") && ocrSource.includes('overlayScaleFromHud('),
       'Electron passes the live --overlay-scale to the capture'
@@ -353,6 +364,7 @@ $rect = Get-PanelMaskRect -FrameLeft $FrameLeft -FrameTop $FrameTop -FrameWidth 
 
   await captureGating();
   await ownerSeam();
+  await ocrRefusals();
 }
 
 /**
@@ -375,6 +387,7 @@ async function ownerSeam(): Promise<void> {
     ids: ['jeweled_gauntlet', 'giant_slayer'],
     candidateIds: [],
     frameIds: ['jeweled_gauntlet', 'giant_slayer'],
+    frameDisplayCount: 2,
     fresh: true,
     valid: true,
     fuzzyScore: 0.97,
@@ -410,6 +423,18 @@ async function ownerSeam(): Promise<void> {
   ok(parseTargetOwner(targetLine(true)) === true, 'the real parser reads owner=true');
   ok(parseTargetOwner(targetLine(false)) === false, 'the real parser reads owner=false');
   ok(parseTargetOwner(targetLine('false')) === false, 'the real parser reads a stringified "false"');
+  // A truncated JSON marker is a target line whose owner could not be read:
+  // present but unparsable, so it must fail closed (untrusted), never fall back
+  // to the legacy "absent owner" default. A non-JSON marker is the older
+  // key=value line, which genuinely never reported an owner.
+  ok(
+    parseTargetOwner('__OT_TARGET__{"pid":42,') === false,
+    'a truncated JSON target marker is untrusted, not an absent owner'
+  );
+  ok(
+    parseTargetOwner('__OT_TARGET__ pid=42 exe=League of Legends') === undefined,
+    'a legacy key=value target marker reports no owner (undefined)'
+  );
   const withoutOwner = `__OT_TARGET__${JSON.stringify({
     pid: 4242,
     exe: 'League of Legends',
@@ -742,6 +767,63 @@ async function captureGating(): Promise<void> {
     ok(ocrCalls === 1 && result.scanned && result.discovery, 'the queue-450 match runs the bounded discovery OCR path');
     ok(result.mode === 'aram', 'the queue-450 match keeps the aram label');
   }
+}
+
+/**
+ * Why a call did not capture: the three refusals are distinct, and a platform
+ * without a capture path is not "throttled" (nothing was throttled).
+ */
+async function ocrRefusals(): Promise<void> {
+  console.log('--- 7. refusal reasons: throttled, in-flight, unsupported ---');
+  const augments = (bundle as MayhemBundle).augments as MayhemAugment[];
+  const screen = async () => ({
+    parsed: {
+      text: 'Jeweled Gauntlet\nGiant Slayer',
+      target: { pid: 4242, exe: 'League of Legends', foreground: true },
+      blackFrame: false,
+      language: null,
+      noTarget: false,
+      fallback: false,
+    },
+    owner: true,
+  });
+
+  resetMayhemOcrCache();
+  setMayhemOcrRetainOffers(false);
+  const first = await detectMayhemOffers(augments, 0, { minMatches: 2, readScreen: screen });
+  if (process.platform !== 'win32') {
+    ok(
+      first.refusal === 'unsupported' && !first.fresh,
+      `a platform with no capture path reports unsupported, not throttled (${first.refusal})`
+    );
+    return;
+  }
+  ok(first.refusal === null && first.fresh, 'the first scan really ran');
+
+  // Two calls inside minIntervalMs: the second did not capture, and says why.
+  const throttled = await detectMayhemOffers(augments, 60_000, { minMatches: 2, readScreen: screen });
+  ok(
+    throttled.refusal === 'throttled' && !throttled.fresh,
+    `a second scan inside minIntervalMs is refused as throttled (${throttled.refusal})`
+  );
+
+  // In flight: a readScreen that starts another scan while this one holds the
+  // capture. The inner call never runs, and its own verdict says so.
+  resetMayhemOcrCache();
+  let innerRefusal: string | null | undefined;
+  const outer = await detectMayhemOffers(augments, 0, {
+    minMatches: 2,
+    readScreen: async () => {
+      const inner = await detectMayhemOffers(augments, 0, { minMatches: 2, readScreen: screen });
+      innerRefusal = inner.refusal;
+      return screen();
+    },
+  });
+  ok(
+    innerRefusal === 'in-flight',
+    `a scan started while another is in flight is refused as in-flight (${innerRefusal})`
+  );
+  ok(outer.refusal === null && outer.fresh, 'the outer scan still completes normally');
 }
 
 void main()

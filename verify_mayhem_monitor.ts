@@ -20,7 +20,11 @@
 
 import {
   createMayhemMonitorState,
+  MAX_DISCOVERY_BURSTS,
+  MAX_DISCOVERY_SCANS,
   isUnknownQueueAram,
+  mayhemAugmentLevelEdge,
+  mayhemAutoOcrGate,
   mayhemMonitorMode,
   mayhemMonitorWantsScan,
   noteMayhemDiscoveryTrigger,
@@ -30,7 +34,9 @@ import {
   type MayhemMonitorRead,
   type MayhemMonitorState,
 } from './src/logic/mayhem/monitor';
+import { nextMayhemPickLevel } from './src/logic/mayhem/pickPhase';
 import { isMayhemAugmentHudVisible } from './src/logic/mayhem/visibility';
+import { decideMayhemPageUp } from './src/logic/mayhem/hotkey';
 import { acceptMayhemOfferFrame } from './src/logic/mayhem/offerAcceptance';
 import { MAYHEM_HIGH_CONFIDENCE_SCORE } from './src/logic/mayhem/match';
 import type { MayhemModeSignals } from './src/logic/mayhem/mode';
@@ -51,11 +57,13 @@ function frame(frameIds: string[], extra: Partial<MayhemMonitorRead> = {}): Mayh
     ids: extra.ids ?? frameIds,
     candidateIds: extra.candidateIds ?? [],
     frameIds,
+    frameDisplayCount: frameIds.length,
     fresh: true,
     valid: true,
     fuzzyScore: 0.95,
     blackFrame: false,
     foreground: true,
+    owner: true,
     ...extra,
   };
 }
@@ -83,11 +91,13 @@ function adapterRead(
     ids: accepted.ids,
     candidateIds: accepted.candidateIds,
     frameIds: accepted.frameIds,
+    frameDisplayCount: accepted.frameIds.length + accepted.placeholderIds.length,
     fresh: true,
     valid: true,
     fuzzyScore,
     blackFrame: false,
     foreground: true,
+    owner: true,
   };
 }
 
@@ -685,6 +695,86 @@ async function main(): Promise<void> {
     ok(result.state.scanStreak === 2, 'an invalid read between two single-card scans does not reset the streak');
   }
 
+  console.log('--- pick-level gate re-arms on a level-up, never purges ---');
+  {
+    // An over-counted pick set: three counted picks while the player is level 7
+    // puts nextPick on level 15, so the plain gate would switch scanning off
+    // until 15 and the panel would not return at the level-11 window.
+    ok(nextMayhemPickLevel(3) === 15, 'three counted picks put nextPick at level 15 (precondition)');
+    const blocked = mayhemAutoOcrGate({
+      level: 7,
+      ownedCount: 3,
+      hudVisible: false,
+      rearmedAtLevel: null,
+    });
+    ok(blocked.wanted, 'a level-7 tick still gets a scan when nextPick is ahead of the level');
+    ok(blocked.rearmedAtLevel === 7, 'the re-arm is spent on the level-7 augment edge');
+    const throttled = mayhemAutoOcrGate({
+      level: 7,
+      ownedCount: 3,
+      hudVisible: false,
+      rearmedAtLevel: blocked.rearmedAtLevel,
+    });
+    ok(!throttled.wanted, 'the same level does not keep re-arming (the gate still throttles)');
+    const raised = mayhemAutoOcrGate({
+      level: 11,
+      ownedCount: 3,
+      hudVisible: false,
+      rearmedAtLevel: throttled.rearmedAtLevel,
+    });
+    ok(raised.wanted && raised.rearmedAtLevel === 11, 'level 11 re-arms scanning again');
+    ok(
+      !mayhemAutoOcrGate({ level: 2, ownedCount: 0, hudVisible: false, rearmedAtLevel: null }).wanted,
+      'below the first augment level the gate still says no'
+    );
+    ok(mayhemAugmentLevelEdge(6) === 3, 'level 6 is on the level-3 augment edge');
+    ok(mayhemAugmentLevelEdge(7) === 7, 'level 7 is its own augment edge');
+    ok(mayhemAugmentLevelEdge(2) === null, 'no augment edge before level 3');
+  }
+
+  console.log('--- discovery budget resets on a new augment level ---');
+  {
+    const state = createMayhemMonitorState();
+    state.discovery.levelBurst = 3;
+    state.discovery.scans = MAX_DISCOVERY_SCANS;
+    state.discovery.bursts = MAX_DISCOVERY_BURSTS;
+    state.discovery.exhausted = true;
+    state.discovery.lastScanAt = 1_000_000;
+    ok(
+      mayhemMonitorWantsScan(state, CLASSIC_ARAM, 1_000_001) === 'none',
+      'an exhausted match wants no discovery scan (precondition)'
+    );
+    ok(
+      noteMayhemDiscoveryTrigger(
+        state,
+        { now: 1_000_001, level: 7, isDead: false, signals: CLASSIC_ARAM },
+        { anyAramQueue: true }
+      ),
+      'level 7 re-opens discovery after the budget was spent'
+    );
+    ok(state.discovery.exhausted === false, 'the exhausted flag is cleared on the new augment level');
+    ok(
+      state.discovery.scans === 0 && state.discovery.bursts === 1,
+      `the new level starts a fresh per-level budget (${state.discovery.scans} scans, ${state.discovery.bursts} bursts)`
+    );
+    ok(
+      mayhemMonitorWantsScan(state, CLASSIC_ARAM, 1_001_000) === 'discovery',
+      'a discovery scan is allowed again after the level-up'
+    );
+    // The reset is per level edge, not per tick: a death at the same level may
+    // not keep reopening a budget that level already spent.
+    state.discovery.exhausted = true;
+    state.discovery.bursts = MAX_DISCOVERY_BURSTS;
+    ok(
+      !noteMayhemDiscoveryTrigger(
+        state,
+        { now: 1_200_000, level: 7, isDead: true, signals: CLASSIC_ARAM },
+        { anyAramQueue: true }
+      ),
+      'a death at the same level cannot reopen an exhausted budget'
+    );
+  }
+
   console.log('--- game-monitor wiring ---');
   {
     const monitor = fs.readFileSync('electron/game-monitor.ts', 'utf8');
@@ -694,6 +784,17 @@ async function main(): Promise<void> {
     ok(
       tick.includes("result.hudAction === 'purge'") && !tick.includes('applyMayhemOfferVisibilityAfterOcr()'),
       'automatic scans purge only on the engine purge action (no generic post-scan purge)'
+    );
+    const gateAt = tick.indexOf('if (!autoOcrWanted)');
+    const gateBlock = gateAt === -1 ? '' : tick.slice(gateAt, gateAt + 500);
+    ok(gateAt >= 0, 'the tick computes the pick-level gate once (autoOcrWanted)');
+    ok(
+      !gateBlock.includes('purgeMayhemOffersFromScreen'),
+      'the pick-level gate never purges a displayed roll'
+    );
+    ok(
+      tick.includes('autoOcrAllowed: active ? autoOcrWanted : true'),
+      'the engine sees the same gate decision the tick made'
     );
     ok(
       tick.includes("result.hudAction === 'show' || mayhemAugmentHudShouldShow()"),
@@ -716,6 +817,131 @@ async function main(): Promise<void> {
     ok(
       /noteMayhemDiscoveryTrigger\(mayhemMonitorState,[\s\S]*?\{\s*anyAramQueue:\s*true\s*\}/.test(discoveryCall),
       'the live tick passes { anyAramQueue: true } for queue-450 Mayhem'
+    );
+  }
+
+  console.log('--- PageUp toggle: the dismiss key also restores ---');
+  {
+    // 1. A visible panel is still dismissed, exactly as before the toggle.
+    const visible = decideMayhemPageUp({ panelVisible: true, dismissed: false, scanInFlight: false });
+    ok(
+      visible.action === 'dismiss' && visible.reason === 'panel-visible',
+      `a visible, non-dismissed panel still dismisses (${visible.action}/${visible.reason})`
+    );
+    ok(!visible.suppressNonFreshWrite, 'a dismiss never writes, so nothing needs suppressing');
+
+    // 2. After that dismiss the panel is purged and the window is open: the
+    // very next press must be the restore, not a second dismissal.
+    const dismissed = decideMayhemPageUp({ panelVisible: false, dismissed: true, scanInFlight: false });
+    ok(
+      dismissed.action === 'restore' && dismissed.reason === 'dismissed',
+      `after a dismiss the next PageUp restores (${dismissed.action}/${dismissed.reason})`
+    );
+
+    // 3. A hidden (never shown) panel is restored too: the key always has a
+    // recovery action, which is the whole point of the toggle.
+    const hidden = decideMayhemPageUp({ panelVisible: false, dismissed: false, scanInFlight: false });
+    ok(
+      hidden.action === 'restore' && hidden.reason === 'panel-hidden',
+      `a panel that is not showing restores (${hidden.action}/${hidden.reason})`
+    );
+
+    // 4. A scan in flight takes PageDown's rule: restore, clear the dismissal,
+    // but never write the in-flight read over the roll.
+    const racing = decideMayhemPageUp({ panelVisible: false, dismissed: true, scanInFlight: true });
+    ok(
+      racing.action === 'restore' && racing.reason === 'scan-in-flight' && racing.suppressNonFreshWrite,
+      `an in-flight scan restores without writing its non-fresh read (${racing.action}/${racing.reason})`
+    );
+
+    // 5. The user is looking at a visible roll: hide it. The scan's own refusal
+    // still protects the write, so the toggle must not stall on the race.
+    const visibleRacing = decideMayhemPageUp({ panelVisible: true, dismissed: false, scanInFlight: true });
+    ok(
+      visibleRacing.action === 'dismiss' && !visibleRacing.suppressNonFreshWrite,
+      'a visible panel wins over an in-flight scan (dismiss, no write suppression needed)'
+    );
+
+    // The restore is one shared body: both keys call the same helper, so the
+    // epoch ordering and the non-fresh guard exist in exactly one place.
+    const monitor = fs.readFileSync('electron/game-monitor.ts', 'utf8');
+    const section = (start: string, end: string): string => {
+      const from = monitor.indexOf(start);
+      const to = monitor.indexOf(end, from);
+      return from >= 0 && to > from ? monitor.slice(from, to) : '';
+    };
+    const pageUp = section(
+      'export function dismissMayhemAugmentPanelFromHotkey',
+      'export function canDismissMayhemPanel'
+    );
+    const pageDown = section(
+      'export async function triggerManualMayhemOcrFromHotkey',
+      'async function restoreMayhemAugmentPanelFromHotkey'
+    );
+    const restore = section(
+      'async function restoreMayhemAugmentPanelFromHotkey',
+      '/** Diagnostics for the performance panel. */'
+    );
+    ok(
+      pageUp.includes("restoreMayhemAugmentPanelFromHotkey('PageUp')") &&
+        pageDown.includes("restoreMayhemAugmentPanelFromHotkey('PageDown')"),
+      'PageUp and PageDown both call the one shared restore helper'
+    );
+    ok(
+      pageUp.includes('mayhemUserDismissedUntilMs = now + 120_000'),
+      'the dismiss branch keeps the 120 s window'
+    );
+    ok(
+      (monitor.split('mayhemOfferIds = ids').length - 1) === 1,
+      'there is exactly one roll-write path (no duplicated restore body)'
+    );
+
+    // The shared body clears the dismissal before any capture await, so even a
+    // refused (non-fresh) restore lets the next scan show the roll.
+    const dismissalClearedAt = restore.indexOf('mayhemUserDismissedUntilMs = 0');
+    const dismissedAtClearedAt = restore.indexOf('mayhemAugmentDismissedAt = 0');
+    const scanAt = restore.indexOf('await detectMayhemOffers(');
+    ok(
+      restore.length > 0 &&
+        dismissalClearedAt >= 0 &&
+        dismissedAtClearedAt >= 0 &&
+        dismissalClearedAt < scanAt &&
+        dismissedAtClearedAt < scanAt,
+      `the shared restore clears the dismissal before the capture await ` +
+        `(clear@${dismissalClearedAt}/${dismissedAtClearedAt}, scan@${scanAt})`
+    );
+
+    // Epoch ordering inside that one body: bump, await, bump again, then write.
+    const firstBump = restore.indexOf('mayhemMonitorEpoch += 1');
+    const lastBump = restore.lastIndexOf('mayhemMonitorEpoch += 1');
+    const nonFreshGuard = restore.indexOf('if (!read.fresh)');
+    const rollWrite = restore.indexOf('mayhemOfferIds = ids');
+    ok(
+      firstBump >= 0 &&
+        firstBump < scanAt &&
+        lastBump > scanAt &&
+        nonFreshGuard > scanAt &&
+        nonFreshGuard < lastBump &&
+        rollWrite > lastBump &&
+        restore.split('mayhemMonitorEpoch += 1').length - 1 === 2,
+      `the shared restore bumps, awaits, bumps again, refuses non-fresh, then writes ` +
+        `(bump@${firstBump}, scan@${scanAt}, guard@${nonFreshGuard}, bump@${lastBump}, write@${rollWrite})`
+    );
+
+    // The gate hole this brief closed: the offers verify exists but no chain
+    // entry ever ran it.
+    const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    ok(
+      pkg.scripts['verify:mayhem-offers'] === 'npx --yes tsx verify_mayhem_offers.ts',
+      'package.json has a verify:mayhem-offers script'
+    );
+    ok(
+      /verify:mayhem-monitor && npm run verify:mayhem-offers && npm run verify:mayhem-ocr/.test(
+        pkg.scripts['verify:release'] ?? ''
+      ),
+      'verify:release runs verify:mayhem-offers between the monitor and OCR checks'
     );
   }
 }

@@ -103,7 +103,7 @@ import {
 import {
     createMayhemMonitorState,
     createMayhemPollChain,
-    mayhemAutoOcrWanted,
+    mayhemAutoOcrGate,
     mayhemDiscoveryLive,
     mayhemMonitorMode,
     isMayhemDiscoverySignals,
@@ -114,6 +114,7 @@ import {
     type MayhemMonitorState,
 } from '../src/logic/mayhem/monitor';
 import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
+import { decideMayhemPageUp } from '../src/logic/mayhem/hotkey';
 import { loadMayhemBundle, refreshMayhemBundleIfStale } from './mayhem-data';
 import {
     detectMayhemOffers,
@@ -606,21 +607,25 @@ export interface MayhemHotkeyRouteDecision {
     key: MayhemHotkeyKey;
     /** The hotkey reached its panel/OCR action. */
     routed: boolean;
+    /** The Mayhem action the key took: PageUp toggles, PageDown only restores. */
+    action?: 'dismiss' | 'restore';
     /** Why it routed, or what stopped it before the action. */
     reason: string;
 }
 
 /**
  * One overlay.log line per hotkey route decision. A paste of overlay.log can
- * then separate "the hotkey was not routed" from "OCR ran and read nothing".
+ * then separate "the hotkey was not routed" from "OCR ran and read nothing",
+ * and `action=dismiss` from `action=restore` on the toggling PageUp.
  * Returns the formatted line so a harness can assert the exact record.
  */
 export function logMayhemHotkeyRoute(decision: MayhemHotkeyRouteDecision): string {
-    const detail = {
+    const detail: Record<string, unknown> = {
         key: decision.key,
         routed: decision.routed,
-        reason: decision.reason,
     };
+    if (decision.action) detail.action = decision.action;
+    detail.reason = decision.reason;
     overlayLog('hotkey', detail);
     return formatOverlayLogLine(Date.now(), 'hotkey', detail);
 }
@@ -639,7 +644,11 @@ export function mayhemDismissRouteReason(input: {
     return 'panel-shown';
 }
 
-/** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
+/**
+ * PageUp in Mayhem: toggle the augment HUD. A visible, non-dismissed panel is
+ * still hidden for 120 s (auto OCR pauses with it, as before); a dismissed or
+ * hidden panel is restored through the same forced fresh scan PageDown runs.
+ */
 export function dismissMayhemAugmentPanelFromHotkey(): void {
     // Any ARAM-family game with a panel on screen owns PageUp: a manual
     // PageDown scan can show offers in classic ARAM too. Clearing the panel
@@ -650,13 +659,37 @@ export function dismissMayhemAugmentPanelFromHotkey(): void {
         aramFamily: isAramFamilyMatchActive(),
         panelShown: mayhemAugmentHudShouldShow(),
     };
-    const reason = mayhemDismissRouteReason(route);
-    logMayhemHotkeyRoute({ key: 'PageUp', routed: reason === 'panel-shown', reason });
-    if (!canDismissMayhemPanel(route)) {
+    // `panel-shown`/`panel-hidden` are the two answers that mean "this key owns
+    // the panel"; anything else is outside the ARAM-family game.
+    const gateReason = mayhemDismissRouteReason(route);
+    if (gateReason !== 'panel-shown' && gateReason !== 'panel-hidden') {
+        logMayhemHotkeyRoute({ key: 'PageUp', routed: false, reason: gateReason });
         return;
     }
-    mayhemUserDismissedUntilMs = Date.now() + 120_000;
-    mayhemAugmentDismissedAt = Date.now();
+    const now = Date.now();
+    const decision = decideMayhemPageUp({
+        panelVisible: route.panelShown,
+        dismissed: now < mayhemUserDismissedUntilMs,
+        scanInFlight: mayhemHotkeyRestoreInFlight > 0,
+    });
+    if (decision.action === 'restore') {
+        logMayhemHotkeyRoute({
+            key: 'PageUp',
+            routed: true,
+            action: 'restore',
+            reason: decision.reason,
+        });
+        void restoreMayhemAugmentPanelFromHotkey('PageUp');
+        return;
+    }
+    logMayhemHotkeyRoute({
+        key: 'PageUp',
+        routed: true,
+        action: 'dismiss',
+        reason: decision.reason,
+    });
+    mayhemUserDismissedUntilMs = now + 120_000;
+    mayhemAugmentDismissedAt = now;
     mayhemManualScanUntilMs = 0;
     purgeMayhemOffersFromScreen();
     pushMayhemOverlayPatch();
@@ -675,12 +708,22 @@ export function canDismissMayhemPanel(input: {
 
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
 export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
+    await restoreMayhemAugmentPanelFromHotkey('PageDown');
+}
+
+/**
+ * The one restore path, shared by PageDown (always) and PageUp (when the panel
+ * is dismissed or hidden). Clearing the dismissal happens before the capture
+ * await, the epoch is bumped on both sides of it, and a non-fresh read is never
+ * written over the roll — so PageDown and the PageUp toggle cannot drift apart.
+ */
+async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promise<void> {
     if (!inGame) {
-        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'not-in-game' });
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'not-in-game' });
         return;
     }
     if (!lastGoodPayload) {
-        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'no-payload' });
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'no-payload' });
         return;
     }
     const signals = currentMayhemSignals();
@@ -692,33 +735,68 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
         mapId: signals.mapId,
         augmentOffersDetected: false,
     });
-    const modeMayhem = isMayhemMode(currentMayhemMode());
+    const mode = currentMayhemMode();
+    // What this gate guarantees: whenever `currentMayhemMode()` classifies the
+    // match Mayhem or `mayhem-likely` (unknown-queue Howling Abyss), a roll of
+    // cards the bundle does not know still displays its titled rows — on patch
+    // day every card can be newer than the bundle, and the mode used to latch
+    // only from a frame that displayed rows, so the panel stayed blank all
+    // match. A match classified `aram` (a classic queue id, e.g. 450) is not
+    // widened: it shows nothing until the bundle knows at least one offered id.
+    // The display-only junk risk is bounded the same way in both cases:
+    // placeholders never evict a 1–2 row known roll, never latch discovery,
+    // never move the pick counter and never arm the fast poll.
+    const modeMayhem = isMayhemMode(mode);
     if (!modeMayhem && !aramFamily) {
-        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'not-aram-family' });
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'not-aram-family' });
         return;
     }
+    // Clear the dismissal before the capture await: a restore that is refused
+    // as non-fresh must still let the next scan show the roll.
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
     const bundle = loadMayhemBundle();
     if (!bundle?.augments?.length) {
-        logMayhemHotkeyRoute({ key: 'PageDown', routed: false, reason: 'no-bundle' });
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'no-bundle' });
         return;
     }
     // The player asked for this roll: invalidate any auto scan that started
-    // before PageDown, so its tick cannot commit over the manual roll below.
+    // before the keypress, so its tick cannot commit over the manual roll below.
     mayhemMonitorEpoch += 1;
     resetMayhemOcrCache();
-    const read = await detectMayhemOffers(
-        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
-        0,
-        { minMatches: 1, mayhemMatch: modeMayhem }
-    );
+    let read: Awaited<ReturnType<typeof detectMayhemOffers>>;
+    mayhemHotkeyRestoreInFlight += 1;
+    try {
+        read = await detectMayhemOffers(
+            bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+            0,
+            { minMatches: 1, mayhemMatch: modeMayhem }
+        );
+    } finally {
+        mayhemHotkeyRestoreInFlight -= 1;
+    }
     const ids = read.ids;
     logMayhemHotkeyRoute({
-        key: 'PageDown',
+        key,
         routed: true,
-        reason: !read.valid ? 'ocr-invalid' : !read.fresh ? 'ocr-throttled' : `offers:${ids.length}`,
+        reason: !read.fresh
+            ? read.refusal === 'in-flight'
+                ? 'scan-in-flight'
+                : read.refusal === 'unsupported'
+                  ? 'ocr-unsupported'
+                  : 'ocr-throttled'
+            : !read.valid
+              ? 'ocr-invalid'
+              : `offers:${ids.length}`,
     });
+    // A non-fresh read means NO OCR ran on this call (an automatic scan's
+    // capture was already in flight, or a second hotkey press raced the first),
+    // never that the roll is empty. The reset above left the cached ids empty,
+    // so writing them here would purge the panel the player is looking at — the
+    // recovery key must not destroy it.
+    if (!read.fresh) {
+        return;
+    }
     // Again after the await: an auto tick that started while the manual capture
     // ran holds a pre-manual clone and must be refused too, before this write.
     mayhemMonitorEpoch += 1;
@@ -1189,6 +1267,11 @@ const mayhemPoll = createMayhemPollChain({
 let mayhemPollStartedThisMatch = false;
 let mayhemBurstUntilMs = 0;
 let mayhemLastLevel = 0;
+/**
+ * Highest augment level (3/7/11/15) that already spent the auto-OCR re-arm
+ * after the pick-level gate closed. Null before the first closed gate.
+ */
+let mayhemAutoOcrRearmLevel: number | null = null;
 let mayhemPickPhase: MayhemPickPhase = {
     pickWindowOpen: false,
     waitingForDeath: false,
@@ -1205,9 +1288,11 @@ let mayhemPicksAtWindowOpen = 0;
 let mayhemPickSessionActive = false;
 /** Page Down with a single OCR hit — allow HUD until timeout or off-screen OCR. */
 let mayhemManualScanUntilMs = 0;
-/** Page Up dismiss — pause auto OCR until next pick window or Page Down. */
+/** Page Up dismiss — pause auto OCR until next pick window or a restore (Page Down / Page Up). */
 let mayhemUserDismissedUntilMs = 0;
 let mayhemAugmentDismissedAt = 0;
+/** Restore scans (PageUp/PageDown) still awaiting capture/OCR. */
+let mayhemHotkeyRestoreInFlight = 0;
 /** Live Client owned augment ids for this match (ground truth when it exposes them). */
 let mayhemLiveAugmentIds: string[] = [];
 /** Consecutive fresh OCR scans that read at least one offer (single-card HUD gate). */
@@ -1414,11 +1499,14 @@ function applyMayhemOfferVisibilityAfterOcr(): void {
 
 function shouldRunMayhemAutoOcr(level: number): boolean {
     if (Date.now() < mayhemUserDismissedUntilMs) return false;
-    return mayhemAutoOcrWanted({
+    const gate = mayhemAutoOcrGate({
         level,
         ownedCount: mayhemPicksResolved(level),
         hudVisible: mayhemAugmentHudShouldShow(),
+        rearmedAtLevel: mayhemAutoOcrRearmLevel,
     });
+    mayhemAutoOcrRearmLevel = gate.rearmedAtLevel;
+    return gate.wanted;
 }
 
 function mayhemPicksResolved(level: number): number {
@@ -1570,6 +1658,7 @@ function startMayhemPoll(): void {
         mayhemLiveAugmentIds = [];
         mayhemPickVoidRollIds = [];
         mayhemPickVoidAtMs = 0;
+        mayhemAutoOcrRearmLevel = null;
         resetMayhemOcrMatchFlags();
         setMayhemOcrRetainOffers(false);
         resetMayhemMatchState();
@@ -1578,7 +1667,7 @@ function startMayhemPoll(): void {
     // session: the engine's counter, streak and single-offer candidate survive.
     mayhemOfferScanStreak = mayhemMonitorState.scanStreak;
     mayhemOfferFuzzyScore = mayhemMonitorState.fuzzyScore;
-    mayhemOfferIds = mayhemMonitorState.displayIds;
+    mayhemOfferIds = [...mayhemMonitorState.displayIds];
     mayhemPickPhase = {
         pickWindowOpen: false,
         waitingForDeath: false,
@@ -1623,6 +1712,12 @@ async function tickMayhemOcr(): Promise<void> {
     const signals = currentMayhemSignals();
     const mode = currentMayhemMode();
     const active = isMayhemMode(mode);
+    // `active` is `isMayhemMode(mode)`, so `mayhem-likely` (unknown-queue
+    // Howling Abyss) is a Mayhem match for placeholder purposes (see the
+    // hotkey gate): a post-patch roll with no known title must still display.
+    // A match classified `aram` is not widened here: it shows nothing until the
+    // bundle knows at least one offered id. Either way only known ids can latch
+    // discovery or count a pick, so the display risk stays bounded.
     const now = Date.now();
     // Any ARAM-family match (Howling Abyss / ARAM gameMode) may run the
     // bounded discovery path: real Mayhem can report a classic queue id, so
@@ -1644,10 +1739,18 @@ async function tickMayhemOcr(): Promise<void> {
     const bundle = loadMayhemBundle();
     if (!bundle?.augments?.length) return;
 
+    // Computed once: the gate advances the per-level re-arm state, so a second
+    // call in this tick would see a different answer.
+    const autoOcrWanted = active ? shouldRunMayhemAutoOcr(level) : true;
+
     let minGap = 0;
     if (active) {
-        if (!shouldRunMayhemAutoOcr(level)) {
-            if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
+        if (!autoOcrWanted) {
+            // The pick-level gate only throttles scanning: it must never purge a
+            // roll a scan actually produced. Purging here is what made the panel
+            // vanish for the rest of the match when `nextPick` ran ahead of the
+            // player's level (one over-counted pick). Only an explicit dismissal
+            // or a fresh empty scan may clear a displayed roll.
             pushMayhemOverlayPatch();
             return;
         }
@@ -1677,7 +1780,7 @@ async function tickMayhemOcr(): Promise<void> {
             isDead: !!lastGoodPayload?.localPlayer?.isDead,
             signals,
             liveAugmentIds: mayhemLiveAugmentIds,
-            autoOcrAllowed: active ? shouldRunMayhemAutoOcr(level) : true,
+            autoOcrAllowed: active ? autoOcrWanted : true,
             manualScanActive: mayhemManualScanActive(),
         },
         (minMatches) =>
@@ -1810,6 +1913,7 @@ function resetMatchCaches(): void {
     resetMayhemMatchState();
     mayhemBurstUntilMs = 0;
     mayhemLastLevel = 0;
+    mayhemAutoOcrRearmLevel = null;
     mayhemWasDead = false;
     mayhemLastEventScanId = 0;
     mayhemEventScanFrom = 0;

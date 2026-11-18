@@ -1,4 +1,6 @@
 import {
+  isMayhemDismissedRecently,
+  MAYHEM_DISMISS_MS,
   shouldRunOverlayClock,
   shouldRunMayhemDismissTick,
 } from './src/overlay/overlayLogic';
@@ -77,21 +79,52 @@ ok(
   'clock does not tick when every gate is closed'
 );
 
-// --- shouldRunMayhemDismissTick: hidden page must never tick ----------------
+// --- isMayhemDismissedRecently: wall-clock expiry, no visibility gate ------
+const DISMISS_AT = 1_700_000_000_000;
+
+ok(
+  isMayhemDismissedRecently({
+    inMayhem: true,
+    dismissedAt: DISMISS_AT,
+    nowMs: DISMISS_AT + MAYHEM_DISMISS_MS - 1,
+  }),
+  'a dismissal is still active one ms before the window closes (hidden window, not expired)'
+);
+ok(
+  !isMayhemDismissedRecently({
+    inMayhem: true,
+    dismissedAt: DISMISS_AT,
+    nowMs: DISMISS_AT + MAYHEM_DISMISS_MS,
+  }),
+  'a dismissal expires at MAYHEM_DISMISS_MS of wall clock even while the window is hidden (expired)'
+);
+ok(
+  !isMayhemDismissedRecently({
+    inMayhem: true,
+    dismissedAt: DISMISS_AT,
+    nowMs: DISMISS_AT + MAYHEM_DISMISS_MS + 300_000,
+  }),
+  'a dismissal that outlived a minutes-long hidden window is expired, not latched'
+);
+ok(
+  !isMayhemDismissedRecently({ inMayhem: false, dismissedAt: DISMISS_AT, nowMs: DISMISS_AT + 1 }),
+  'no dismissal outside Mayhem/ARAM'
+);
+ok(
+  !isMayhemDismissedRecently({ inMayhem: true, dismissedAt: undefined, nowMs: DISMISS_AT }),
+  'no dismissal stamp: nothing to expire'
+);
+
+// --- shouldRunMayhemDismissTick: hidden page must never freeze the tick -----
 const mayhemBase = {
   inMayhem: true,
-  dismissedAt: 1700000000000,
-  pageVisible: true,
+  dismissedAt: DISMISS_AT,
 };
 
-ok(shouldRunMayhemDismissTick(mayhemBase), 'mayhem dismiss tick runs when visible in mayhem with a dismissal');
+ok(shouldRunMayhemDismissTick(mayhemBase), 'mayhem dismiss tick runs in mayhem with a dismissal');
 ok(
   shouldRunMayhemDismissTick({ ...mayhemBase, dismissedAt: 0 }),
   'mayhem dismiss tick runs when dismissedAt is 0 (0 counts as set)'
-);
-ok(
-  !shouldRunMayhemDismissTick({ ...mayhemBase, pageVisible: false }),
-  'mayhem dismiss tick does not run when page hidden'
 );
 ok(
   !shouldRunMayhemDismissTick({ ...mayhemBase, inMayhem: false }),
@@ -104,15 +137,6 @@ ok(
 ok(
   !shouldRunMayhemDismissTick({ ...mayhemBase, dismissedAt: undefined }),
   'mayhem dismiss tick does not run when dismissedAt is undefined'
-);
-ok(
-  !shouldRunMayhemDismissTick({
-    ...mayhemBase,
-    pageVisible: false,
-    inMayhem: false,
-    dismissedAt: null,
-  }),
-  'mayhem dismiss tick does not run when every gate is closed'
 );
 
 if (!process.exitCode) console.log('verify:overlay-clock ok');

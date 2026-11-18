@@ -10,6 +10,8 @@
  *     (`isTrustedMayhemFrame`) with a non-black frame.
  */
 
+import { isUnknownMayhemAugmentId } from './match';
+
 export const MAYHEM_PICK_OFFER_SCANS_REQUIRED = 2;
 export const MAYHEM_PICK_EMPTY_SCANS_REQUIRED = 2;
 
@@ -121,6 +123,12 @@ export const MAYHEM_REROLL_PICK_WINDOW_MS = 8000;
  * the spurious pick back. Returns `reverted: false` (and the same state) for an
  * overlapping roll (a misread of the same shop) or a roll that arrives after
  * the window (a real new pick level).
+ *
+ * An `unknown:` placeholder is a guess, never evidence about the roll, so a
+ * placeholder-only set on either side can never move the counter — in either
+ * direction. On patch day the next shop can be three placeholders; without the
+ * guard they are trivially disjoint from a known roll and would undo a pick the
+ * player really took (the counter is authoritative when `owned` is empty).
  */
 export function revertMayhemRerollPick(
   state: MayhemPickCounterState,
@@ -130,6 +138,8 @@ export function revertMayhemRerollPick(
 ): { state: MayhemPickCounterState; reverted: boolean } {
   if (state.picksTaken <= 0) return { state, reverted: false };
   if (!previousRollIds.length || !nextRollIds.length) return { state, reverted: false };
+  if (nextRollIds.every((id) => isUnknownMayhemAugmentId(id))) return { state, reverted: false };
+  if (previousRollIds.every((id) => isUnknownMayhemAugmentId(id))) return { state, reverted: false };
   if (!Number.isFinite(elapsedSincePickMs)) return { state, reverted: false };
   if (elapsedSincePickMs < 0 || elapsedSincePickMs > MAYHEM_REROLL_PICK_WINDOW_MS) {
     return { state, reverted: false };

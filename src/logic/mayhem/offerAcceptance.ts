@@ -48,7 +48,11 @@ export interface MayhemOfferAcceptanceInput {
   fuzzyScore: number;
   /** The display ids the previous frame left behind. */
   previousIds: string[];
-  /** A pick session is open: keep the last roll across empty/partial reads. */
+  /**
+   * A pick session is open: keep the last roll across empty/partial reads.
+   * Threaded into the stability guard, whose no-session branch is the live
+   * "retain off" path (it clears a stale reroll hint and returns this frame).
+   */
   retain: boolean;
   stability: MayhemOfferStabilityState;
 }
@@ -77,8 +81,12 @@ export function acceptMayhemOfferFrame(input: MayhemOfferAcceptanceInput): Mayhe
     next = input.previousIds;
   }
 
-  const ids = input.retain
-    ? stabilizeMayhemOffers(input.previousIds, next, input.text, true, input.stability)
-    : next;
+  const ids = stabilizeMayhemOffers(
+    input.previousIds,
+    next,
+    input.text,
+    input.retain,
+    input.stability
+  );
   return { ids, candidateIds, frameIds, placeholderIds };
 }

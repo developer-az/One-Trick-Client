@@ -71,9 +71,18 @@ export interface MayhemMonitorRead {
   candidateIds: string[];
   /**
    * Bundle-matched ids on this frame only; the pick counter reads nothing else.
-   * Never an `unknown:` placeholder: those display but cannot prove an offer.
+   * Never an `unknown:` placeholder: placeholders never latch DISCOVERY and
+   * never move the pick counter. Display ids / `augmentOffersDetected` are not
+   * proof of Mayhem mode either — they only feed the mode hint.
    */
   frameIds: string[];
+  /**
+   * Card rows THIS frame read: bundle matches plus `unknown:` placeholders, and
+   * never the retained display roll. A 3-row shop from a patch newer than the
+   * bundle is still a real shop for the pick counter's arm gate, while a
+   * retained roll or a 1-known-plus-junk read is not.
+   */
+  frameDisplayCount: number;
   fresh: boolean;
   valid: boolean;
   fuzzyScore: number;
@@ -248,13 +257,25 @@ export function noteMayhemDiscoveryTrigger(
   const eligible = options.anyAramQueue
     ? isMayhemDiscoverySignals(input.signals)
     : isUnknownQueueAram(input.signals);
-  if (!discovery.latched && !discovery.exhausted && eligible) {
+  if (!discovery.latched && eligible) {
     const levelHit = MAYHEM_DISCOVERY_LEVELS.find(
       (level) => input.level >= level && level > discovery.levelBurst
     );
     const deathEdge = input.isDead && !discovery.wasDead;
-    if (levelHit != null) discovery.levelBurst = levelHit;
-    if (levelHit != null || deathEdge) {
+    if (levelHit != null) {
+      // A new augment window is a genuinely new chance, and it opens a new
+      // per-level budget: a spent scan/burst budget (or an exhausted flag) from
+      // the previous level must not close discovery for the rest of the match,
+      // which is exactly how levels 7/11/15 used to lose their shop window.
+      discovery.levelBurst = levelHit;
+      discovery.emptyBursts = 0;
+      discovery.exhausted = false;
+      discovery.scans = 0;
+      discovery.bursts = 0;
+      discovery.burstStartedAt = null;
+      discovery.burstOffers = 0;
+    }
+    if (!discovery.exhausted && (levelHit != null || deathEdge)) {
       // A trigger inside a live burst does not extend it: the burst is already
       // scanning, and re-arming on every death is what made discovery run for
       // a whole classic-ARAM game.
@@ -262,12 +283,6 @@ export function noteMayhemDiscoveryTrigger(
         if (discovery.bursts > 0 && discovery.burstOffers === 0) {
           // The burst that just ended never read a single offer.
           discovery.emptyBursts += 1;
-        }
-        if (levelHit != null) {
-          // A new augment window (level 7/11/15) is a genuinely new chance: two
-          // unlucky empty bursts (a black frame, the shop not yet open) must not
-          // close discovery before the level that could have shown offers.
-          discovery.emptyBursts = 0;
         }
         if (
           discovery.emptyBursts >= MAX_DISCOVERY_EMPTY_BURSTS ||
@@ -313,6 +328,10 @@ export function mayhemMonitorMode(
   signals: MayhemModeSignals
 ): MayhemMode {
   if (state.discovery.latched) return 'mayhem';
+  // Display ids (which may be `unknown:` placeholders) only raise the
+  // `augmentOffersDetected` hint: they are not proof of Mayhem mode. Only the
+  // known-`frameIds` latch above proves the match, so placeholders never latch
+  // DISCOVERY on a classic ARAM match.
   return detectMayhemMode({
     ...signals,
     augmentOffersDetected:
@@ -440,11 +459,15 @@ export async function runMayhemMonitorScan(
   // A roll from a patch newer than the bundle can show 1-2 known cards with the
   // rest as `unknown:` placeholders. The pick counter only arms on a full roll,
   // so without this a stale bundle would silently stop counting picks for the
-  // match. Two display rows plus at least one bundle match is a real shop; a
-  // frame with no known id at all (junk, or an unproven guess) still counts
-  // nothing, because placeholders alone never arm the streak.
+  // match. A real shop is either two known offers or a full 3-row frame (two
+  // placeholders beside one known card). The row count must come from this
+  // frame (`frameDisplayCount`), not from `ids`: `ids` is the retained roll on
+  // an empty/partial read, and a placeholder row is not proof of an offer. A
+  // frame with no known id at all (junk) still counts nothing.
   const proofOffers =
-    offers >= 2 || (offers >= 1 && read.ids.length >= 2) ? Math.max(offers, 2) : offers;
+    offers >= 2 || (offers >= 1 && read.frameDisplayCount >= 3)
+      ? Math.max(offers, 2)
+      : offers;
   if (read.fresh) {
     next.fuzzyScore = read.fuzzyScore;
     if (usable) {
@@ -522,6 +545,46 @@ export function mayhemAutoOcrWanted(input: {
   if (nextPick != null) return input.level >= nextPick || input.hudVisible;
   const lastLevel = MAYHEM_AUGMENT_LEVELS[MAYHEM_AUGMENT_LEVELS.length - 1];
   return input.level >= lastLevel || input.hudVisible;
+}
+
+/** Highest augment level the champion level has reached (3/7/11/15), else null. */
+export function mayhemAugmentLevelEdge(level: number): number | null {
+  let edge: number | null = null;
+  for (const pickLevel of MAYHEM_AUGMENT_LEVELS) {
+    if (level >= pickLevel) edge = pickLevel;
+  }
+  return edge;
+}
+
+/**
+ * The pick-level gate with a level-up re-arm, as the live poll uses it.
+ *
+ * `mayhemAutoOcrWanted` throttles scanning while no augment window is
+ * expected, but the pick count it reads is an estimate that can run one pick
+ * ahead (owned ids / LCU / the persisted counter). When it does, `nextPick`
+ * lands past the player's real level and the plain gate would switch scanning
+ * off for the rest of the match — at exactly level 7 the panel never returns.
+ * A new augment level edge therefore grants one fresh attempt, so a raised
+ * level can never strand the panel; within the same edge the gate still
+ * throttles exactly as before.
+ *
+ * `rearmedAtLevel` is the edge that already spent its re-arm (or null before
+ * the first blocked tick); callers carry the returned value to the next call.
+ */
+export function mayhemAutoOcrGate(input: {
+  level: number;
+  ownedCount: number;
+  hudVisible: boolean;
+  rearmedAtLevel: number | null;
+}): { wanted: boolean; rearmedAtLevel: number | null } {
+  if (mayhemAutoOcrWanted(input)) {
+    return { wanted: true, rearmedAtLevel: input.rearmedAtLevel };
+  }
+  const edge = mayhemAugmentLevelEdge(input.level);
+  if (edge != null && edge > (input.rearmedAtLevel ?? 0)) {
+    return { wanted: true, rearmedAtLevel: edge };
+  }
+  return { wanted: false, rearmedAtLevel: input.rearmedAtLevel };
 }
 
 /** Injectable one-shot timers, so the poll chain can be proven without Electron. */

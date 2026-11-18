@@ -101,11 +101,13 @@ function emptyRead(): MayhemMonitorRead {
     ids: [],
     candidateIds: [],
     frameIds: [],
+    frameDisplayCount: 0,
     fresh: true,
     valid: true,
     fuzzyScore: 0.93,
     blackFrame: false,
     foreground: true,
+    owner: true,
   };
 }
 
@@ -213,7 +215,12 @@ async function main(): Promise<void> {
 
     // Queue 450 lifecycle: PageDown's two offers are visible, PageUp dismisses.
     const panelIds = ['jeweled_gauntlet', 'giant_slayer'];
-    const panelRead: MayhemMonitorRead = { ...emptyRead(), ids: panelIds, frameIds: panelIds };
+    const panelRead: MayhemMonitorRead = {
+      ...emptyRead(),
+      ids: panelIds,
+      frameIds: panelIds,
+      frameDisplayCount: panelIds.length,
+    };
     const state = createMayhemMonitorState();
     ok(noteMayhemManualScan(state, CLASSIC_ARAM, panelRead) === false, 'a classic ARAM manual scan never latches Mayhem');
     ok(mayhemMonitorMode(state, CLASSIC_ARAM) === 'aram', 'classic ARAM 450 stays ARAM after the scan');

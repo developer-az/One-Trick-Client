@@ -20,9 +20,18 @@
  *  10. a new augment level clears the empty-burst streak, so two unlucky empty
  *      bursts cannot kill level 7/11/15 discovery;
  *  11. a stale bundle (1 known + 2 placeholders) still arms the pick counter,
- *      while a 0-known junk frame still cannot.
+ *      while a 0-known junk frame and a 1-known + junk frame still cannot;
+ *  12. through the real `mayhem-likely` gate (mode -> `mayhemMatch` -> the OCR
+ *      path, pinned as source text so §12 reads the real gate): a patch-day roll
+ *      of three unknown titles still displays all three rows, displays nothing
+ *      in the trust path, never latches or counts, and never evicts a known 1-2
+ *      row roll or arms the fast poll. A shop-shaped 3-row all-unknown roll is
+ *      the patch-day reroll itself: it replaces the retired display roll, still
+ *      without arming the poll or counting.
  */
 import bundle from './src/data/mayhem/bundle.json';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   isUnknownMayhemAugmentId,
   matchAugmentOffersFromOcr,
@@ -43,7 +52,13 @@ import {
   runMayhemMonitorScan,
   type MayhemMonitorRead,
 } from './src/logic/mayhem/monitor';
-import type { MayhemModeSignals } from './src/logic/mayhem/mode';
+import { detectMayhemMode, isMayhemMode, type MayhemModeSignals } from './src/logic/mayhem/mode';
+import {
+  detectMayhemOffers,
+  isMayhemOcrRerollPending,
+  resetMayhemOcrCache,
+  setMayhemOcrRetainOffers,
+} from './electron/mayhem-ocr';
 import {
   createMayhemPickCounterState,
   observeMayhemPickScan,
@@ -115,6 +130,7 @@ function readFromOcr(text: string, fuzzyScore = 0.95, mayhemMatch = false): Mayh
     ids: accepted.ids,
     candidateIds: accepted.candidateIds,
     frameIds: accepted.frameIds,
+    frameDisplayCount: accepted.frameIds.length + accepted.placeholderIds.length,
     fresh: true,
     valid: true,
     fuzzyScore,
@@ -227,6 +243,31 @@ async function main(): Promise<void> {
     ok(!late.reverted && late.state.picksTaken === 1, 'a real next-level roll after the window still counts');
     const overlap = revertMayhemRerollPick(counter, ROLL_A, [ROLL_A[0], ROLL_B[0]], 1500);
     ok(!overlap.reverted && overlap.state.picksTaken === 1, 'an overlapping roll is not a reroll');
+
+    // Patch day: the next shop is three titles the bundle does not know. They
+    // are trivially disjoint from a known roll, but a placeholder is a guess,
+    // not evidence — it must not take a real pick back (the OCR counter is
+    // authoritative when `owned` is empty).
+    const placeholderNext = revertMayhemRerollPick(
+      counter,
+      ROLL_A,
+      ['unknown:x', 'unknown:y', 'unknown:z'],
+      1500
+    );
+    ok(
+      !placeholderNext.reverted && placeholderNext.state.picksTaken === 1,
+      'an all-unknown roll never reverts a pick'
+    );
+    const placeholderPrevious = revertMayhemRerollPick(
+      counter,
+      ['unknown:x', 'unknown:y', 'unknown:z'],
+      ROLL_B,
+      1500
+    );
+    ok(
+      !placeholderPrevious.reverted && placeholderPrevious.state.picksTaken === 1,
+      'an all-unknown previous roll never reverts a pick either'
+    );
   }
 
   // --- 5. ranking follows the accepted roll ---
@@ -380,6 +421,32 @@ async function main(): Promise<void> {
         `${junkLine} is not a placeholder offer (${lineMatch.ids.join(',')})`
       );
     }
+    // Every word two letters long ("Ah Ri") is a roster/scoreboard artifact, not
+    // a card title. "Ez Real" and "AD Carry" still pass the placeholder rule, so
+    // pin both decisions: they may display on a proven Mayhem match, but they are
+    // never a known card and never trust-path evidence.
+    const ahRi = matchAugmentOffersFromOcr('Ah Ri', data.augments, true);
+    ok(
+      ahRi.ids.length === 0 && ahRi.placeholderIds.length === 0,
+      `"Ah Ri" is not a placeholder offer even on a Mayhem match (${ahRi.ids.join(',')})`
+    );
+    for (const shortName of ['Ez Real', 'AD Carry']) {
+      const alone = matchAugmentOffersFromOcr(shortName, data.augments);
+      ok(
+        alone.ids.length === 0,
+        `"${shortName}" alone draws nothing when Mayhem is not proven (${alone.ids.join(',')})`
+      );
+      const proven = matchAugmentOffersFromOcr(shortName, data.augments, true);
+      ok(
+        proven.placeholderIds.length === 1 && proven.knownIds.length === 0,
+        `"${shortName}" is a display-only placeholder on a Mayhem match (${proven.ids.join(',')})`
+      );
+      const besideKnown = matchAugmentOffersFromOcr(`Jeweled Gauntlet\n${shortName}`, data.augments);
+      ok(
+        besideKnown.knownIds.length === 1 && besideKnown.placeholderIds.length === 1,
+        `"${shortName}" beside a known card stays out of the trust path`
+      );
+    }
     for (const junkFrameText of ['YASUO\nASHE', 'Double Kill\nYou Have Been Slain']) {
       const frameMatch = matchAugmentOffersFromOcr(junkFrameText, data.augments);
       ok(
@@ -490,12 +557,15 @@ async function main(): Promise<void> {
     ok(trigger(t + 182_000, 7, false), 'level 7 still opens a burst after two empty ones');
     ok(state.discovery.exhausted === false, 'two empty bursts do not end discovery before level 7');
     ok(state.discovery.emptyBursts === 0, 'the new augment level cleared the empty streak');
-    ok(state.discovery.bursts === 3, `the level-7 burst is a real third burst (${state.discovery.bursts})`);
+    ok(
+      state.discovery.bursts === 1 && state.discovery.scans === 0,
+      `the new level restarts the per-level burst/scan budget (${state.discovery.bursts} burst, ${state.discovery.scans} scans)`
+    );
     ok(
       mayhemMonitorWantsScan(state, CLASSIC_450, t + 182_000) === 'discovery',
       'the level-7 burst still wants a discovery scan'
     );
-    // The hard caps still apply to the level-triggered bursts.
+    // The hard caps are still per level: six bursts inside one level, no more.
     ok(state.discovery.bursts < 6, 'the burst cap is not bypassed by the level reset');
   }
 
@@ -565,6 +635,238 @@ async function main(): Promise<void> {
       readFromOcr('', 0.2),
     ]);
     ok(junk.counted === 0, 'a 0-known junk frame still never arms the pick counter');
+
+    // The arm gate must read THIS frame's row count, never the retained roll.
+    // One known card plus one junk row is a 2-row frame, not a 3-card shop.
+    const onePlusJunk = readFromOcr('Jeweled Gauntlet\nYASUO', 0.97, true);
+    ok(
+      onePlusJunk.frameIds.length === 1 && onePlusJunk.frameDisplayCount === 2,
+      `a 1-known + junk frame is 2 rows (${onePlusJunk.frameDisplayCount})`
+    );
+    const mixed = await scanWith(52_000_000, [
+      onePlusJunk,
+      onePlusJunk,
+      readFromOcr('', 0.2),
+      readFromOcr('', 0.2),
+    ]);
+    ok(mixed.counted === 0, 'a 1-known + junk frame never arms the pick streak');
+  }
+
+  // --- 12. the mayhem-likely gate: display is not trust ---
+  console.log('--- 12. mayhem-likely displays a post-patch roll and trusts none of it ---');
+  {
+    // The real gate: game-monitor derives `mayhemMatch` from the match mode, so
+    // an unknown-queue Howling Abyss match (`mayhem-likely`) counts as a Mayhem
+    // match. Handing `true` straight to the seam is what hid the regression:
+    // on patch day every card can be newer than the bundle, so the frame has 0
+    // known ids, nothing displays, the mode can never latch, and the panel
+    // stayed blank for the whole match.
+    const MAYHEM_LIKELY: MayhemModeSignals = {
+      gameMode: 'ARAM',
+      mapName: 'Map12',
+      queueId: null,
+      mapId: 12,
+    };
+    const mode = detectMayhemMode(MAYHEM_LIKELY);
+    const mayhemMatch = isMayhemMode(mode);
+    ok(
+      mode === 'mayhem-likely' && mayhemMatch,
+      `an unknown-queue Howling Abyss match is mayhem-likely and a gated Mayhem match (${mode})`
+    );
+    ok(
+      !isMayhemMode('aram') && !isMayhemMode('other'),
+      'classic ARAM and other modes stay outside the placeholder gate'
+    );
+
+    // Three titles the bundle does not know: exactly the patch-day shop.
+    const postPatch = 'Chrono Surge\nThe Timeless\nCelestial Roar';
+    const withScreen = (text: string) => async () => ({
+      parsed: {
+        text,
+        target: { pid: 4242, exe: 'League of Legends', foreground: true },
+        blackFrame: false,
+        language: null,
+        noTarget: false,
+        fallback: false,
+      },
+      owner: true,
+    });
+
+    // The whole path, no hand-built frame or hand-set flag: mode -> mayhemMatch
+    // -> the real matcher/acceptance seam -> the monitor engine.
+    resetMayhemOcrCache();
+    setMayhemOcrRetainOffers(false);
+    const postPatchRead = await detectMayhemOffers(data.augments, 0, {
+      minMatches: 2,
+      mayhemMatch,
+      readScreen: withScreen(postPatch),
+    });
+    ok(
+      postPatchRead.ids.length === 3 && postPatchRead.ids.every((id) => isUnknownMayhemAugmentId(id)),
+      `a post-patch roll displays three titled rows (${postPatchRead.ids.join(',')})`
+    );
+    ok(postPatchRead.frameIds.length === 0, 'none of them is a known id (the trust path stays empty)');
+    ok(
+      postPatchRead.frameDisplayCount === 3,
+      `the frame still reports three rows for the counter's eye (${postPatchRead.frameDisplayCount})`
+    );
+    ok(postPatchRead.refusal === null, 'the scan really ran (no throttle/in-flight refusal)');
+    ok(isMayhemOcrRerollPending() === false, 'a placeholder-only frame does not arm the fast poll');
+
+    const postPatchScan = await runMayhemMonitorScan(
+      createMayhemMonitorState(),
+      {
+        now: 60_000_000,
+        level: 7,
+        isDead: false,
+        signals: MAYHEM_LIKELY,
+        liveAugmentIds: [],
+        autoOcrAllowed: true,
+      },
+      async () => postPatchRead
+    );
+    ok(
+      postPatchScan.state.displayIds.length === 3,
+      `the panel draws all three placeholders (${postPatchScan.state.displayIds.join(',')})`
+    );
+    ok(postPatchScan.state.discovery.latched === false, 'placeholders never latch the match as proven Mayhem');
+    ok(
+      postPatchScan.counted === 0 && postPatchScan.state.counter.picksTaken === 0,
+      'placeholders never move the pick counter'
+    );
+
+    // A known roll already on the panel is not evicted by a 1–2 row
+    // placeholder-only frame: that is a scoreboard / kill-callout guess, so the
+    // HUD retains the roll and the stability guard refuses the swap.
+    resetMayhemOcrCache();
+    setMayhemOcrRetainOffers(false);
+    const knownRead = await detectMayhemOffers(data.augments, 0, {
+      minMatches: 2,
+      mayhemMatch,
+      readScreen: withScreen('Jeweled Gauntlet\nGiant Slayer\nRecursion'),
+    });
+    ok(
+      knownRead.ids.length === 3 && knownRead.frameIds.length === 3,
+      `a known roll is read normally first (${knownRead.ids.join(',')})`
+    );
+    setMayhemOcrRetainOffers(true);
+    const keptRead = await detectMayhemOffers(data.augments, 0, {
+      minMatches: 2,
+      mayhemMatch,
+      readScreen: withScreen('Reroll 2 left\nChrono Surge\nThe Timeless'),
+    });
+    ok(
+      countRankOrder(keptRead.ids) === countRankOrder(knownRead.ids),
+      `the displayed known roll survives a 2-row placeholder-only frame (${keptRead.ids.join(',')})`
+    );
+    ok(isMayhemOcrRerollPending() === false, 'and that frame does not arm the fast poll');
+    ok(keptRead.frameIds.length === 0, 'the placeholder frame adds nothing to the trust path');
+
+    // A THREE-row all-unknown frame is shop-shaped: on patch day that is the
+    // reroll itself, so it must replace the retired roll instead of advising on
+    // cards the player can no longer pick. It still arms nothing and counts
+    // nothing (display ids are not trust).
+    resetMayhemOcrCache();
+    setMayhemOcrRetainOffers(false);
+    const knownBeforeReroll = await detectMayhemOffers(data.augments, 0, {
+      minMatches: 2,
+      mayhemMatch,
+      readScreen: withScreen('Jeweled Gauntlet\nGiant Slayer\nRecursion'),
+    });
+    setMayhemOcrRetainOffers(true);
+    const replacedRead = await detectMayhemOffers(data.augments, 0, {
+      minMatches: 2,
+      mayhemMatch,
+      readScreen: withScreen(`Reroll 2 left\n${postPatch}`),
+    });
+    ok(
+      replacedRead.ids.length === 3 &&
+        replacedRead.ids.every((id) => isUnknownMayhemAugmentId(id)) &&
+        !replacedRead.ids.some((id) => knownBeforeReroll.ids.includes(id)),
+      `a 3-row all-unknown reroll replaces the known display roll (${replacedRead.ids.join(',')})`
+    );
+    ok(isMayhemOcrRerollPending() === false, 'the 3-row all-unknown reroll does not arm the fast poll');
+    ok(replacedRead.frameIds.length === 0, 'and it adds nothing to the trust path');
+
+    const junkState = freshState();
+    const junkAccepted = acceptMayhemOfferFrame({
+      text: 'EZ REAL\nAD CARRY',
+      matched: matchAugmentOffersFromOcr('EZ REAL\nAD CARRY', data.augments, mayhemMatch).ids,
+      minMatches: 2,
+      fuzzyScore: 0.2,
+      previousIds: knownRead.ids,
+      retain: true,
+      stability: junkState,
+    });
+    ok(
+      countRankOrder(junkAccepted.ids) === countRankOrder(knownRead.ids) && junkState.rerollPending === false,
+      'a scoreboard-style placeholder frame likewise cannot evict the known roll or arm the poll'
+    );
+
+    // The reroll-text branch itself: an all-unknown frame must not arm the fast
+    // poll even with nothing — or only placeholders — previously displayed.
+    const emptyState = freshState();
+    const firstShown = stabilizeMayhemOffers(
+      [],
+      ['unknown:x', 'unknown:y'],
+      'Reroll 2 left',
+      true,
+      emptyState
+    );
+    ok(
+      firstShown.length === 2 && emptyState.rerollPending === false,
+      'an all-unknown frame with no previous roll still displays and never arms the fast poll'
+    );
+    const placeholdersOnly = freshState();
+    stabilizeMayhemOffers(['unknown:a'], ['unknown:x', 'unknown:y'], 'Reroll 2 left', true, placeholdersOnly);
+    ok(
+      placeholdersOnly.rerollPending === false,
+      'an all-unknown frame over an all-placeholder roll never arms the fast poll either'
+    );
+
+    // A real new roll is unaffected: the guard is not a freeze.
+    const realState = freshState();
+    const realReroll = acceptMayhemOfferFrame({
+      text: OCR_B,
+      matched: matchAugmentsFromOcr(OCR_B, data.augments),
+      minMatches: 2,
+      fuzzyScore: 0.95,
+      previousIds: knownRead.ids,
+      retain: true,
+      stability: realState,
+    });
+    ok(
+      countRankOrder(realReroll.ids) === countRankOrder(ROLL_B),
+      'a real new roll still replaces the old one'
+    );
+
+    // §12 above is only a contract on the gate if it reads the gate. Pin the
+    // two production derivations as source text: both must classify through
+    // `isMayhemMode(mode)` (so `mayhem-likely` is included), not a positive
+    // `mode === 'mayhem'` expression. A revert of either gate fails here.
+    const monitorSource = fs.readFileSync(path.join('electron', 'game-monitor.ts'), 'utf8');
+    const slice = (start: string, end: string): string => {
+      const from = monitorSource.indexOf(start);
+      const to = monitorSource.indexOf(end, from);
+      return from >= 0 && to > from ? monitorSource.slice(from, to) : '';
+    };
+    const tick = slice('async function tickMayhemOcr', 'export function clearMayhemOffersForDashboard');
+    ok(
+      /const\s+mode\s*=\s*currentMayhemMode\(\);/.test(tick) &&
+        /const\s+active\s*=\s*isMayhemMode\(mode\);/.test(tick) &&
+        /mayhemMatch:\s*active/.test(tick),
+      `the auto tick derives mayhemMatch from isMayhemMode(mode) (${tick.length} chars)`
+    );
+    const manual = slice(
+      'export async function triggerManualMayhemOcrFromHotkey',
+      '/** Diagnostics for the performance panel. */'
+    );
+    ok(
+      /const\s+mode\s*=\s*currentMayhemMode\(\);/.test(manual) &&
+        /const\s+modeMayhem\s*=\s*isMayhemMode\(mode\);/.test(manual) &&
+        /mayhemMatch:\s*modeMayhem/.test(manual),
+      `the manual hotkey derives its own mayhemMatch from isMayhemMode(mode) (${manual.length} chars)`
+    );
   }
 
   if (failures > 0) {

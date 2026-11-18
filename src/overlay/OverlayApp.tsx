@@ -22,6 +22,7 @@ import {
   formatGameTime,
   getGankStatus,
   getWardStatus,
+  isMayhemDismissedRecently,
   resolveAllyAdcName,
   resolveAllyMidName,
   resolveAllyJungleName,
@@ -893,16 +894,18 @@ export const OverlayApp: React.FC = () => {
   }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram]);
 
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
-  // value the 120 s dismiss window never expired until some unrelated update
+  // value the dismiss window never expired until some unrelated update
   // re-rendered the overlay, so a dismissed augment panel could stay hidden
   // for the rest of the match. The tick lives in the isolated clock store;
   // this app only subscribes to the *derived* boolean, which flips at most
   // twice per dismissal (set, then expiry) instead of once per second.
+  // The tick keeps running while the page is hidden on purpose: the dismissal
+  // must expire by wall clock even when the panel already hid the window.
+  const mayhemFamily = inMayhem || inAram;
   useEffect(() => {
     const shouldTick = shouldRunMayhemDismissTick({
-      inMayhem,
+      inMayhem: mayhemFamily,
       dismissedAt: state.mayhemAugmentDismissedAt,
-      pageVisible,
     });
     if (!shouldTick) return;
     const tick = (): void => {
@@ -911,15 +914,20 @@ export const OverlayApp: React.FC = () => {
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, [inMayhem, state.mayhemAugmentDismissedAt, pageVisible]);
+  }, [mayhemFamily, state.mayhemAugmentDismissedAt]);
 
   const mayhemDismissedRecently = useSyncExternalStore(
     subscribeOverlayClock,
-    () => {
-      const dismissedAt = state.mayhemAugmentDismissedAt;
-      const nowMs = getOverlayClock().nowMs;
-      return typeof dismissedAt === 'number' && nowMs - dismissedAt < 120_000;
-    },
+    () =>
+      isMayhemDismissedRecently({
+        inMayhem: mayhemFamily,
+        dismissedAt: state.mayhemAugmentDismissedAt,
+        // The store's `nowMs` freezes while the page is hidden; the wall clock
+        // never does. Taking the later value means a visibility change or any
+        // forced re-render recomputes the expiry instead of reusing a stale
+        // `true` from the last visible tick.
+        nowMs: Math.max(getOverlayClock().nowMs, Date.now()),
+      }),
     () => false
   );
 

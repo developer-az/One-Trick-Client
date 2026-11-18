@@ -2,6 +2,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { userDataDir } from './paths';
+import { overlayLog } from './overlay-log';
 import { sanitizeMayhemBundle } from '../src/logic/mayhem/bundleSanitize';
 import {
   refreshMayhemBundleIfStale as runMayhemRefreshPolicy,
@@ -96,26 +97,113 @@ function readBundled(): MayhemBundle | null {
   return null;
 }
 
-function readCache(): MayhemBundle | null {
+/**
+ * `loadMayhemBundle()` runs on the OCR tick (450–1100 ms while a shop is open),
+ * so a cache the sanitizer rejects must not be re-read, re-parsed and
+ * re-sanitized on every tick. Each distinct rejection (reason + detail) is
+ * reported once, through the overlay log so a packaged build carries it in
+ * overlay.log; a later, different failure of the same reason still surfaces.
+ */
+const loggedCacheRejections = new Set<string>();
+
+function logCacheRejection(reason: string, detail: Record<string, unknown> = {}): void {
+  const key = `${reason}|${JSON.stringify(detail)}`;
+  if (loggedCacheRejections.has(key)) return;
+  loggedCacheRejections.add(key);
+  overlayLog('mayhem-cache-rejected', { reason, ...detail });
+}
+
+function badCachePath(): string {
+  return `${cachePath()}.bad`;
+}
+
+/**
+ * Move a cache the sanitizer rejected out of the way. `memory = null` alone
+ * would only hide it for one tick: the next `readCache()` re-reads the file,
+ * and `readCacheMeta()` would keep reporting it as a valid cache, so the
+ * refresh policy saw nothing to repair. Renaming makes the cache genuinely
+ * absent (the bundled file wins, and `missing-cache` triggers a re-sync) while
+ * keeping the bad payload for diagnosis. A previous `.bad` is replaced.
+ */
+function quarantineBadCache(): void {
+  try {
+    fs.rmSync(badCachePath(), { force: true });
+    fs.renameSync(cachePath(), badCachePath());
+    overlayLog('mayhem-cache-quarantined', { file: badCachePath() });
+  } catch (error) {
+    // No cache file on disk (the rejection came from the in-memory copy), or
+    // the file is locked. Leaving it in place means every OCR tick re-reads and
+    // re-rejects it, so the failure must be visible in overlay.log.
+    overlayLog('mayhem-cache-quarantine-failed', {
+      file: cachePath(),
+      error: String(error),
+    });
+  }
+}
+
+/** Why a cache on disk may not be used. Every kind is quarantined. */
+export type MayhemCacheRejection = 'implausible' | 'unsanitizable' | 'malformed';
+
+/**
+ * One cache read: an accepted (already sanitized) bundle, or the rejection that
+ * says why the file must be moved aside. Every rejection returns the file to
+ * the bundled fallback and a `missing-cache` refresh: an implausible or
+ * unsanitizable bundle, and JSON that does not parse at all (which used to
+ * return a bare null and be re-read on every 450-1100 ms OCR tick).
+ */
+type MayhemCacheRead =
+  | { bundle: MayhemBundle; fromFile: boolean }
+  | { reason: MayhemCacheRejection; fromFile: boolean };
+
+/** Sanitize a plausible cache bundle; a structural failure is a rejection, not a throw. */
+function acceptCacheBundle(bundle: MayhemBundle, fromFile: boolean): MayhemCacheRead {
+  try {
+    const sanitized = sanitizeMayhemBundle(bundle as TypedMayhemBundle) as MayhemBundle;
+    memory = sanitized;
+    return { bundle: sanitized, fromFile };
+  } catch (error) {
+    // A structurally valid-but-broken bundle (e.g. a combo row without
+    // augmentIds) must fall back to the bundled file, never throw on the
+    // per-tick load path: a rejected hotkey promise / an ocr-poll-error every
+    // tick is worse than stale data. Drop the in-memory copy too; the caller
+    // quarantines the file when the rejection came from disk.
+    memory = null;
+    logCacheRejection('unsanitizable-bundle', { error: String(error) });
+    return { reason: 'unsanitizable', fromFile };
+  }
+}
+
+function readCache(): MayhemCacheRead | null {
   if (memory) {
-    if (isPlausibleMayhemBundle(memory)) return memory;
+    if (isPlausibleMayhemBundle(memory)) return acceptCacheBundle(memory, false);
     // A truthy-but-empty cache (a bad payload cached by an older build) must
     // not shadow the bundled file for the whole session.
-    console.warn(`[mayhem] ignoring implausible cache (${memory.augments?.length ?? 0} augments)`);
+    logCacheRejection('implausible-memory', { augments: memory.augments?.length ?? 0 });
     memory = null;
   }
+  let raw: string;
   try {
-    const raw = fs.readFileSync(cachePath(), 'utf8');
-    const parsed = JSON.parse(raw) as MayhemBundle;
-    if (isPlausibleMayhemBundle(parsed)) {
-      memory = parsed;
-      return memory;
-    }
-    console.warn(`[mayhem] ignoring cache file (${parsed?.augments?.length ?? 0} augments)`);
+    raw = fs.readFileSync(cachePath(), 'utf8');
   } catch {
-    /* no cache */
+    // No cache file at all (first run, or a completed quarantine): not a
+    // rejection, the bundled file simply answers.
+    return null;
   }
-  return null;
+  let parsed: MayhemBundle;
+  try {
+    parsed = JSON.parse(raw) as MayhemBundle;
+  } catch (error) {
+    // A truncated/hand-edited JSON file parses nowhere but is re-read by every
+    // 450-1100 ms OCR tick. It must be quarantined like an implausible one:
+    // bundled data answers, and the refresh policy sees `missing-cache`.
+    logCacheRejection('malformed-json', { error: String(error) });
+    return { reason: 'malformed', fromFile: true };
+  }
+  if (!isPlausibleMayhemBundle(parsed)) {
+    logCacheRejection('implausible-file', { augments: parsed?.augments?.length ?? 0 });
+    return { reason: 'implausible', fromFile: true };
+  }
+  return acceptCacheBundle(parsed, true);
 }
 
 /** Write only a plausible bundle: a bad payload never replaces a good cache. */
@@ -127,6 +215,8 @@ function writeCache(bundle: MayhemBundle): boolean {
     return false;
   }
   memory = bundle;
+  // A fresh, accepted bundle earns new rejection reports if it later fails.
+  loggedCacheRejections.clear();
   try {
     fs.writeFileSync(cachePath(), JSON.stringify(bundle), 'utf8');
     return true;
@@ -144,16 +234,32 @@ function normalizeBundle(raw: MayhemBundle | null): MayhemBundle | null {
     // A structurally valid-but-broken bundle (e.g. a combo row without
     // augmentIds) must fall back to the bundled file, never throw on the
     // per-tick load path: a rejected hotkey promise / an ocr-poll-error every
-    // tick is worse than stale data.
-    console.warn('[mayhem] ignoring unsanitizable bundle:', error);
+    // tick is worse than stale data. Drop the in-memory copy too; the caller
+    // quarantines the file when the rejection came from disk.
+    memory = null;
+    logCacheRejection('unsanitizable-bundle', { error: String(error) });
     return null;
   }
 }
 
 export function loadMayhemBundle(): MayhemBundle | null {
   // A rejected cache falls back to the file shipped with the app instead of
-  // leaving the session with no augments at all.
-  return normalizeBundle(readCache()) ?? normalizeBundle(readBundled());
+  // leaving the session with no augments at all. Every rejection kind (an
+  // implausible shape, a bundle the sanitizer cannot process, or JSON that does
+  // not parse) is moved aside, so the OCR tick stops re-reading and re-parsing
+  // it.
+  const cached = readCache();
+  if (cached && 'bundle' in cached) return cached.bundle;
+  if (cached) quarantineBadCache();
+  return normalizeBundle(readBundled());
+}
+
+/**
+ * Drop the in-memory copy so the next `loadMayhemBundle()` reads the cache file
+ * again. For verify scripts that exercise the quarantine paths in one process.
+ */
+export function resetMayhemBundleMemoryForTest(): void {
+  memory = null;
 }
 
 async function fetchBundle(): Promise<MayhemBundle> {

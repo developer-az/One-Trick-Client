@@ -46,14 +46,24 @@ let blackFrameSeen = false;
 /** One `ocr-target` line per captured window per match (the game pid changes every game). */
 let loggedTargetSignature = '';
 
+/** Why a `detectMayhemOffers` call did not capture at all. */
+export type MayhemOcrRefusal = 'in-flight' | 'throttled' | 'unsupported' | null;
+
 /**
  * One OCR frame for the monitor.
  *
  * An alias of the monitor's own type, so a field can never be added on one side
  * only, and every return of `detectMayhemOffers` is built by
  * `toMayhemMonitorRead` (which requires an explicit `owner` decision).
+ *
+ * `refusal` is the scan's own verdict on why it did not run: sampled here, at
+ * the moment the throttle/in-flight check decides, instead of by the caller
+ * re-reading module state after the await (a scan that finished in the same
+ * turn would be mislabelled).
  */
-export type MayhemOcrRead = MayhemMonitorRead;
+export type MayhemOcrRead = MayhemMonitorRead & {
+  refusal: MayhemOcrRefusal;
+};
 
 export function getMayhemOcrDebug(): {
   lastSnippet: string;
@@ -140,13 +150,22 @@ function panelScaleForCapture(): number {
   }
 }
 
-/** `owner` from the PowerShell target marker; older scripts omit it. */
+/**
+ * `owner` from the PowerShell target marker; older scripts omit it.
+ *
+ * A truncated JSON payload (the marker line always starts with `{` because the
+ * script uses ConvertTo-Json) is a target line whose owner could not be read:
+ * that is present-but-unparsable, so it is reported untrusted. A payload that
+ * is not JSON at all is an older key=value line that never reported an owner:
+ * absent, so `undefined` (the seam's documented legacy default).
+ */
 export function parseTargetOwner(raw: string): boolean | undefined {
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('__OT_TARGET__')) continue;
+    const payload = trimmed.slice('__OT_TARGET__'.length).trim();
     try {
-      const src = JSON.parse(trimmed.slice('__OT_TARGET__'.length).trim()) as Record<string, unknown>;
+      const src = JSON.parse(payload) as Record<string, unknown>;
       if (typeof src.owner === 'boolean') return src.owner;
       if (typeof src.owner === 'string') {
         const value = src.owner.toLowerCase();
@@ -154,7 +173,7 @@ export function parseTargetOwner(raw: string): boolean | undefined {
         if (value === 'false') return false;
       }
     } catch {
-      return undefined;
+      return payload.startsWith('{') ? false : undefined;
     }
     return undefined;
   }
@@ -389,6 +408,7 @@ export async function detectMayhemOffers(
     ids: lastOfferIds,
     candidateIds: [],
     frameIds: [],
+    frameDisplayCount: 0,
     fresh: false,
     valid: false,
     fuzzyScore: lastFuzzyScore,
@@ -399,10 +419,17 @@ export async function detectMayhemOffers(
   // A throttled/idle read never counts (fresh is false); it still crosses the
   // seam so the gate is a decision on every return, never an omission.
   const idle = toMayhemMonitorRead(idleFields, undefined);
-  if (process.platform !== 'win32') return idle;
+  /** A call that actually captured: it crosses the seam and carries no refusal. */
+  const ran = (fields: MayhemMonitorReadFields, trust: boolean | undefined): MayhemOcrRead => ({
+    ...toMayhemMonitorRead(fields, trust),
+    refusal: null,
+  });
+  // Non-Windows has no capture/OCR path at all: this is not a throttle, and the
+  // hotkey log must not claim one. Sentinels stay untrusted/unusable.
+  if (process.platform !== 'win32') return { ...idle, refusal: 'unsupported' };
   const now = Date.now();
-  if (now - lastOcrAt < minIntervalMs) return idle;
-  if (ocrInFlight) return idle;
+  if (now - lastOcrAt < minIntervalMs) return { ...idle, refusal: 'throttled' };
+  if (ocrInFlight) return { ...idle, refusal: 'in-flight' };
   ocrInFlight = true;
   lastOcrAt = now;
   const ocrStart = performance.now();
@@ -431,6 +458,7 @@ export async function detectMayhemOffers(
       ids: lastOfferIds,
       candidateIds: [],
       frameIds: [],
+      frameDisplayCount: 0,
       fresh: true,
       valid: true,
       fuzzyScore: lastFuzzyScore,
@@ -440,13 +468,13 @@ export async function detectMayhemOffers(
     } satisfies MayhemMonitorReadFields;
     if (parsed.noTarget) {
       lastCaptureMethod = 'none';
-      return toMayhemMonitorRead({ ...baseFields, valid: false, foreground: false }, owner);
+      return ran({ ...baseFields, valid: false, foreground: false }, owner);
     }
     lastOcrSnippet = parsed.text.slice(0, 400);
     if (!parsed.text.trim()) {
       lastCaptureMethod = 'none';
       lastFuzzyScore = 0;
-      return toMayhemMonitorRead({ ...baseFields, fuzzyScore: 0 }, owner);
+      return ran({ ...baseFields, fuzzyScore: 0 }, owner);
     }
     const fuzzyScore = bestAugmentMatchConfidence(parsed.text, augments);
     const effectiveMin = effectiveAutoMinMatches({
@@ -457,12 +485,13 @@ export async function detectMayhemOffers(
     const matched = matchAugmentOffersFromOcr(parsed.text, augments, mayhemMatch);
     lastFuzzyScore = fuzzyScore;
     const accepted = applyMatchedOffers(parsed.text, matched.ids, effectiveMin, fuzzyScore);
-    return toMayhemMonitorRead(
+    return ran(
       {
         ids: accepted.ids,
         candidateIds: accepted.candidateIds,
         // Trust path only: `unknown:` placeholders stay on the display roll.
         frameIds: accepted.frameIds,
+        frameDisplayCount: accepted.frameDisplayCount,
         fresh: true,
         valid: true,
         fuzzyScore,
@@ -474,20 +503,11 @@ export async function detectMayhemOffers(
     );
   } catch (error) {
     logOcrError(String(error));
-    return toMayhemMonitorRead({ ...idleFields, fresh: true, valid: false }, undefined);
+    return ran({ ...idleFields, fresh: true, valid: false }, undefined);
   } finally {
     recordLatency('ocr.mayhem', performance.now() - ocrStart);
     ocrInFlight = false;
   }
-}
-
-/** Back-compat wrapper for callers that only need the ids. */
-export async function detectMayhemOfferIds(
-  augments: MayhemAugment[],
-  minIntervalMs = 2800,
-  opts: { minMatches?: number } = {}
-): Promise<string[]> {
-  return (await detectMayhemOffers(augments, minIntervalMs, opts)).ids;
 }
 
 /** While a Mayhem pick session is active, keep the last good OCR roll instead of clearing on a miss. */
@@ -498,9 +518,10 @@ const offerStability: MayhemOfferStabilityState = { rerollPending: false };
  * `retain` follows whether the HUD is on screen, but `rerollPending` belongs to
  * the roll: a 1-card reroll read arms the 550 ms fast poll, and clearing it here
  * would drop back to the 1.4 s idle gap for exactly the frames that need the
- * quick retry. The flag is inert while retain is off (the poll reads it only
- * when the HUD is up) and `stabilizeMayhemOffers` clears it as soon as the full
- * roll is on screen, so it cannot leak forever.
+ * quick retry. The flag is inert while retain is off — the poll reads it only
+ * when the HUD is up, and a retain-off frame passes through the stability
+ * guard's no-session branch, which clears it — and `stabilizeMayhemOffers`
+ * clears it as soon as the full roll is on screen, so it cannot leak forever.
  */
 export function setMayhemOcrRetainOffers(retain: boolean): void {
   retainOffersOnEmptyMatch = retain;
@@ -524,7 +545,7 @@ function applyMatchedOffers(
   matched: string[],
   minMatches: number,
   fuzzyScore: number
-): { ids: string[]; candidateIds: string[]; frameIds: string[] } {
+): { ids: string[]; candidateIds: string[]; frameIds: string[]; frameDisplayCount: number } {
   const accepted = acceptMayhemOfferFrame({
     text,
     matched,
@@ -535,5 +556,10 @@ function applyMatchedOffers(
     stability: offerStability,
   });
   lastOfferIds = accepted.ids;
-  return accepted;
+  // The frame's own rows: `ids` may be the retained roll, so the count comes
+  // from the acceptance split (this frame's bundle matches + its placeholders).
+  return {
+    ...accepted,
+    frameDisplayCount: accepted.frameIds.length + accepted.placeholderIds.length,
+  };
 }

@@ -20,7 +20,11 @@
  *   7. a bad/empty upstream bundle is rejected before any cache write, an
  *      invalid cache falls back to the bundled file (including a cache with no
  *      combos, which used to throw), a failed refresh keeps a stale-but-valid
- *      cache, and concurrent refreshes share one fetch.
+ *      cache, and concurrent refreshes share one fetch;
+ *   8. ALL rejected cache kinds (implausible shape, unsanitizable bundle,
+ *      unparseable JSON) are quarantined to `mayhem-bundle.json.bad`, so the OCR
+ *      tick stops re-reading them, the bundled file answers, and the refresh
+ *      policy sees `missing-cache` and rewrites the cache.
  *
  * Run: npx --yes tsx verify_mayhem_poll_watchdog.ts
  */
@@ -63,7 +67,7 @@ import {
   logMayhemHotkeyRoute,
   mayhemModeForRouting,
 } from './electron/game-monitor';
-import { loadMayhemBundle, refreshMayhemBundle, refreshMayhemBundleIfStale } from './electron/mayhem-data';
+import { loadMayhemBundle, refreshMayhemBundle, refreshMayhemBundleIfStale, resetMayhemBundleMemoryForTest } from './electron/mayhem-data';
 
 let failures = 0;
 function ok(cond: boolean, msg: string): void {
@@ -224,15 +228,17 @@ async function main(): Promise<void> {
       autoOcrAllowed: true,
       manualScanActive: false,
     };
-    const frame = (ids: string[]): MayhemMonitorRead => ({
+    const frame = (ids: string[], owner: boolean | undefined = true): MayhemMonitorRead => ({
       ids,
       candidateIds: [],
       frameIds: ids,
+      frameDisplayCount: ids.length,
       fresh: true,
       valid: true,
       fuzzyScore: 0.9,
       blackFrame: false,
       foreground: true,
+      owner,
     });
 
     const state = createMayhemMonitorState();
@@ -288,17 +294,34 @@ async function main(): Promise<void> {
     );
 
     // The manual PageDown scan is authoritative too. It cannot run in this
-    // harness (no game), so its contract is pinned at the source: a bump before
-    // the capture await and a second one after it, both before the roll write.
+    // harness (no game), so its contract is pinned as an ORDERING on the real
+    // function: bump, then the capture await, then a second bump, then the roll
+    // write. A literal grep for "two bumps somewhere" would stay green if the
+    // second bump drifted after the write.
     const monitorSource = fs.readFileSync(path.join(process.cwd(), 'electron', 'game-monitor.ts'), 'utf8');
     const manualStart = monitorSource.indexOf('export async function triggerManualMayhemOcrFromHotkey');
     const manualEnd = monitorSource.indexOf('/** Diagnostics for the performance panel. */', manualStart);
     const manual = manualStart >= 0 && manualEnd > manualStart ? monitorSource.slice(manualStart, manualEnd) : '';
-    const bumpOffsets = [...manual.matchAll(/mayhemMonitorEpoch \+= 1/g)].map((m) => m.index ?? -1);
-    const firstWrite = manual.indexOf('mayhemOfferIds = ids');
+    const firstBump = manual.indexOf('mayhemMonitorEpoch += 1');
+    const scanAt = manual.indexOf('await detectMayhemOffers(');
+    const lastBump = manual.lastIndexOf('mayhemMonitorEpoch += 1');
+    const rollWrite = manual.indexOf('mayhemOfferIds = ids');
     ok(
-      manual.length > 0 && bumpOffsets.length >= 2 && bumpOffsets.every((at) => at >= 0 && at < firstWrite),
-      `a manual scan bumps the epoch twice before writing the roll (${bumpOffsets.length} bumps)`
+      manual.length > 0 &&
+        firstBump >= 0 &&
+        scanAt > firstBump &&
+        lastBump > scanAt &&
+        rollWrite > lastBump,
+      `a manual scan bumps, awaits, bumps again, then writes the roll ` +
+        `(bump@${firstBump}, scan@${scanAt}, bump@${lastBump}, write@${rollWrite})`
+    );
+    // A non-fresh manual read means no OCR ran (a scan was already in flight):
+    // writing its empty/retained ids would purge the live panel.
+    const nonFreshGuard = manual.indexOf('if (!read.fresh)');
+    ok(
+      nonFreshGuard > scanAt && nonFreshGuard < lastBump,
+      `the manual scan refuses a non-fresh read before the epoch bump and write ` +
+        `(guard@${nonFreshGuard})`
     );
     const section = (startMarker: string, endMarker: string): string => {
       const start = monitorSource.indexOf(startMarker);
@@ -523,6 +546,80 @@ async function main(): Promise<void> {
       ok(written.augments.length === bundled.augments.length, 'the fetched payload was cached');
     } finally {
       globalThis.fetch = realFetch;
+    }
+
+    // 6e. ALL cache rejections are quarantined. An implausible file used to
+    // return a bare null, so every 450-1100 ms OCR tick re-read and re-parsed it
+    // for the rest of the match; an unsanitizable one was moved aside but never
+    // exercised; JSON that does not parse was a bare `null` as well, so a
+    // truncated file was re-read on every tick forever. Each rejection must
+    // leave `.bad` behind, let the bundled file answer, and let the refresh
+    // policy see a missing cache and rewrite it.
+    const badFile = `${cacheFile}.bad`;
+    const rejections: Array<{ name: string; payload?: unknown; raw?: string }> = [
+      {
+        name: 'unsanitizable',
+        payload: {
+          meta: bundled.meta,
+          augments: bundled.augments.slice(0, 60),
+          combos: [{ championId: 'x' }],
+        },
+      },
+      {
+        name: 'implausible',
+        payload: { meta: bundled.meta, augments: bundled.augments.slice(0, 3), combos: [] },
+      },
+      {
+        name: 'malformed',
+        raw: '{"meta":{"patch":"x"},"augments":[{"id":"broken"',
+      },
+    ];
+    for (const rejection of rejections) {
+      resetMayhemBundleMemoryForTest();
+      const badText = rejection.raw ?? JSON.stringify(rejection.payload);
+      fs.writeFileSync(cacheFile, badText);
+
+      const loaded = loadMayhemBundle();
+      ok(
+        !!loaded && loaded.augments.length === bundled.augments.length,
+        `${rejection.name} cache: the bundled augments answer`
+      );
+      ok(!fs.existsSync(cacheFile), `${rejection.name} cache: the rejected file is moved aside`);
+      ok(
+        fs.existsSync(badFile) && fs.readFileSync(badFile, 'utf8') === badText,
+        `${rejection.name} cache: the bad payload is kept in mayhem-bundle.json.bad`
+      );
+
+      const badMtime = fs.statSync(badFile).mtimeMs;
+      const again = loadMayhemBundle();
+      ok(
+        !!again && again.augments.length === bundled.augments.length,
+        `${rejection.name} cache: the next tick still answers from the bundled file`
+      );
+      ok(
+        fs.statSync(badFile).mtimeMs === badMtime,
+        `${rejection.name} cache: the second load does not re-quarantine or re-read .bad`
+      );
+
+      globalThis.fetch = (async (input: string | URL | Request) => {
+        const url = String(input);
+        const body = url.includes('combos') ? apiDocs.combos : apiDocs.augments;
+        return new Response(JSON.stringify(body), { status: 200 });
+      }) as typeof fetch;
+      try {
+        const refreshed = await refreshMayhemBundleIfStale('quarantine-test');
+        ok(
+          refreshed.reason === 'missing-cache',
+          `${rejection.name} cache: the refresh policy sees a missing cache (${refreshed.reason})`
+        );
+        const rewritten = JSON.parse(fs.readFileSync(cacheFile, 'utf8')) as { augments: unknown[] };
+        ok(
+          fs.existsSync(cacheFile) && rewritten.augments.length === bundled.augments.length,
+          `${rejection.name} cache: the refresh rewrote the cache`
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+      }
     }
   }
 
