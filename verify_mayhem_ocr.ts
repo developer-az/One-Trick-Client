@@ -3,6 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bundle from './src/data/mayhem/bundle.json';
+import {
+  mayhemOcrStabilityForTest,
+  resetMayhemOcrCache,
+  setMayhemOcrRetainOffers,
+} from './electron/mayhem-ocr';
 import { matchAugmentsFromOcr } from './src/logic/mayhem/match';
 import { runMayhemOcrOnImageFile } from './src/logic/mayhem/ocrRunner';
 import type { MayhemBundle } from './src/logic/mayhem/types';
@@ -60,6 +65,15 @@ ok(maxThree.length <= 3, 'matcher returns at most 3 ids');
 const garbage = 'lkjhsdf qwer tyuiop';
 const none = matchAugmentsFromOcr(garbage, data.augments);
 ok(none.length === 0, 'matcher ignores garbage OCR');
+
+// --- Unit: OCR retention counters reset with the cache / retain toggle ---
+const stability = mayhemOcrStabilityForTest();
+stability.missCount = 2;
+setMayhemOcrRetainOffers(false);
+ok((stability.missCount ?? 0) === 0, 'disabling offer retention resets the OCR miss count');
+stability.missCount = 2;
+resetMayhemOcrCache();
+ok((stability.missCount ?? 0) === 0, 'resetting the OCR cache clears the OCR miss count');
 
 const FIXTURES: Array<{ file: string; expect: string[] }> = [
   { file: 'three-offers.png', expect: ['jeweled_gauntlet', 'giant_slayer', 'apex_inventor'] },
