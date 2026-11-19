@@ -557,6 +557,8 @@ export async function detectMayhemOffers(
       mode: mayhemMatch ? 'mayhem' : 'classic',
       state: pipelineState,
       now,
+      cardsVisible: parsed.cardsVisible,
+      cardSlots: parsed.cardSlots,
     });
     const decision: MayhemFrameDecision =
       !opts.forcedManual && evidence.decision === 'preview' ? 'unverified' : evidence.decision;

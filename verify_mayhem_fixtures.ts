@@ -3,7 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bundle from './src/data/mayhem/bundle.json';
-import { parseMayhemOcrOutput } from './src/logic/mayhem/ocrOutput';
+import { parseMayhemOcrOutput, type MayhemOcrOutput } from './src/logic/mayhem/ocrOutput';
+import { classifyMayhemFrame, createMayhemPipelineState } from './src/logic/mayhem/pipeline';
+import type { MayhemBundle } from './src/logic/mayhem/types';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const fixtureDir = path.join(root, 'test-fixtures', 'mayhem-ocr', 'labelled');
@@ -99,12 +101,73 @@ ok(
   fixtures.find((fx) => fx.id === 'negative-champion-row')?.label === 'negative',
   'synthetic champion-row fixture is labelled negative'
 );
+ok(
+  fixtures.find((fx) => fx.id === 'positive-headerless-teal')?.label === 'positive',
+  'teal headerless fixture is labelled positive'
+);
+ok(
+  fixtures.find((fx) => fx.id === 'negative-headerless-no-teal')?.label === 'negative',
+  'non-teal headerless fixture is labelled negative'
+);
+ok(
+  fixtures.find((fx) => fx.id === 'positive-4-headerless-teal')?.label === 'positive',
+  'four-card teal headerless fixture is labelled positive'
+);
+ok(
+  fixtures.find((fx) => fx.id === 'negative-aligned-teal')?.label === 'negative',
+  'aligned teal-background fixture is labelled negative'
+);
+ok(
+  fixtures.find((fx) => fx.id === 'negative-full-width-teal')?.label === 'negative',
+  'full-width teal fixture is labelled negative'
+);
+
+// A hand-built/older payload with aligned strong slots but no explicit gap must
+// never pass the pixel gate, even with cardsVisible:true (the fail-closed boundary).
+{
+  const augments = (bundle as MayhemBundle).augments;
+  const gapless = classifyMayhemFrame({
+    lines: [
+      { text: 'Zephyr', rect: { x: 0.2812, y: 0.3796, w: 0.0958, h: 0.0509 } },
+      { text: 'Cinder', rect: { x: 0.4547, y: 0.3796, w: 0.0885, h: 0.0389 } },
+      { text: 'Astral', rect: { x: 0.6286, y: 0.3796, w: 0.0786, h: 0.0389 } },
+    ],
+    augments,
+    mode: 'mayhem-likely',
+    state: createMayhemPipelineState(),
+    now: 60_000_000,
+    cardsVisible: true,
+    cardSlots: [
+      { x: 0.33, body: 9, rim: 9 },
+      { x: 0.5, body: 9, rim: 9 },
+      { x: 0.67, body: 9, rim: 9 },
+    ],
+  });
+  ok(
+    gapless.decision === 'unverified' && gapless.ids.length === 0,
+    'aligned strong slots with no gap never satisfy the pixel gate'
+  );
+}
 
 function liveOcr(): void {
   if (process.platform !== 'win32') {
     console.log('skip live -ImagePath OCR (non-Windows)');
     return;
   }
+  const augments = (bundle as MayhemBundle).augments;
+  // Classify the LIVE PowerShell read of the PNG — text, boxes, slot evidence
+  // and the coarse flag exactly as the Electron pipeline receives them — never
+  // the reconstructed manifest literals the text matrix reasons about.
+  const liveDecision = (parsed: MayhemOcrOutput) =>
+    classifyMayhemFrame({
+      lines: parsed.lines ?? [],
+      augments,
+      mode: 'mayhem-likely',
+      state: createMayhemPipelineState(),
+      now: 60_000_000,
+      cardsVisible: parsed.cardsVisible,
+      cardSlots: parsed.cardSlots,
+    });
   for (const fx of fixtures.filter((f) => f.synthetic && f.image)) {
     const out = execFileSync(
       'powershell.exe',
@@ -115,6 +178,71 @@ function liveOcr(): void {
     const lines = parsed.lines ?? [];
     ok(lines.length > 0, `${fx.id}: OCR produced lines (no positive may read zero)`);
     ok(lines.every(normalized), `${fx.id}: live boxes normalized 0..1`);
+
+    const strongAt = (centers: number[]): number =>
+      (parsed.cardSlots ?? []).filter(
+        (slot) => centers.some((c) => Math.abs(slot.x - c) <= 0.03) && (slot.body >= 8 || slot.rim >= 7)
+      ).length;
+
+    if (fx.id === 'positive-headerless-teal') {
+      ok(parsed.cardsVisible === true, `${fx.id}: teal bodies/rims set the pixel gate`);
+      ok(lines.length === 3, `${fx.id}: three boxed unfamiliar titles`);
+      ok(strongAt([0.33, 0.5, 0.67]) >= 2, `${fx.id}: card-sized teal evidence on the 3-card columns`);
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'accept' && live.ids.length === 3 &&
+          live.cardCount === 3 && live.knownIds.length === 0 && live.placeholderIds.length === 3,
+        `${fx.id}: live PNG classifies accept with 3 placeholders`
+      );
+    }
+    if (fx.id === 'negative-headerless-no-teal') {
+      ok(parsed.cardsVisible === false, `${fx.id}: non-teal bodies/rims clear the pixel gate`);
+      ok(lines.length === 3, `${fx.id}: three boxed unfamiliar titles`);
+      ok(strongAt([0.33, 0.5, 0.67, 0.245, 0.415, 0.585, 0.755]) === 0, `${fx.id}: no card-sized evidence in any slot`);
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'unverified' && live.ids.length === 0 &&
+          live.placeholderIds.length === 0,
+        `${fx.id}: live PNG classifies unverified with no ids`
+      );
+    }
+    if (fx.id === 'positive-4-headerless-teal') {
+      ok(parsed.cardsVisible === true, `${fx.id}: teal bodies/rims set the pixel gate`);
+      ok(lines.length === 4, `${fx.id}: four boxed unfamiliar titles`);
+      ok(strongAt([0.245, 0.415, 0.585, 0.755]) >= 2, `${fx.id}: card-sized teal evidence on the 4-card columns`);
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'accept' && live.ids.length === 4 &&
+          live.cardCount === 4 && live.knownIds.length === 0 && live.placeholderIds.length === 4,
+        `${fx.id}: live PNG classifies accept with 4 placeholders`
+      );
+    }
+    if (fx.id === 'negative-aligned-teal') {
+      ok(lines.length === 3, `${fx.id}: three boxed unfamiliar titles`);
+      ok(strongAt([0.33, 0.5, 0.67, 0.245, 0.415, 0.585, 0.755]) === 0, `${fx.id}: wide teal band is not card-sized evidence`);
+      ok(parsed.cardsVisible === false, `${fx.id}: region sampler does not claim a global teal hit`);
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'unverified' && live.ids.length === 0 &&
+          live.placeholderIds.length === 0,
+        `${fx.id}: live PNG classifies unverified with no ids`
+      );
+    }
+    if (fx.id === 'negative-full-width-teal') {
+      ok(lines.length === 3, `${fx.id}: three boxed unfamiliar titles`);
+      ok(parsed.cardsVisible === true, `${fx.id}: full-width teal band sets the coarse flag`);
+      ok(
+        (parsed.cardSlots ?? []).length === 7 &&
+          (parsed.cardSlots ?? []).every((slot) => (slot.gap ?? 0) > 0),
+        `${fx.id}: teal leaks into every inter-card gap`
+      );
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'unverified' && live.ids.length === 0 &&
+          live.placeholderIds.length === 0,
+        `${fx.id}: live PNG classifies unverified with no ids`
+      );
+    }
 
     for (const id of fx.expectedIds) {
       const title = titleFor(id)!;

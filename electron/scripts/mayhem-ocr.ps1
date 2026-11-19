@@ -183,6 +183,89 @@ function Test-BlackFrame {
   return ($dark / $samples) -ge 0.98
 }
 
+# Name-independent offer evidence: a single teal pixel at a fixed slot can land
+# on an unrelated panel, so each slot must carry CARD-SIZED evidence — a patch of
+# dark-teal body or a run of light-rim/inner contrast. A full-width teal panel
+# also lights every body patch, so the patch must be BOUNDED: the midpoints
+# between neighbouring card columns (and beyond the outer cards) are sampled at
+# the same body rows and must NOT be body-like. The centers are emitted with the
+# evidence; the TS pipeline aligns them with the detected card boxes before any
+# of it can prove a roll.
+# shortcut: fixed normalized slots match our centred offer band, not every HUD scale; upgrade to box-driven sampling if real captures drift.
+$CARD_BODY_MIN = 8
+$CARD_RIM_MIN = 7
+# Both card layouts are 0.17 apart, so half that lands in the inter-card gap.
+$CARD_GAP_OFFSET = 0.085
+
+function Test-CardBody {
+  param([int]$R, [int]$G, [int]$B)
+  return (($R -le 12) -and
+          ($G -ge 7 -and $G -le 32) -and
+          ($B -ge 7 -and $B -le 36) -and
+          ([Math]::Abs($G - $B) -le 7) -and
+          ($G -gt ($R + 4)))
+}
+
+function Get-CardSlotEvidence {
+  param([System.Drawing.Bitmap]$Bitmap, [double]$CenterX)
+  $w = $Bitmap.Width
+  $h = $Bitmap.Height
+  $cx = [int][Math]::Round($CenterX * $w)
+  $bodyY = [int][Math]::Round(0.46 * $h)
+  $rimY = [int][Math]::Round(0.303 * $h)
+  $innerY = [int][Math]::Round(0.312 * $h)
+  $body = 0
+  $rim = 0
+  $gap = 0
+  foreach ($dx in @(-0.02, 0.0, 0.02)) {
+    foreach ($dy in @(-0.02, 0.0, 0.02)) {
+      $x = [int][Math]::Round($cx + $dx * $w)
+      $y = [int][Math]::Round($bodyY + $dy * $h)
+      if ($x -lt 0 -or $x -ge $w -or $y -lt 0 -or $y -ge $h) { continue }
+      $c = $Bitmap.GetPixel($x, $y)
+      if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
+    }
+  }
+  # A teal patch with no non-teal boundary is one band, not separate cards.
+  foreach ($side in @(-1, 1)) {
+    $gx = [int][Math]::Round($cx + $side * $CARD_GAP_OFFSET * $w)
+    if ($gx -lt 0 -or $gx -ge $w) { continue }
+    foreach ($dy in @(-0.02, 0.0, 0.02)) {
+      $y = [int][Math]::Round($bodyY + $dy * $h)
+      if ($y -lt 0 -or $y -ge $h) { continue }
+      $c = $Bitmap.GetPixel($gx, $y)
+      if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $gap += 1 }
+    }
+  }
+  for ($i = -4; $i -le 4; $i++) {
+    $x = [int][Math]::Round($cx + $i * 0.005 * $w)
+    if ($x -lt 0 -or $x -ge $w) { continue }
+    if ($rimY -lt 0 -or $rimY -ge $h -or $innerY -lt 0 -or $innerY -ge $h) { continue }
+    $outer = $Bitmap.GetPixel($x, $rimY)
+    $inner = $Bitmap.GetPixel($x, $innerY)
+    $lumaOuter = 0.2126 * $outer.R + 0.7152 * $outer.G + 0.0722 * $outer.B
+    $lumaInner = 0.2126 * $inner.R + 0.7152 * $inner.G + 0.0722 * $inner.B
+    if ([Math]::Abs($lumaOuter - $lumaInner) -ge 25) { $rim += 1 }
+  }
+  return [pscustomobject]@{
+    x = [Math]::Round($CenterX, 4)
+    body = $body
+    rim = $rim
+    gap = $gap
+  }
+}
+
+function Get-CardSlotEvidenceSet {
+  param([System.Drawing.Bitmap]$Bitmap)
+  $slots = @()
+  # Both layouts: three centred cards and the four-card headliner deal. The
+  # pipeline keeps whichever slots line up with the boxes OCR actually found.
+  foreach ($fx in @(0.33, 0.50, 0.67, 0.245, 0.415, 0.585, 0.755)) {
+    $slots += Get-CardSlotEvidence -Bitmap $Bitmap -CenterX $fx
+  }
+  return $slots
+}
+
 # A crop rect given in screen coordinates, translated into the local pixels of
 # the bitmap captured at $CaptureLeft/$CaptureTop and clipped to that bitmap.
 # The crop arguments name the area to keep; the capture origin is where the
@@ -464,6 +547,30 @@ $file = Await-WinRt ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImageP
 $stream = Await-WinRt ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
 $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+# Pixel gate runs on the saved bitmap before OCR. Black/fallback/no-target
+# frames carry no card evidence, so they emit no marker at all.
+if (-not $blackFrame -and -not $isFallback) {
+  $cardsVisible = 0
+  $cardSlots = @()
+  try {
+    Add-Type -AssemblyName System.Drawing
+    $sampleBmp = [System.Drawing.Bitmap]::FromFile($ImagePath)
+    try {
+      $cardSlots = @(Get-CardSlotEvidenceSet -Bitmap $sampleBmp)
+      $hits = @($cardSlots | Where-Object { $_.body -ge $CARD_BODY_MIN -or $_.rim -ge $CARD_RIM_MIN })
+      if ($hits.Count -ge 2) { $cardsVisible = 1 }
+    } finally {
+      $sampleBmp.Dispose()
+    }
+  } catch {
+    $cardsVisible = 0
+    $cardSlots = @()
+  }
+  Write-Marker 'CARDS_VISIBLE' ([string]$cardsVisible)
+  if ($cardSlots.Count -gt 0) {
+    Write-Output ('__OT_CARD_SLOTS__' + (ConvertTo-Json -InputObject $cardSlots -Compress -Depth 5))
+  }
+}
 $result = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
 $ocrLines = @()
 foreach ($line in $result.Lines) {

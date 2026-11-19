@@ -10,6 +10,22 @@ export interface MayhemOcrTarget {
   foreground?: boolean;
 }
 
+export interface MayhemCardSlot {
+  /** Slot center x, normalized to the captured bitmap (0..1). */
+  x: number;
+  /** Body-like samples in this slot's card-sized body patch. */
+  body: number;
+  /** Rim/inner luminance-contrast samples in this slot. */
+  rim: number;
+  /**
+   * Body-like samples in the gaps between this slot and its neighbours (and
+   * past the outer cards), at the same body rows. Zero means the teal patch is
+   * bounded by non-teal, i.e. a separate card and not one full-width band.
+   * Hand-built reads may omit it, but the parser drops such slots: only an explicit finite gap carries evidence.
+   */
+  gap?: number;
+}
+
 export interface MayhemOcrOutput {
   /** OCR lines with the `__OT_*__` control markers removed. */
   text: string;
@@ -34,6 +50,17 @@ export interface MayhemOcrOutput {
    * counter, unlike a failed/black/fallback or box-less read.
    */
   emptyFrame?: boolean;
+  /**
+   * Name-independent pixel evidence that an augment choice is on screen.
+   * Optional so hand-built reads stay valid; only the PowerShell sampler sets it.
+   */
+  cardsVisible?: boolean;
+  /**
+   * Per-slot card-sized pixel evidence, with normalized slot centers. The
+   * coarse `cardsVisible` flag cannot prove the teal was on the cards; the
+   * pipeline aligns these centers with detected card boxes before trusting it.
+   */
+  cardSlots?: MayhemCardSlot[];
 }
 
 const MARKER = /^__OT_([A-Z0-9_]+)(?:\s+(.*))?__$/;
@@ -105,6 +132,7 @@ function targetFromJson(json: string): MayhemOcrTarget | null {
 
 const TARGET_JSON_PREFIX = '__OT_TARGET__';
 const LINES_JSON_PREFIX = '__OT_LINES__';
+const CARD_SLOTS_JSON_PREFIX = '__OT_CARD_SLOTS__';
 
 type Frame = readonly [number, number, number, number];
 const IDENTITY_FRAME: Frame = [0, 0, 1, 1];
@@ -164,6 +192,27 @@ function linesFromJson(json: string): { lines: NonNullable<MayhemOcrOutput['line
   return { lines, frame };
 }
 
+function cardSlotsFromJson(json: string): MayhemCardSlot[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  const slots: MayhemCardSlot[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const src = item as Record<string, unknown>;
+    const num = (v: unknown): number | undefined =>
+      typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    const x = num(src.x), body = num(src.body), rim = num(src.rim), gap = num(src.gap);
+    if (x === undefined || body === undefined || rim === undefined || gap === undefined) continue;
+    slots.push({ x: unit(x), body, rim, gap });
+  }
+  return slots;
+}
+
 /**
  * Peel the `__OT_*__` control lines off the PowerShell OCR output.
  * The remaining lines are exactly what Windows.Media.Ocr recognized, so the
@@ -178,12 +227,18 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
   let noTarget = false;
   let fallback = false;
   let emptyFrame = false;
+  const visibilityMarkers: string[] = [];
+  const slotPayloads: string[] = [];
 
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.startsWith(LINES_JSON_PREFIX)) {
       const parsedLines = linesFromJson(trimmed.slice(LINES_JSON_PREFIX.length).trim());
       if (parsedLines) lines = parsedLines.lines;
+      continue;
+    }
+    if (trimmed.startsWith(CARD_SLOTS_JSON_PREFIX)) {
+      slotPayloads.push(trimmed.slice(CARD_SLOTS_JSON_PREFIX.length).trim());
       continue;
     }
     if (trimmed.startsWith(TARGET_JSON_PREFIX)) {
@@ -202,9 +257,29 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
     else if (name === 'NO_TARGET') noTarget = true;
     else if (name === 'FALLBACK') fallback = true;
     else if (name === 'EMPTY_FRAME') emptyFrame = true;
+    else if (name === 'CARDS_VISIBLE') {
+      const value = parseBool(rest);
+      visibilityMarkers.push(value === undefined ? '?' : value ? '1' : '0');
+    }
     else if (name === 'OCR_LANG') language = rest.trim() || null;
     else if (name === 'TARGET') target = parseTarget(rest);
   }
 
-  return { text: kept.join('\n'), lines, target, blackFrame, language, noTarget, fallback, emptyFrame };
+  // A marker-shaped OCR line is indistinguishable from a control line. If any
+  // visibility marker disagrees — or is malformed — there is no trustworthy
+  // answer, so fail closed instead of letting the last one win.
+  const distinct = new Set(visibilityMarkers);
+  const cardsVisible =
+    visibilityMarkers.length === 0 || distinct.size !== 1 || distinct.has('?')
+      ? undefined
+      : distinct.has('1');
+  // Slot markers arrive in the same untrusted stream as OCR text. A duplicate
+  // (including a marker-shaped OCR line) cannot be told apart from the real
+  // payload, so any second marker voids the evidence rather than overriding it.
+  const cardSlots = slotPayloads.length === 1 ? cardSlotsFromJson(slotPayloads[0]) : undefined;
+
+  return {
+    text: kept.join('\n'), lines, target, blackFrame, language, noTarget, fallback,
+    emptyFrame, cardsVisible, cardSlots,
+  };
 }

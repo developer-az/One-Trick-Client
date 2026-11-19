@@ -523,6 +523,195 @@
                                                       }
                                                   ]
                                     }
+                     },
+                     {
+                       "id": "positive-headerless-teal",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-headerless-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; name-independent pixel gate)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns x=0.33/0.50/0.67 with dark-teal bodies and light rims, no shop text. Synthetic; expected cardsVisible=true.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 9 },
+                           { "x": 0.5, "body": 9, "rim": 9 },
+                           { "x": 0.67, "body": 9, "rim": 9 },
+                           { "x": 0.245, "body": 3, "rim": 4 },
+                           { "x": 0.415, "body": 6, "rim": 8 },
+                           { "x": 0.585, "body": 6, "rim": 8 },
+                           { "x": 0.755, "body": 3, "rim": 4 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-headerless-no-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-headerless-no-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; name-independent pixel gate)",
+                       "expectedIds": [],
+                       "expectedCardCount": 0,
+                       "notes": "Same geometry and titles as positive-headerless-teal but non-teal bodies and low-contrast rims. Synthetic; expected cardsVisible=false.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 0, "rim": 0 },
+                           { "x": 0.5, "body": 0, "rim": 0 },
+                           { "x": 0.67, "body": 0, "rim": 0 },
+                           { "x": 0.245, "body": 0, "rim": 0 },
+                           { "x": 0.415, "body": 0, "rim": 0 },
+                           { "x": 0.585, "body": 0, "rim": 0 },
+                           { "x": 0.755, "body": 0, "rim": 0 }
+                         ],
+                         "cardsVisible": false
+                       }
+                     },
+                     {
+                       "id": "positive-4-headerless-teal",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-4-headerless-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; four-card column layout)",
+                       "expectedIds": [],
+                       "expectedCardCount": 4,
+                       "notes": "Four unfamiliar titles at the 4-card columns x=0.245/0.415/0.585/0.755 with dark-teal bodies and light rims, no shop text. Synthetic; card slots align with the four detected boxes.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral\nNebula",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.1958, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.3698, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.5438, "y": 0.3796, "w": 0.0786, "h": 0.0389 } },
+                           { "text": "Nebula", "rect": { "x": 0.7068, "y": 0.3796, "w": 0.0948, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 6, "rim": 8 },
+                           { "x": 0.5, "body": 6, "rim": 8 },
+                           { "x": 0.67, "body": 6, "rim": 8 },
+                           { "x": 0.245, "body": 9, "rim": 9 },
+                           { "x": 0.415, "body": 9, "rim": 9 },
+                           { "x": 0.585, "body": 9, "rim": 9 },
+                           { "x": 0.755, "body": 9, "rim": 9 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-aligned-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-aligned-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles over a wide teal band)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns but over a single wide teal band, not card-shaped boxes. No slot has a card-sized teal patch (body 6/9, rim 0), so it stays unverified even though the coarse global teal hit is true — that is the false positive this fixture pins.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.2812, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.4547, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.6286, "y": 0.3796, "w": 0.0786, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.5, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.67, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.245, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.415, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.585, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.755, "body": 6, "rim": 0, "gap": 4 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-full-width-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-full-width-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles over a full-width teal band)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns over one full-width teal band covering the entire body patch. Every slot gets 9 body hits and the coarse flag is true, but the gaps are teal too (gap 6), so the body patch is not bounded by non-teal and it stays unverified. Synthetic; this is the false positive the gap requirement pins.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.2812, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.4547, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.6286, "y": 0.3796, "w": 0.0786, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.5, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.67, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.245, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.415, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.585, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.755, "body": 9, "rim": 0, "gap": 6 }
+                         ],
+                         "cardsVisible": true
+                       }
                      }
                  ]
 }

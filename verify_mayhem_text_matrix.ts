@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bundle from './src/data/mayhem/bundle.json';
-import { parseMayhemOcrOutput } from './src/logic/mayhem/ocrOutput';
+import { parseMayhemOcrOutput, type MayhemCardSlot } from './src/logic/mayhem/ocrOutput';
 import { unknownMayhemAugmentId } from './src/logic/mayhem/match';
 import {
   classifyMayhemFrame,
@@ -46,7 +46,12 @@ interface Fixture {
   expectedIds: string[];
   expectedCardCount: 0 | 3 | 4;
   notes: string;
-  rawOcr?: { text: string; lines: OcrLine[] };
+  rawOcr?: {
+    text: string;
+    lines: OcrLine[];
+    cardSlots?: MayhemCardSlot[];
+    cardsVisible?: boolean;
+  };
 }
 interface Manifest {
   schema: string;
@@ -86,6 +91,35 @@ async function main(): Promise<void> {
     // Frozen scoreboard rows carry K/D/A stats the matcher rejects; id them
     // through the production helper to drive the stabilizer's 3-row branch.
     return f.rawOcr.lines.map((line) => unknownMayhemAugmentId(line.text));
+  };
+  // Drive the pixel gate with the fixture's own parsed output (text, boxes,
+  // card-slot evidence and the coarse marker), not hand-written stand-ins.
+  const parsedFixture = (f: Fixture): ReturnType<typeof parseMayhemOcrOutput> => {
+    if (!f.rawOcr) throw new Error(`fixture ${f.id} has no frozen rawOcr`);
+    const parts: string[] = [];
+    if (f.rawOcr.cardsVisible !== undefined) {
+      parts.push(`__OT_CARDS_VISIBLE ${f.rawOcr.cardsVisible ? 1 : 0}__`);
+    }
+    if (f.rawOcr.cardSlots) {
+      // Frozen fixtures predate the explicit-gap contract; the live sampler emits
+      // gap:0 for these bounded teal patches, so model that in the marker.
+      const slots = f.rawOcr.cardSlots.map((s) => ({ ...s, gap: s.gap ?? 0 }));
+      parts.push(`__OT_CARD_SLOTS__${JSON.stringify(slots)}`);
+    }
+    parts.push(f.rawOcr.text, `__OT_LINES__${JSON.stringify(f.rawOcr.lines)}`);
+    return parseMayhemOcrOutput(parts.join('\n'));
+  };
+  const fromFixture = (f: Fixture, now: number): MayhemFrameEvidence => {
+    const parsed = parsedFixture(f);
+    return classifyMayhemFrame({
+      lines: parsed.lines ?? [],
+      augments,
+      mode: 'mayhem-likely',
+      state: createMayhemPipelineState(),
+      now,
+      cardsVisible: parsed.cardsVisible,
+      cardSlots: parsed.cardSlots,
+    });
   };
 
   // The production seam under test: frozen boxes in, classified evidence out.
@@ -335,6 +369,65 @@ async function main(): Promise<void> {
         last!.ids.length === 0 &&
         last!.knownIds.length === 0 &&
         last!.placeholderIds.length === 0
+    );
+  }
+
+  // The name-independent pixel gate: a headerless all-unknown row is a real
+  // roll only when the card pixels agree. Geometry and the champion-name
+  // rejector are unchanged and still win over a stray teal frame.
+  {
+    const gated = fromFixture(fixture('positive-headerless-teal'), 7000);
+    assert(
+      'headerless all-unknown with pixel gate accepts',
+      gated.cardCount === 3 && gated.decision === 'accept' &&
+        gated.ids.length === 3 && gated.knownIds.length === 0 &&
+        gated.placeholderIds.length === 3 &&
+        gated.ids.every((id) => gated.placeholderIds.includes(id))
+    );
+  }
+  {
+    const ungated = fromFixture(fixture('negative-headerless-no-teal'), 7000);
+    assert(
+      'same rows without pixel gate stay unverified',
+      ungated.cardCount === 3 && ungated.decision === 'unverified' &&
+        ungated.ids.length === 0 && ungated.knownIds.length === 0 &&
+        ungated.placeholderIds.length === 0
+    );
+  }
+  {
+    const scoreboardGated = classifyMayhemFrame({
+      lines: frameLines(fixture('negative-scoreboard')), augments, mode: 'mayhem-likely',
+      state: createMayhemPipelineState(), now: 7000,
+      cardsVisible: true,
+      cardSlots: parsedFixture(fixture('positive-headerless-teal')).cardSlots,
+    });
+    assert(
+      'scoreboard rows with teal elsewhere still rejected',
+      scoreboardGated.decision === 'unverified' &&
+        scoreboardGated.ids.length === 0 && scoreboardGated.knownIds.length === 0 &&
+        scoreboardGated.placeholderIds.length === 0
+    );
+  }
+  {
+    // Teal is present and the titles sit at card columns, but it is one wide
+    // band, not card-sized patches on the detected boxes. The coarse global hit
+    // is deliberately true here: trusting it is the false positive this pins.
+    const aligned = fromFixture(fixture('negative-aligned-teal'), 7000);
+    assert(
+      'aligned teal background over card columns stays unverified',
+      aligned.cardCount === 3 && aligned.decision === 'unverified' &&
+        aligned.ids.length === 0 && aligned.knownIds.length === 0 &&
+        aligned.placeholderIds.length === 0
+    );
+  }
+  {
+    const fourGated = fromFixture(fixture('positive-4-headerless-teal'), 7000);
+    assert(
+      'headerless four-card roll with aligned teal slots accepts',
+      fourGated.cardCount === 4 && fourGated.decision === 'accept' &&
+        fourGated.ids.length === 4 && fourGated.knownIds.length === 0 &&
+        fourGated.placeholderIds.length === 4 &&
+        fourGated.ids.every((id) => fourGated.placeholderIds.includes(id))
     );
   }
 }

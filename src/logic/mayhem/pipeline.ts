@@ -13,6 +13,7 @@
 import { CHAMPION_POSITIONS } from '../championPositions';
 import { isLiveMayhemAugment } from './bundleSanitize';
 import { fuzzyNameScore, normalizeName, unknownMayhemAugmentId } from './match';
+import type { MayhemCardSlot } from './ocrOutput';
 import type { MayhemAugment, MayhemRarity } from './types';
 
 /** One OCR line with its box normalized to the captured bitmap (0..1). */
@@ -56,11 +57,17 @@ export interface MayhemFrameInput {
   mode: MayhemFrameMatchMode;
   state: MayhemPipelineState;
   now: number;
+  /** Coarse pixel flag; required alongside aligned per-slot evidence, never alone. */
+  cardsVisible?: boolean;
+  /** Per-slot pixel evidence, aligned against detected card boxes before use. */
+  cardSlots?: MayhemCardSlot[];
 }
 
 const THREE_COLUMNS = [0.33, 0.5, 0.67];
 const FOUR_COLUMNS = [0.245, 0.415, 0.585, 0.755];
 const COLUMN_TOLERANCE = 0.03;
+const CARD_BODY_MIN = 8;
+const CARD_RIM_MIN = 7;
 const NAME_ROW_MIN_Y = 0.37;
 const NAME_ROW_MAX_Y = 0.44;
 const MIN_CENTER_GAP = 0.12;
@@ -201,6 +208,22 @@ function cardGeometry(lines: MayhemFrameLine[]): GeometryRow[] {
     spaced.push(row);
   }
   return spaced;
+}
+
+/**
+ * Teal away from the cards proves nothing. Only a slot whose center lands on a
+ * detected card-box column, whose own body/rim patch is card-like AND whose gaps
+ * to the neighbouring columns are non-teal counts: a full-width teal band lights
+ * every body patch but has no card boundaries, so it cannot prove separate cards.
+ * Two such slots are needed before a headerless all-unknown row is a roll.
+ */
+function hasAlignedCardPixels(rows: GeometryRow[], slots: MayhemCardSlot[] | undefined): boolean {
+  if (!slots || slots.length === 0) return false;
+  return slots.filter((slot) =>
+    (slot.body >= CARD_BODY_MIN || slot.rim >= CARD_RIM_MIN) &&
+    slot.gap === 0 &&
+    rows.some((row) => Math.abs(row.centerX - slot.x) <= COLUMN_TOLERANCE)
+  ).length >= 2;
 }
 
 interface MatchCandidate {
@@ -353,10 +376,23 @@ export function classifyMayhemFrame(input: MayhemFrameInput): MayhemFrameEvidenc
       reasons: ['all-unknown-roll'],
     };
   }
-  // Without shop evidence an all-unknown row looks like a scoreboard of unfamiliar
-  // names, however many identical reads repeat it. It is never authoritative: no
-  // ids, no pick, no arm, no eviction. The persistent unverified panel is the
-  // honest signal until a shop header or PageDown can confirm the roll.
+  // A header we cannot read is no longer the only confirmation: bounded, card-
+  // sized pixel evidence aligned with the detected boxes proves dark-teal cards
+  // are on screen, independent of their unfamiliar names. The coarse flag must
+  // agree, but alone it cannot accept a row: a full-width teal panel sets it too.
+  // Geometry and the champion-name rejector above have already passed; repetition
+  // never counts.
+  if (input.cardsVisible === true && hasAlignedCardPixels(rows, input.cardSlots)) {
+    return {
+      ids: placeholderIds, knownIds: [], placeholderIds, decision: 'accept', cardCount,
+      reasons: ['all-unknown-card-pixels'],
+    };
+  }
+  // Without shop evidence or a pixel gate an all-unknown row looks like a
+  // scoreboard of unfamiliar names, however many identical reads repeat it. It
+  // is never authoritative: no ids, no pick, no arm, no eviction. The persistent
+  // unverified panel is the honest signal until a shop header, a pixel read or
+  // PageDown can confirm the roll.
   return {
     ids: [], knownIds: [], placeholderIds: [], decision: 'unverified', cardCount,
     reasons: ['all-unknown-no-shop-evidence'],
