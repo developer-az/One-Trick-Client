@@ -38,6 +38,12 @@ export interface MayhemPickScan {
   blackFrame: boolean;
   /** Live Client owned augment ids, when the game exposes them. */
   liveAugmentIds?: string[];
+  /**
+   * This frame displayed card rows even when no id was known. An all-unknown
+   * patch-day roll shows rows with zero matched ids; treating it as an empty
+   * frame would advance the empty streak and book a phantom pick.
+   */
+  hasDisplayedOffers?: boolean;
 }
 
 export function createMayhemPickCounterState(picksTaken = 0): MayhemPickCounterState {
@@ -93,6 +99,9 @@ export function observeMayhemPickScan(
   }
 
   if (scan.offerCount === 0) {
+    // Rows on screen with no known id are a shop the bundle cannot read, not an
+    // empty frame: neither the empty streak nor the armed roll may change.
+    if (scan.hasDisplayedOffers) return state;
     const emptyScans = state.emptyScans + 1;
     const offersWereUp = state.offerScans >= MAYHEM_PICK_OFFER_SCANS_REQUIRED;
     if (offersWereUp && emptyScans >= MAYHEM_PICK_EMPTY_SCANS_REQUIRED && !scan.isDead) {

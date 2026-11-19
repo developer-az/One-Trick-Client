@@ -365,9 +365,15 @@ function Capture-PrimaryScreen {
 }
 
 $blackFrame = $false
+$isFallback = $false
 $target = $null
+# OCR boxes are normalized to the captured bitmap. Capture mode OCRs the offer
+# band crop, so carry that crop as fractions of the full frame; -ImagePath OCRs
+# the whole file and keeps the identity rect.
+$ocrFrame = @(0.0, 0.0, 1.0, 1.0)
 
 if ($CaptureScreen) {
+  $ocrFrame = @($LeftFrac, $TopFrac, $WidthFrac, $HeightFrac)
   if (-not $ImagePath) {
     $ImagePath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'onetrick-mayhem-cap.png')
   }
@@ -382,6 +388,7 @@ if ($CaptureScreen) {
       # No game window matched: capture the primary screen's full bounds (as the
       # early builds did), then cut the offer band from it, and mark the frame as
       # a fallback, never as no-target.
+      $isFallback = $true
       Write-Marker 'FALLBACK'
     }
   }
@@ -458,6 +465,46 @@ $stream = Await-WinRt ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) 
 $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 $result = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$ocrLines = @()
 foreach ($line in $result.Lines) {
-  if ($line.Text) { Write-Output $line.Text }
+  if ($line.Text) {
+    Write-Output $line.Text
+    # shortcut: Windows PowerShell 5.1 does not project OcrLine.BoundingRect, so the line box is the union of its word boxes; upgrade when the host exposes it.
+    $minX = 0; $minY = 0; $maxR = 0; $maxB = 0; $hasWord = $false
+    foreach ($word in $line.Words) {
+      $wr = $word.BoundingRect
+      $rx = [double]$wr.X; $ry = [double]$wr.Y
+      $rr = $rx + [double]$wr.Width; $rb = $ry + [double]$wr.Height
+      if (-not $hasWord) {
+        $minX = $rx; $minY = $ry; $maxR = $rr; $maxB = $rb; $hasWord = $true
+        continue
+      }
+      if ($rx -lt $minX) { $minX = $rx }
+      if ($ry -lt $minY) { $minY = $ry }
+      if ($rr -gt $maxR) { $maxR = $rr }
+      if ($rb -gt $maxB) { $maxB = $rb }
+    }
+    $bw = [Math]::Max(1, [double]$bitmap.PixelWidth)
+    $bh = [Math]::Max(1, [double]$bitmap.PixelHeight)
+    $ocrLines += [ordered]@{
+      text = [string]$line.Text
+      rect = [ordered]@{
+        x = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, $minX / $bw)), 4)
+        y = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, $minY / $bh)), 4)
+        w = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, ($maxR - $minX) / $bw)), 4)
+        h = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, ($maxB - $minY) / $bh)), 4)
+      }
+    }
+  }
+}
+$linesPayload = [ordered]@{
+  frame = $ocrFrame
+  lines = $ocrLines
+}
+Write-Output ('__OT_LINES__' + (ConvertTo-Json -InputObject $linesPayload -Compress -Depth 5))
+# Windows OCR succeeded but recognized no text. Only a genuine game-window
+# capture may claim an empty frame: a black, fallback or failed read is not an
+# empty scan the pick counter can trust.
+if ($ocrLines.Count -eq 0 -and -not $blackFrame -and -not $isFallback) {
+  Write-Marker 'EMPTY_FRAME'
 }

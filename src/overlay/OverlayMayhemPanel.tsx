@@ -33,7 +33,20 @@ export const OverlayMayhemPanel: React.FC<{
   mode?: 'roll' | 'suggest' | 'reading';
   pickHint?: string;
   waitingForDeath?: boolean;
-}> = ({ championName, ranked, detecting, mode, pickHint, waitingForDeath }) => {
+  verification?: MayhemVerification;
+}> = ({ championName, ranked, detecting, mode, pickHint, waitingForDeath, verification }) => {
+  // A frame the app could not verify must never show stale advice or claim a
+  // pick: the persistent panel only asks for a forced manual retry.
+  if (verification === 'unverified') {
+    return (
+      <div className="hud-overlay-panel ov-panel--short px-2 py-1.5">
+        <div className="hud-chrome-meta !text-[11px]">
+          Cannot verify the augment screen — press PageDown to retry (borderless window required in fullscreen)
+        </div>
+      </div>
+    );
+  }
+
   const resolvedMode =
     mode ?? (detecting ? (ranked.length ? 'roll' : 'reading') : ranked.length ? 'roll' : 'suggest');
 

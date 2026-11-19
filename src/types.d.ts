@@ -16,6 +16,9 @@ declare global {
     type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
+    /** Whether the last augment-screen scan was verified from card geometry. */
+    type MayhemVerification = 'verified' | 'unverified';
+
     /** HUD skin pick (Brief I): a named skin, or auto by champion class. */
     type HudSkinChoice = 'auto' | 'gothic' | 'bloodmoon' | 'arcane' | 'ironclad' | 'warden' | 'hunter' | 'vanguard';
 
@@ -273,6 +276,7 @@ declare global {
             revealClip?: (target?: string) => Promise<{ success: boolean; error?: string }>;
             getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
             getMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown }>;
+            onMayhemBundleUpdate?: (callback: (bundle: unknown) => void) => (() => void) | void;
             refreshMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown; fromNetwork?: boolean; error?: string }>;
             getMayhemOwned?: () => Promise<{ success: boolean; owned?: string[] }>;
             getMayhemRoll?: () => Promise<{ success: boolean; roll?: string[] }>;

@@ -44,6 +44,7 @@ import {
     keepOverlayOnTop,
     healOverlayWindows,
     setOverlayMatchActive,
+    broadcastMayhemBundleUpdate,
 } from './overlay-window';
 import { overlayLog, formatOverlayLogLine } from './overlay-log';
 import { readLeagueHudScales } from './league-settings';
@@ -770,7 +771,7 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
         read = await detectMayhemOffers(
             bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
             0,
-            { minMatches: 1, mayhemMatch: modeMayhem }
+            { minMatches: 1, mayhemMatch: modeMayhem, forcedManual: true }
         );
     } finally {
         mayhemHotkeyRestoreInFlight -= 1;
@@ -797,6 +798,19 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
     if (!read.fresh) {
         return;
     }
+    // A preview (one card awaiting a second read) and an unverified frame are
+    // NOT authoritative. Neither may replace a verified roll, latch discovery,
+    // start a pick session, count a pick, arm the fast poll or evict a roll.
+    if (read.decision !== 'accept') {
+        if (read.decision === 'unverified' && mayhemOfferIds.length === 0) {
+            // Nothing verified is on screen: show the persistent retry panel.
+            mayhemUnverified = true;
+            pushMayhemOverlayPatch();
+            notifyMayhemOverlayStateChanged();
+        }
+        return;
+    }
+    mayhemUnverified = false;
     // Again after the await: an auto tick that started while the manual capture
     // ran holds a pre-manual clone and must be refused too, before this write.
     mayhemMonitorEpoch += 1;
@@ -1175,6 +1189,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         })(),
         mayhemOwnedIds: getOwnedMayhemAugmentIds(),
         mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemVerification: mayhemVerificationValue(),
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
@@ -1224,6 +1239,7 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         (payload.mayhemOfferIds || []).join(','),
         (payload.mayhemOwnedIds || []).join(','),
         payload.mayhemAugmentWindow ? 1 : 0,
+        payload.mayhemVerification || 'verified',
         payload.mayhemPickHint || '',
         payload.mayhemWaitingForDeath ? 1 : 0,
         payload.mayhemAugmentDismissedAt ?? 0,
@@ -1232,6 +1248,15 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
 }
 
 let mayhemOfferIds: string[] = [];
+/**
+ * The most recent in-game scan could not verify an augment screen from card
+ * geometry. Drives the renderer's persistent "press PageDown to retry" panel;
+ * never set for a preview, which must not disturb a verified roll.
+ */
+let mayhemUnverified = false;
+function mayhemVerificationValue(): 'verified' | 'unverified' {
+    return mayhemUnverified ? 'unverified' : 'verified';
+}
 /**
  * The roll that vanished when the pick counter fired. A reroll re-deals the
  * shop within seconds; a disjoint roll inside the window means that "pick" was
@@ -1445,6 +1470,7 @@ function mayhemAugmentHudShouldShow(): boolean {
 function clearMayhemLiveOffers(): void {
     mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
+    mayhemUnverified = false;
     setMayhemRollIds([]);
     // Drop the engine's display mirror too: a throttled (non-fresh) scan must
     // not resurrect the roll the HUD just cleared.
@@ -1687,6 +1713,7 @@ function pushMayhemOverlayPatch(): void {
         mayhemOfferIds: merged.length ? merged : undefined,
         mayhemOwnedIds: getOwnedMayhemAugmentIds(),
         mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemVerification: mayhemVerificationValue(),
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
@@ -1708,7 +1735,10 @@ export function notifyMayhemOverlayStateChanged(): void {
 }
 
 async function tickMayhemOcr(): Promise<void> {
-    if (!inGame || !lastGoodPayload) return;
+    // A real in-game Live Client payload is mandatory before any screen read;
+    // `mayhem-likely` alone never opens the camera. Level only throttles cadence.
+    const hasLivePayload = inGame && !!lastGoodPayload;
+    if (!hasLivePayload) return;
     const signals = currentMayhemSignals();
     const mode = currentMayhemMode();
     const active = isMayhemMode(mode);
@@ -1772,6 +1802,7 @@ async function tickMayhemOcr(): Promise<void> {
     }
 
     const scanTicket = beginMayhemScanTicket(mayhemMonitorState);
+    const scan = { decision: 'unverified' as 'accept' | 'preview' | 'unverified', unverifiedFrame: false };
     const result = await runMayhemMonitorScan(
         mayhemMonitorState,
         {
@@ -1783,12 +1814,16 @@ async function tickMayhemOcr(): Promise<void> {
             autoOcrAllowed: active ? autoOcrWanted : true,
             manualScanActive: mayhemManualScanActive(),
         },
-        (minMatches) =>
-            detectMayhemOffers(
+        async (minMatches) => {
+            const read = await detectMayhemOffers(
                 bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
                 minGap,
                 { minMatches, mayhemMatch: active }
-            )
+            );
+            scan.decision = read.decision;
+            scan.unverifiedFrame = read.fresh && !read.valid && read.decision === 'unverified';
+            return read;
+        }
     );
     // Only a scan that no purge/reset overtook may write back: its cloned state
     // predates the purge and would re-show the roll the player already picked.
@@ -1810,6 +1845,10 @@ async function tickMayhemOcr(): Promise<void> {
     // Display ids may keep the last roll while the HUD is open; the counter
     // already used this frame's ids only (frameIds) inside the engine.
     mayhemOfferIds = commit.displayIds;
+    // Only an accepted frame clears the unverified warning; a boxed frame that
+    // could not be verified turns it on when there is no roll to keep showing.
+    if (scan.decision === 'accept') mayhemUnverified = false;
+    else if (scan.unverifiedFrame && mayhemOfferIds.length === 0) mayhemUnverified = true;
 
     // A reroll re-deals the roll the empty gap just retired: within the reroll
     // window a disjoint roll means that gap was the shop refreshing, not a
@@ -1898,6 +1937,7 @@ function resetMatchCaches(): void {
     lastPlayMomentsAt = 0;
     lastSentMomentCueContent = '';
     mayhemOfferIds = [];
+    mayhemUnverified = false;
     mayhemPicksAtWindowOpen = 0;
     mayhemPickSessionActive = false;
     mayhemManualScanUntilMs = 0;
@@ -2245,9 +2285,13 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
     resetStateService('match start');
     // Follow the live patch: a new patch adds augments the offline bundle does
     // not contain. Offline is fine — cached/bundled data keeps working.
-    void refreshMayhemBundleIfStale().catch(() => {
-        // no network: keep the cached/bundled bundle
-    });
+    void refreshMayhemBundleIfStale()
+        .then((result) => {
+            if (result.refreshed && result.bundle) broadcastMayhemBundleUpdate(result.bundle);
+        })
+        .catch(() => {
+            // no network: keep the cached/bundled bundle
+        });
     clearPlayRecap();
     resetJungleThreatClock();
     resetCoachCooldowns();

@@ -13,6 +13,8 @@ export interface MayhemOcrTarget {
 export interface MayhemOcrOutput {
   /** OCR lines with the `__OT_*__` control markers removed. */
   text: string;
+  /** Per-line boxes in fractions of the captured bitmap (0..1), when reported. */
+  lines?: Array<{ text: string; rect: { x: number; y: number; w: number; h: number } }>;
   target: MayhemOcrTarget | null;
   blackFrame: boolean;
   /** Language tag the Windows OCR engine actually used, when reported. */
@@ -25,6 +27,13 @@ export interface MayhemOcrOutput {
    * on top.
    */
   fallback: boolean;
+  /**
+   * Windows OCR succeeded and recognized zero lines on a genuine capture.
+   * Optional so hand-built reads in the frozen verifies stay valid; the parser
+   * always sets it. A genuine empty frame is a real empty scan for the pick
+   * counter, unlike a failed/black/fallback or box-less read.
+   */
+  emptyFrame?: boolean;
 }
 
 const MARKER = /^__OT_([A-Z0-9_]+)(?:\s+(.*))?__$/;
@@ -95,6 +104,65 @@ function targetFromJson(json: string): MayhemOcrTarget | null {
 }
 
 const TARGET_JSON_PREFIX = '__OT_TARGET__';
+const LINES_JSON_PREFIX = '__OT_LINES__';
+
+type Frame = readonly [number, number, number, number];
+const IDENTITY_FRAME: Frame = [0, 0, 1, 1];
+const unit = (v: number): number => Math.max(0, Math.min(1, v));
+
+function parseFrame(value: unknown): Frame | null {
+  if (!Array.isArray(value) || value.length !== 4) return null;
+  const nums = value.map((v) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN));
+  return nums.some((n) => !Number.isFinite(n)) ? null : (nums as unknown as Frame);
+}
+
+/**
+ * Boxes arrive normalized to the captured bitmap. A `frame` in the marker maps
+ * that bitmap back to the full game frame; a bare array (older scripts, file
+ * fixtures) is already full-frame and keeps the identity mapping.
+ */
+function linesFromJson(json: string): { lines: NonNullable<MayhemOcrOutput['lines']>; frame: Frame } | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  let items: unknown;
+  let frame: Frame = IDENTITY_FRAME;
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    items = obj.lines;
+    frame = parseFrame(obj.frame) ?? IDENTITY_FRAME;
+  } else {
+    return null;
+  }
+  if (!Array.isArray(items)) return null;
+  const lines: NonNullable<MayhemOcrOutput['lines']> = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const src = item as Record<string, unknown>;
+    if (typeof src.text !== 'string') continue;
+    if (!src.rect || typeof src.rect !== 'object') continue;
+    const r = src.rect as Record<string, unknown>;
+    const num = (v: unknown): number | undefined =>
+      typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    const x = num(r.x), y = num(r.y), w = num(r.w), h = num(r.h);
+    if (x === undefined || y === undefined || w === undefined || h === undefined) continue;
+    lines.push({
+      text: src.text,
+      rect: {
+        x: unit(frame[0] + x * frame[2]),
+        y: unit(frame[1] + y * frame[3]),
+        w: unit(w * frame[2]),
+        h: unit(h * frame[3]),
+      },
+    });
+  }
+  return { lines, frame };
+}
 
 /**
  * Peel the `__OT_*__` control lines off the PowerShell OCR output.
@@ -103,14 +171,21 @@ const TARGET_JSON_PREFIX = '__OT_TARGET__';
  */
 export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
   const kept: string[] = [];
+  let lines: MayhemOcrOutput['lines'] = [];
   let target: MayhemOcrTarget | null = null;
   let blackFrame = false;
   let language: string | null = null;
   let noTarget = false;
   let fallback = false;
+  let emptyFrame = false;
 
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
+    if (trimmed.startsWith(LINES_JSON_PREFIX)) {
+      const parsedLines = linesFromJson(trimmed.slice(LINES_JSON_PREFIX.length).trim());
+      if (parsedLines) lines = parsedLines.lines;
+      continue;
+    }
     if (trimmed.startsWith(TARGET_JSON_PREFIX)) {
       const parsedTarget = targetFromJson(trimmed.slice(TARGET_JSON_PREFIX.length).trim());
       if (parsedTarget) target = parsedTarget;
@@ -126,9 +201,10 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
     if (name === 'BLACK_FRAME') blackFrame = true;
     else if (name === 'NO_TARGET') noTarget = true;
     else if (name === 'FALLBACK') fallback = true;
+    else if (name === 'EMPTY_FRAME') emptyFrame = true;
     else if (name === 'OCR_LANG') language = rest.trim() || null;
     else if (name === 'TARGET') target = parseTarget(rest);
   }
 
-  return { text: kept.join('\n'), target, blackFrame, language, noTarget, fallback };
+  return { text: kept.join('\n'), lines, target, blackFrame, language, noTarget, fallback, emptyFrame };
 }

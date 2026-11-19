@@ -70,6 +70,32 @@ function ok(cond: boolean, msg: string): void {
   }
 }
 
+// Injected OCR reads must carry boxes now: production refuses box-less text,
+// and authoritative acceptance needs three positioned card zones. Input update
+// only — the assertions below keep their original meaning.
+const THREE_TITLES = ['Jeweled Gauntlet', 'Giant Slayer', 'Recursion'];
+function boxedOffers(titles: string[]): {
+  text: string;
+  lines: Array<{ text: string; rect: { x: number; y: number; w: number; h: number } }>;
+} {
+  const xs = [0.265, 0.435, 0.605];
+  return {
+    text: titles.join('\n'),
+    lines: titles.map((text, i) => ({ text, rect: { x: xs[i], y: 0.38, w: 0.13, h: 0.04 } })),
+  };
+}
+// A valid frame with an empty trust path (all-unknown shop roll): the new
+// contract refuses box-less empty text, so "no known cards" must come from
+// accepted placeholder rows instead.
+function boxedUnknownRoll(): ReturnType<typeof boxedOffers> {
+  const titles = ['Chrono Surge', 'The Timeless', 'Celestial Roar'];
+  const roll = boxedOffers(titles);
+  return {
+    text: `${roll.text}\nReroll 2 left`,
+    lines: [...roll.lines, { text: 'Reroll 2 left', rect: { x: 0.4, y: 0.1, w: 0.1, h: 0.03 } }],
+  };
+}
+
 function overlaps(a: PhysicalRect, b: PhysicalRect): boolean {
   return (
     a.x < b.x + b.width &&
@@ -452,7 +478,7 @@ async function ownerSeam(): Promise<void> {
       reads += 1;
       return {
         parsed: {
-          text: 'Jeweled Gauntlet\nGiant Slayer',
+          ...boxedOffers(THREE_TITLES),
           target: { pid: 4242, exe: 'League of Legends', foreground: true },
           blackFrame: false,
           language: null,
@@ -464,49 +490,63 @@ async function ownerSeam(): Promise<void> {
     },
   });
   ok(reads === 1, 'the injected reader ran once through the real parse/accept path');
-  ok(read.frameIds.length === 2, `the real OCR read sees both offers (${read.frameIds.join(',')})`);
+  ok(read.frameIds.length === 3, `the real OCR read sees all three offers (${read.frameIds.join(',')})`);
   ok(read.fresh && read.valid && !read.blackFrame, 'the real read is a usable frame');
   ok(read.owner === false, 'the success path carries owner=false (the old literal dropped it)');
   ok(!isTrustedMayhemFrame(read), 'the monitor does not trust an offer frame owned by a foreign window');
 
-  // The engine, fed ONLY by the real OCR path: two offer scans, then two scans
-  // that read shop chrome but no card. All four take the success path — the one
-  // that used to drop `owner` — so the counter sees exactly what production saw.
+  // Two offer scans through the real OCR path (the one that used to drop
+  // `owner`), then two GENUINELY empty scans produced by the production path:
+  // a `__OT_EMPTY_FRAME__` game-window read with zero OCR lines. No hand-built
+  // valid empty frame — that shortcut hid the bug where a successful empty
+  // capture was marked invalid, so the monitor never saw the scan that ends a
+  // pick. An accepted all-unknown roll is NOT empty; it is covered separately
+  // below because it must never book a pick.
+  const realEmptyRead = (scriptedOwner: boolean) =>
+    detectMayhemOffers(augments, 0, {
+      minMatches: 2,
+      mayhemMatch: true,
+      readScreen: async () => ({
+        parsed: {
+          text: '',
+          lines: [],
+          target: { pid: 4242, exe: 'League of Legends', foreground: true },
+          blackFrame: false,
+          language: 'en-US',
+          noTarget: false,
+          fallback: false,
+          emptyFrame: true,
+        },
+        owner: scriptedOwner,
+      }),
+    });
   async function runScript(
     scriptedOwner: boolean,
     startAt: number
   ): Promise<{ counted: number; displayedOffers: number; picks: number; trusted: boolean[] }> {
     resetMayhemOcrCache();
-    const texts = [
-      'Jeweled Gauntlet\nGiant Slayer',
-      'Jeweled Gauntlet\nGiant Slayer',
-      'Choose an Augment\nReroll',
-      'Choose an Augment\nReroll',
-    ];
-    let index = 0;
     let scriptState = createMayhemMonitorState();
     let counted = 0;
     let displayedOffers = 0;
     const trusted: boolean[] = [];
-    for (let i = 0; i < texts.length; i += 1) {
-      const nextRead = await detectMayhemOffers(augments, 0, {
-        minMatches: 2,
-        readScreen: async () => {
-          const text = texts[Math.min(index, texts.length - 1)];
-          index += 1;
-          return {
-            parsed: {
-              text,
-              target: { pid: 4242, exe: 'League of Legends', foreground: true },
-              blackFrame: false,
-              language: null,
-              noTarget: false,
-              fallback: false,
-            },
-            owner: scriptedOwner,
-          };
-        },
-      });
+    for (let i = 0; i < 4; i += 1) {
+      const nextRead: MayhemMonitorRead = i < 2
+        ? await detectMayhemOffers(augments, 0, {
+            minMatches: 2,
+            mayhemMatch: true,
+            readScreen: async () => ({
+              parsed: {
+                ...boxedOffers(THREE_TITLES),
+                target: { pid: 4242, exe: 'League of Legends', foreground: true },
+                blackFrame: false,
+                language: null,
+                noTarget: false,
+                fallback: false,
+              },
+              owner: scriptedOwner,
+            }),
+          })
+        : await realEmptyRead(scriptedOwner);
       trusted.push(isTrustedMayhemFrame(nextRead));
       const result = await runMayhemMonitorScan(
         scriptState,
@@ -523,11 +563,117 @@ async function ownerSeam(): Promise<void> {
   const foreign = await runScript(false, 9_000_000);
   ok(foreign.trusted.every((trusted) => !trusted), 'every real frame with owner=false is untrusted');
   ok(foreign.counted === 0 && foreign.picks === 0, 'an offer frame with owner=false never counts a pick');
-  ok(foreign.displayedOffers === 2, `its offers still display (only counting is gated) (${foreign.displayedOffers})`);
+  ok(foreign.displayedOffers === 3, `its offers still display (only counting is gated) (${foreign.displayedOffers})`);
 
   // Positive control: the identical sequence with owner=true does count.
   const own = await runScript(true, 9_100_000);
   ok(own.counted === 1, `the same sequence with owner=true counts one pick (${own.counted})`);
+
+  // The production empty read itself is a genuine empty scan: fresh + valid,
+  // no ids at all, no refusal. This is the field the monitor was never getting.
+  {
+    resetMayhemOcrCache();
+    const empty = await realEmptyRead(true);
+    ok(
+      empty.fresh && empty.valid && empty.decision === 'unverified' &&
+        empty.ids.length === 0 && empty.frameIds.length === 0 &&
+        empty.frameDisplayCount === 0 && empty.refusal === null,
+      'a successful empty game-window capture is a fresh, valid, id-free empty scan'
+    );
+  }
+
+  // A failed (no-target) or box-less NONEMPTY read is NOT a genuine empty scan:
+  // it stays invalid and cannot end an armed roll or book a phantom pick.
+  {
+    type Parsed = {
+      text: string;
+      lines: Array<{ text: string; rect: { x: number; y: number; w: number; h: number } }>;
+      target: { pid: number; exe: string; foreground: boolean } | null;
+      blackFrame: boolean;
+      language: string | null;
+      noTarget: boolean;
+      fallback: boolean;
+    };
+    const picksAfterInvalidEmpty = async (parsed: Parsed): Promise<number> => {
+      resetMayhemOcrCache();
+      let s = createMayhemMonitorState();
+      let picks = 0;
+      for (let i = 0; i < 4; i += 1) {
+        const read = i < 2
+          ? await detectMayhemOffers(augments, 0, {
+              minMatches: 2, mayhemMatch: true,
+              readScreen: async () => ({
+                parsed: {
+                  ...boxedOffers(THREE_TITLES),
+                  target: { pid: 4242, exe: 'League of Legends', foreground: true },
+                  blackFrame: false, language: null, noTarget: false, fallback: false,
+                },
+                owner: true,
+              }),
+            })
+          : await detectMayhemOffers(augments, 0, {
+              minMatches: 2, mayhemMatch: true,
+              readScreen: async () => ({ parsed, owner: true }),
+            });
+        const result = await runMayhemMonitorScan(s, input(MAYHEM, 9_400_000 + i * 1_000), async () => read);
+        s = result.state;
+        picks += result.counted;
+      }
+      return picks;
+    };
+    const boxless: Parsed = {
+      text: 'Chrono Surge', lines: [],
+      target: { pid: 4242, exe: 'League of Legends', foreground: true },
+      blackFrame: false, language: null, noTarget: false, fallback: false,
+    };
+    const failed: Parsed = {
+      text: '', lines: [], target: null,
+      blackFrame: false, language: null, noTarget: true, fallback: false,
+    };
+    ok(await picksAfterInvalidEmpty(boxless) === 0, 'a box-less NONEMPTY read cannot count a pick');
+    ok(await picksAfterInvalidEmpty(failed) === 0, 'a failed/no-target read cannot count a pick');
+  }
+
+  // An accepted all-unknown roll shows rows but no known ids. After an armed
+  // roll, two such frames must not advance the empty streak, book a pick, or
+  // purge the unknown roll the player is still looking at.
+  {
+    resetMayhemOcrCache();
+    let scriptState = createMayhemMonitorState();
+    let counted = 0;
+    const actions: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const read = await detectMayhemOffers(augments, 0, {
+        minMatches: 2,
+        mayhemMatch: true,
+        readScreen: async () => ({
+          parsed: {
+            ...(i < 3 ? boxedOffers(THREE_TITLES) : boxedUnknownRoll()),
+            target: { pid: 4242, exe: 'League of Legends', foreground: true },
+            blackFrame: false,
+            language: null,
+            noTarget: false,
+            fallback: false,
+          },
+          owner: true,
+        }),
+      });
+      const result = await runMayhemMonitorScan(
+        scriptState,
+        input(MAYHEM, 9_200_000 + i * 1_000),
+        async () => read
+      );
+      scriptState = result.state;
+      counted += result.counted;
+      actions.push(result.hudAction);
+    }
+    ok(counted === 0 && scriptState.counter.picksTaken === 0, 'known×3 then all-unknown×2 books no pick');
+    ok(!actions.includes('purge'), 'an all-unknown frame never purges the displayed roll');
+    ok(
+      scriptState.displayIds.length === 3,
+      `the unknown roll is still displayed after two all-unknown frames (${scriptState.displayIds.length})`
+    );
+  }
 }
 
 async function captureGating(): Promise<void> {

@@ -74,6 +74,7 @@ import {
   rankMayhemChoices,
 } from '../logic/mayhem';
 import type { MayhemBundle } from '../logic/mayhem/types';
+import { validateMayhemBundle } from '../logic/mayhem/bundleSanitize';
 import { OverlayMayhemPanel } from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
@@ -83,7 +84,18 @@ import { DEFAULT_ACCENT, accentCacheKey, accentSoft, accentTransition, resolveCh
 import { resolveChampionRef } from '../data/championCatalog';
 import { PET_DEFAULTS, normalizePet, type PetSettings } from '../app/pixelPetLogic';
 
-const mayhemBundle = bundledMayhem as MayhemBundle;
+/** Build-time data is the last resort; a fetched or pushed bundle replaces it. */
+const FALLBACK_MAYHEM_BUNDLE = bundledMayhem as MayhemBundle;
+
+function isUsableMayhemBundle(value: unknown): value is MayhemBundle {
+  if (!value || typeof value !== 'object') return false;
+  const bundle = value as Partial<MayhemBundle>;
+  if (!Array.isArray(bundle.augments) || !Array.isArray(bundle.combos)) return false;
+  return validateMayhemBundle(bundle as MayhemBundle).length === 0;
+}
+
+/** OverlayState plus the verification bit main sends but overlayLogic doesn't own yet. */
+type OverlayMayhemState = OverlayState & { mayhemVerification?: MayhemVerification };
 
 function damageTypeFromTags(tags: string[]): Champion['damageType'] {
   return tags.includes('Mage') || tags.includes('Support') ? 'Magic' : 'Physical';
@@ -429,7 +441,8 @@ function gankStatusKey(state: OverlayState): string {
 
 
 export const OverlayApp: React.FC = () => {
-  const [state, setState] = useState<OverlayState>({ inGame: false });
+  const [state, setState] = useState<OverlayMayhemState>({ inGame: false });
+  const [mayhemBundle, setMayhemBundle] = useState<MayhemBundle>(FALLBACK_MAYHEM_BUNDLE);
   const pageVisible = usePageVisible();
   const [champions, setChampions] = useState<Champion[]>([]);
   const [clickThrough, setClickThrough] = useState(true);
@@ -567,6 +580,31 @@ export const OverlayApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    let pushed = false;
+    const accept = (value: unknown, fromPush: boolean): void => {
+      if (!isUsableMayhemBundle(value)) return; // never replace a good bundle with null/short data
+      if (fromPush) pushed = true;
+      setMayhemBundle(value);
+    };
+    // Fetch first: a push that lands before the subscription is covered by the
+    // fetch reading the same cache. A push that lands after the subscription
+    // wins over the fetch so no older cached copy can overwrite it.
+    try {
+      window.electronAPI?.getMayhemBundle?.()
+        .then((res) => {
+          if (res?.success && !pushed) accept(res.bundle, false);
+        })
+        .catch(() => {
+          // Keep the build-time bundle when the IPC read fails.
+        });
+    } catch {
+      // Keep the build-time bundle when the bridge itself throws.
+    }
+    const unsubBundle = window.electronAPI?.onMayhemBundleUpdate?.((bundle) => accept(bundle, true));
+    return () => { unsubBundle?.(); };
+  }, []);
+
+  useEffect(() => {
     if (!window.electronAPI?.onOverlayUpdate) return;
 
     const applyMeta = (payload: unknown) => {
@@ -620,7 +658,7 @@ export const OverlayApp: React.FC = () => {
     };
 
     const unsubUpdate = window.electronAPI.onOverlayUpdate((payload) => {
-      const next = payload as OverlayState;
+      const next = payload as OverlayMayhemState;
       setState((prev) => {
         if (
           prev.inGame &&
@@ -723,6 +761,7 @@ export const OverlayApp: React.FC = () => {
     situation,
     inMayhem,
     state.mayhemOwnedIds,
+    mayhemBundle,
   ]);
 
   const analysis: MatchupAnalysis | null = useMemo(
@@ -874,24 +913,25 @@ export const OverlayApp: React.FC = () => {
     // must not re-pin `prev` here, or a reroll's fresh 1-2 card read would be
     // overridden with the old roll (and ranked with its stale ids).
     const incoming = state.mayhemOfferIds ?? [];
-    if (incoming.length > 0) setLatchedMayhemOffers(incoming.slice(0, 3));
+    if (incoming.length > 0) setLatchedMayhemOffers(incoming.slice(0, 4));
   }, [inMayhem, inAram, state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemAugmentDismissedAt]);
 
   const displayMayhemOfferIds = useMemo(() => {
+    if (state.mayhemVerification === 'unverified') return [];
     if (!state.mayhemAugmentWindow) return [];
     const incoming = state.mayhemOfferIds ?? [];
-    if (incoming.length > 0) return incoming.slice(0, 3);
+    if (incoming.length > 0) return incoming.slice(0, 4);
     // Only a fully empty frame falls back to the latched roll (panel stays up
     // during the reroll animation); a shorter fresh read is the engine's answer.
     if (latchedMayhemOffers.length > 0) return latchedMayhemOffers;
     return [];
-  }, [state.mayhemOfferIds, state.mayhemAugmentWindow, latchedMayhemOffers]);
+  }, [state.mayhemOfferIds, state.mayhemAugmentWindow, state.mayhemVerification, latchedMayhemOffers]);
 
   const mayhemRanked = useMemo(() => {
     if (!mayhemChampion || (!inMayhem && !inAram) || !displayMayhemOfferIds.length) return [];
     const owned = state.mayhemOwnedIds || [];
     return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
-  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram]);
+  }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram, mayhemBundle]);
 
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
   // value the dismiss window never expired until some unrelated update
@@ -931,12 +971,14 @@ export const OverlayApp: React.FC = () => {
     () => false
   );
 
+  // An unverified frame activates the slot with ZERO offer ids so the persistent
+  // "press PageDown to retry" panel can render — a verified roll still needs ids.
+  const mayhemUnverified = state.mayhemVerification === 'unverified';
   const mayhemPanelActive =
     (inMayhem || inAram) &&
     hudModules.mayhem &&
-    !!state.mayhemAugmentWindow &&
     !mayhemDismissedRecently &&
-    displayMayhemOfferIds.length > 0;
+    (mayhemUnverified || (!!state.mayhemAugmentWindow && displayMayhemOfferIds.length > 0));
 
   const mayhemLayoutPos =
     layoutElement(hudLayout, 'mayhem') ||
@@ -1725,6 +1767,7 @@ export const OverlayApp: React.FC = () => {
                   championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
                   ranked={mayhemRanked}
                   mode="roll"
+                  verification={state.mayhemVerification}
                 />
               </div>
             </OverlayChromePanel>
@@ -1805,6 +1848,7 @@ export const OverlayApp: React.FC = () => {
                   championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
                   ranked={mayhemRanked}
                   mode="roll"
+                  verification={state.mayhemVerification}
                 />
               ) : null}
               {!inAram && showGank ? <GankSquare threat={gankStatus} compact /> : null}

@@ -478,6 +478,7 @@ export async function runMayhemMonitorScan(
         foreground: targetCapture,
         blackFrame: read.blackFrame,
         liveAugmentIds: input.liveAugmentIds,
+        hasDisplayedOffers: read.frameDisplayCount > 0,
       });
       // A single high-confidence offer is pending, not displayable: promote it
       // only after the same id was read on consecutive qualifying frames.
@@ -511,7 +512,11 @@ export async function runMayhemMonitorScan(
     consecutiveScans: next.scanStreak,
     fuzzyScore: next.fuzzyScore,
   });
-  const hudAction: MayhemHudAction = visible ? 'show' : usable && offers === 0 ? 'purge' : 'keep';
+  const hudAction: MayhemHudAction = visible
+    ? 'show'
+    : usable && offers === 0 && read.frameDisplayCount === 0
+      ? 'purge'
+      : 'keep';
 
   // Classification is the monitor's own (latch first, then the frame's offers):
   // `mayhem-likely` stays honest for the unknown queue while still getting the

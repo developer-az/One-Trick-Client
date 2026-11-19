@@ -16,7 +16,7 @@ export const MAYHEM_AUTO_MIN_MATCHES = 2;
 export const MAYHEM_AUTO_MIN_LINES = 3;
 
 /** Case/punctuation-insensitive form used for exact and substring comparisons. */
-function normalizeName(s: string): string {
+export function normalizeName(s: string): string {
   return s
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')

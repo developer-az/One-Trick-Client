@@ -4,12 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { mayhemFallbackCropRect, maskRectInCapture, mayhemPanelMaskRect } from '../src/logic/mayhem/captureMask';
-import {
-  matchAugmentOffersFromOcr,
-  bestAugmentMatchConfidence,
-  countOcrContentLines,
-  effectiveAutoMinMatches,
-} from '../src/logic/mayhem/match';
+import { bestAugmentMatchConfidence } from '../src/logic/mayhem/match';
 import { parseMayhemOcrOutput, type MayhemOcrOutput } from '../src/logic/mayhem/ocrOutput';
 import {
   toMayhemMonitorRead,
@@ -20,10 +15,13 @@ import {
   mayhemOcrScriptCandidates,
   resolveOcrScriptPath,
 } from '../src/logic/mayhem/ocrScriptPath';
+import { stabilizeMayhemOffers, type MayhemOfferStabilityState } from '../src/logic/mayhem/offerStability';
 import {
-  acceptMayhemOfferFrame,
-} from '../src/logic/mayhem/offerAcceptance';
-import type { MayhemOfferStabilityState } from '../src/logic/mayhem/offerStability';
+  classifyMayhemFrame,
+  createMayhemPipelineState,
+  type MayhemFrameDecision,
+  type MayhemFrameLine,
+} from '../src/logic/mayhem/pipeline';
 import { runMayhemOcrOnImageFile } from '../src/logic/mayhem/ocrRunner';
 import type { MayhemAugment } from '../src/logic/mayhem/types';
 import { overlayLog } from './overlay-log';
@@ -38,6 +36,8 @@ function ocrScriptPath(): string {
 
 let ocrInFlight = false;
 let lastOfferIds: string[] = [];
+/** Hysteresis for the geometry-gated pipeline (lone-card confirm / ignore window). */
+const pipelineState = createMayhemPipelineState();
 let lastOcrAt = 0;
 let lastOcrSnippet = '';
 let lastCaptureMethod: 'powershell' | 'desktop' | 'none' = 'none';
@@ -63,6 +63,8 @@ export type MayhemOcrRefusal = 'in-flight' | 'throttled' | 'unsupported' | null;
  */
 export type MayhemOcrRead = MayhemMonitorRead & {
   refusal: MayhemOcrRefusal;
+  /** The geometry-gated pipeline's decision for this frame. */
+  decision: MayhemFrameDecision;
 };
 
 export function getMayhemOcrDebug(): {
@@ -86,6 +88,8 @@ export function mayhemOcrBlackFrameSeen(): boolean {
 export function resetMayhemOcrMatchFlags(): void {
   blackFrameSeen = false;
   loggedTargetSignature = '';
+  pipelineState.pending = null;
+  pipelineState.ignoreLoneUntil = 0;
 }
 
 function displayForCapture(): Electron.Display {
@@ -214,6 +218,27 @@ function logCaptureTarget(parsed: MayhemOcrOutput, owner: boolean | undefined): 
   });
 }
 
+/** One bounded, redacted line per classified frame (no summoner names, no card text). */
+function logMayhemFrame(detail: {
+  reason: string;
+  lineCount: number;
+  cardCount: number;
+  target: string;
+  owner: boolean | undefined;
+  acceptedIds: string[];
+  decision: MayhemFrameDecision;
+}): void {
+  overlayLog('mayhem-frame', {
+    reason: detail.reason.slice(0, 200),
+    lineCount: detail.lineCount,
+    cardCount: detail.cardCount,
+    target: detail.target,
+    owner: detail.owner ?? null,
+    acceptedIds: detail.acceptedIds,
+    decision: detail.decision,
+  });
+}
+
 export interface ScreenRead {
   parsed: MayhemOcrOutput;
   owner: boolean | undefined;
@@ -232,6 +257,8 @@ export interface DetectMayhemOffersOptions {
   mayhemMatch?: boolean;
   /** Injected reader, so a verify can drive the real parse/accept path. */
   readScreen?: MayhemScreenReader;
+  /** A forced manual read (PageDown): the only case a `preview` decision is honoured. */
+  forcedManual?: boolean;
 }
 
 /**
@@ -402,7 +429,6 @@ export async function detectMayhemOffers(
   minIntervalMs = 2800,
   opts: DetectMayhemOffersOptions = {}
 ): Promise<MayhemOcrRead> {
-  const minMatches = opts.minMatches ?? 1;
   const mayhemMatch = opts.mayhemMatch === true;
   const idleFields = {
     ids: lastOfferIds,
@@ -418,11 +444,16 @@ export async function detectMayhemOffers(
   } satisfies MayhemMonitorReadFields;
   // A throttled/idle read never counts (fresh is false); it still crosses the
   // seam so the gate is a decision on every return, never an omission.
-  const idle = toMayhemMonitorRead(idleFields, undefined);
+  const idle = { ...toMayhemMonitorRead(idleFields, undefined), decision: 'unverified' as const };
   /** A call that actually captured: it crosses the seam and carries no refusal. */
-  const ran = (fields: MayhemMonitorReadFields, trust: boolean | undefined): MayhemOcrRead => ({
+  const ran = (
+    fields: MayhemMonitorReadFields,
+    trust: boolean | undefined,
+    decision: MayhemFrameDecision = 'unverified'
+  ): MayhemOcrRead => ({
     ...toMayhemMonitorRead(fields, trust),
     refusal: null,
+    decision,
   });
   // Non-Windows has no capture/OCR path at all: this is not a throttle, and the
   // hotkey log must not claim one. Sentinels stay untrusted/unusable.
@@ -471,35 +502,96 @@ export async function detectMayhemOffers(
       return ran({ ...baseFields, valid: false, foreground: false }, owner);
     }
     lastOcrSnippet = parsed.text.slice(0, 400);
-    if (!parsed.text.trim()) {
+    const lines = parsed.lines;
+    // Windows OCR succeeded on a real game window and saw zero lines. That is a
+    // genuine empty scan the monitor needs to count a completed pick; it emits
+    // no ids and keeps a full roll from being invented out of nothing. A failed,
+    // black, fallback or box-less NONEMPTY read stays invalid below.
+    const emptyGameFrame =
+      parsed.emptyFrame === true &&
+      Boolean(parsed.target) &&
+      !parsed.blackFrame && !parsed.fallback && !parsed.noTarget &&
+      (lines?.length ?? 0) === 0 && !parsed.text.trim();
+    if (emptyGameFrame) {
       lastCaptureMethod = 'none';
       lastFuzzyScore = 0;
-      return ran({ ...baseFields, fuzzyScore: 0 }, owner);
+      return ran(
+        {
+          ids: [], candidateIds: [], frameIds: [], frameDisplayCount: 0,
+          fresh: true, valid: true, fuzzyScore: 0,
+          blackFrame: false,
+          foreground,
+          fallback: false,
+        },
+        owner,
+        'unverified'
+      );
+    }
+    // Without per-line boxes geometry cannot verify a roll. The legacy
+    // text-only matcher is gone: such a frame cannot identify, arm, evict or
+    // purge anything. `lastOcrSnippet` is the only retained diagnostic.
+    if (!lines || lines.length === 0 || !parsed.text.trim()) {
+      lastCaptureMethod = 'none';
+      lastFuzzyScore = 0;
+      return ran(
+        {
+          ids: [], candidateIds: [], frameIds: [], frameDisplayCount: 0,
+          fresh: true, valid: false, fuzzyScore: 0,
+          blackFrame: parsed.blackFrame,
+          foreground,
+          fallback: parsed.fallback,
+        },
+        owner,
+        'unverified'
+      );
     }
     const fuzzyScore = bestAugmentMatchConfidence(parsed.text, augments);
-    const effectiveMin = effectiveAutoMinMatches({
-      configured: minMatches,
-      fuzzyScore,
-      contentLines: countOcrContentLines(parsed.text),
-    });
-    const matched = matchAugmentOffersFromOcr(parsed.text, augments, mayhemMatch);
     lastFuzzyScore = fuzzyScore;
-    const accepted = applyMatchedOffers(parsed.text, matched.ids, effectiveMin, fuzzyScore);
+
+    // Geometry-gated pipeline: NO id is emitted until classifyMayhemFrame
+    // accepts the frame. A preview is only honoured for a forced manual read;
+    // unverified emits nothing at all.
+    const evidence = classifyMayhemFrame({
+      lines: lines as MayhemFrameLine[],
+      augments,
+      mode: mayhemMatch ? 'mayhem' : 'classic',
+      state: pipelineState,
+      now,
+    });
+    const decision: MayhemFrameDecision =
+      !opts.forcedManual && evidence.decision === 'preview' ? 'unverified' : evidence.decision;
+    const acceptedIds = decision === 'accept' ? evidence.ids : [];
+    const frameIds = decision === 'accept' ? evidence.knownIds : [];
+    logMayhemFrame({
+      reason: evidence.reasons.join(','),
+      lineCount: lines.length,
+      cardCount: evidence.cardCount,
+      target: parsed.target ? 'window' : parsed.fallback ? 'fallback' : 'none',
+      owner,
+      acceptedIds,
+      decision,
+    });
+    if (decision === 'accept') {
+      // Keep reroll/fast-poll bookkeeping; the pipeline owns the display ids
+      // (so a four-card roll is not re-capped by stabilize's 3-id helper).
+      stabilizeMayhemOffers(lastOfferIds, acceptedIds, parsed.text, retainOffersOnEmptyMatch, offerStability);
+      lastOfferIds = acceptedIds;
+    }
     return ran(
       {
-        ids: accepted.ids,
-        candidateIds: accepted.candidateIds,
-        // Trust path only: `unknown:` placeholders stay on the display roll.
-        frameIds: accepted.frameIds,
-        frameDisplayCount: accepted.frameDisplayCount,
+        ids: acceptedIds,
+        candidateIds: [],
+        frameIds,
+        frameDisplayCount: evidence.cardCount,
         fresh: true,
-        valid: true,
+        valid: decision === 'accept',
         fuzzyScore,
         blackFrame: parsed.blackFrame,
         foreground,
         fallback: parsed.fallback,
       },
-      owner
+      owner,
+      decision
     );
   } catch (error) {
     logOcrError(String(error));
@@ -538,28 +630,7 @@ export function resetMayhemOcrCache(): void {
   lastCaptureMethod = 'none';
   lastFuzzyScore = 0;
   offerStability.rerollPending = false;
+  pipelineState.pending = null;
+  pipelineState.ignoreLoneUntil = 0;
 }
 
-function applyMatchedOffers(
-  text: string,
-  matched: string[],
-  minMatches: number,
-  fuzzyScore: number
-): { ids: string[]; candidateIds: string[]; frameIds: string[]; frameDisplayCount: number } {
-  const accepted = acceptMayhemOfferFrame({
-    text,
-    matched,
-    minMatches,
-    fuzzyScore,
-    previousIds: lastOfferIds,
-    retain: retainOffersOnEmptyMatch,
-    stability: offerStability,
-  });
-  lastOfferIds = accepted.ids;
-  // The frame's own rows: `ids` may be the retained roll, so the count comes
-  // from the acceptance split (this frame's bundle matches + its placeholders).
-  return {
-    ...accepted,
-    frameDisplayCount: accepted.frameIds.length + accepted.placeholderIds.length,
-  };
-}

@@ -244,18 +244,31 @@ export function setOverlayHold(down: boolean): void {
     }
 }
 
-/** Exclude overlay windows from screen capture (WDA_EXCLUDEFROMCAPTURE) when the setting is on. */
+/**
+ * The overlay must never be OCR'd back as augment cards. Content protection
+ * (WDA_EXCLUDEFROMCAPTURE) is therefore always on for our own surfaces,
+ * regardless of the user's screenshot/stream setting.
+ */
+export function mayhemOverlaySelfCaptureProtected(): boolean {
+    return true;
+}
+
+/** Exclude overlay windows from screen capture (WDA_EXCLUDEFROMCAPTURE). */
 function applyCaptureProtection(win: BrowserWindow): void {
     try {
-        win.setContentProtection(getAppSettings().overlayHideFromCapture);
-    } catch {
-        // Older Windows builds without capture exclusion — ignore
+        win.setContentProtection(mayhemOverlaySelfCaptureProtected() || getAppSettings().overlayHideFromCapture);
+    } catch (error) {
+        // The call is best-effort on Windows; surface the failure so a missed
+        // exclusion is visible in the capture log instead of silently ignored.
+        overlayLog('capture-protection-failed', { window: win.webContents.id, error: String(error) });
     }
 }
 
 export function refreshOverlayCaptureProtection(): void {
     if (isNativeLocked()) {
-        if (nativeSurface) nativeSurface.setCaptureProtection(getAppSettings().overlayHideFromCapture);
+        if (nativeSurface) {
+            nativeSurface.setCaptureProtection(mayhemOverlaySelfCaptureProtected() || getAppSettings().overlayHideFromCapture);
+        }
         return;
     }
     for (const win of overlayWindows()) applyCaptureProtection(win);
@@ -1132,7 +1145,7 @@ function createNativeOverlayWindow(display: Electron.Display): BrowserWindow {
             scaleFactor: display.scaleFactor || 1,
         },
         {
-            captureProtection: getAppSettings().overlayHideFromCapture,
+            captureProtection: mayhemOverlaySelfCaptureProtected() || getAppSettings().overlayHideFromCapture,
             onLoaded: () => {
                 broadcastOverlayMeta();
                 for (const listener of overlayWindowCreatedListeners) {
@@ -1838,6 +1851,17 @@ export function broadcastOverlayMeta(): void {
         displayHeight: display.bounds.height,
         slot: currentSlot(),
     });
+}
+
+/**
+ * One-shot push of a freshly fetched augment bundle. Kept off `overlay-meta`
+ * so ordinary settings broadcasts never carry (or fail on) the large payload.
+ */
+export function broadcastMayhemBundleUpdate(bundle: unknown): void {
+    const native = isNativeLocked();
+    const win = native ? osrWin : overlayWin;
+    if (!win || win.isDestroyed()) return;
+    win.webContents.send('mayhem-bundle-updated', bundle);
 }
 
 interface OverlayUpdatePayload {

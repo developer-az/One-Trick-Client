@@ -73,6 +73,7 @@ import {
     resetCalibration,
     getGameResolution,
     broadcastOverlayMeta,
+    broadcastMayhemBundleUpdate,
     overlaySlotFor,
     setOverlayHold,
     noteOverlayHeartbeat,
@@ -544,7 +545,10 @@ app.whenReady().then(() => {
     // Follow the live patch on startup: refresh cached Mayhem augment data when
     // the patch moved (or the cache is a day old). Offline keeps the bundle.
     void import('./mayhem-data')
-        .then(({ refreshMayhemBundleIfStale }) => refreshMayhemBundleIfStale())
+        .then(async ({ refreshMayhemBundleIfStale }) => {
+            const result = await refreshMayhemBundleIfStale();
+            if (result.refreshed && result.bundle) broadcastMayhemBundleUpdate(result.bundle);
+        })
         .catch(() => {
             // no network / no cache: the bundled data still loads on demand
         });
@@ -952,9 +956,14 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('mayhem-get', async () => {
-        const { loadMayhemBundle } = await import('./mayhem-data');
-        const bundle = loadMayhemBundle();
-        return { success: !!bundle, bundle };
+        try {
+            const { loadMayhemBundle } = await import('./mayhem-data');
+            const bundle = loadMayhemBundle();
+            return { success: !!bundle, bundle };
+        } catch (error) {
+            console.warn('[mayhem] bundle read failed:', error);
+            return { success: false };
+        }
     });
 
     ipcMain.handle('mayhem-set-owned', async (_event, ids: unknown) => {
@@ -1010,6 +1019,13 @@ app.whenReady().then(() => {
         const { refreshMayhemBundle } = await import('./mayhem-data');
         try {
             const { bundle, fromNetwork } = await refreshMayhemBundle();
+            if (fromNetwork && bundle) {
+                try {
+                    broadcastMayhemBundleUpdate(bundle);
+                } catch (error) {
+                    console.warn('[mayhem] overlay bundle push failed:', error);
+                }
+            }
             return { success: true, bundle, fromNetwork };
         } catch (error: unknown) {
             const err = error as { message?: string };

@@ -679,18 +679,35 @@ async function main(): Promise<void> {
     );
 
     // Three titles the bundle does not know: exactly the patch-day shop.
-    const postPatch = 'Chrono Surge\nThe Timeless\nCelestial Roar';
-    const withScreen = (text: string) => async () => ({
-      parsed: {
-        text,
-        target: { pid: 4242, exe: 'League of Legends', foreground: true },
-        blackFrame: false,
-        language: null,
-        noTarget: false,
-        fallback: false,
-      },
-      owner: true,
-    });
+    // The shop-evidence line is required now: an all-unknown row without one is
+    // a preview, never a displayable roll. Input update — assertions unchanged.
+    const postPatch = 'Chrono Surge\nThe Timeless\nCelestial Roar\nReroll 2 left';
+    const withScreen = (text: string) => async () => {
+      const xs = [0.265, 0.435, 0.605];
+      const shopLine = /^(reroll|choose an augment|select an augment)/i;
+      const rows = text.split('\n').filter(Boolean);
+      const cards = rows.filter((line) => !shopLine.test(line));
+      const chrome = rows.filter((line) => shopLine.test(line));
+      return {
+        parsed: {
+          text,
+          lines: [
+            ...cards.map((card, i) => ({
+              text: card,
+              rect: { x: xs[i] ?? 0.26, y: 0.38, w: 0.13, h: 0.04 },
+            })),
+            // Shop chrome sits outside the name row: it is evidence, not a card.
+            ...chrome.map((line) => ({ text: line, rect: { x: 0.4, y: 0.1, w: 0.12, h: 0.03 } })),
+          ],
+          target: { pid: 4242, exe: 'League of Legends', foreground: true },
+          blackFrame: false,
+          language: null,
+          noTarget: false,
+          fallback: false,
+        },
+        owner: true,
+      };
+    };
 
     // The whole path, no hand-built frame or hand-set flag: mode -> mayhemMatch
     // -> the real matcher/acceptance seam -> the monitor engine.
@@ -755,9 +772,13 @@ async function main(): Promise<void> {
       mayhemMatch,
       readScreen: withScreen('Reroll 2 left\nChrono Surge\nThe Timeless'),
     });
+    // Under the boxed contract a 2-row frame is refused outright: it emits no
+    // ids at all, so it cannot evict the known roll (the engine keeps whatever
+    // is already displayed). This replaces the old read-level retention check,
+    // which only passed because the legacy matcher echoed lastOfferIds.
     ok(
-      countRankOrder(keptRead.ids) === countRankOrder(knownRead.ids),
-      `the displayed known roll survives a 2-row placeholder-only frame (${keptRead.ids.join(',')})`
+      keptRead.ids.length === 0 && keptRead.valid === false,
+      `a 2-row frame is refused with no ids, so it cannot evict the known roll (${keptRead.ids.join(',')})`
     );
     ok(isMayhemOcrRerollPending() === false, 'and that frame does not arm the fast poll');
     ok(keptRead.frameIds.length === 0, 'the placeholder frame adds nothing to the trust path');

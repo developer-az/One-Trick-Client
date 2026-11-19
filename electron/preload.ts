@@ -85,6 +85,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAppSettings: (patch: unknown) => ipcRenderer.invoke('app-settings-set', patch),
     getMatchHistory: () => ipcRenderer.invoke('match-history-get'),
     getMayhemBundle: () => ipcRenderer.invoke('mayhem-get'),
+    onMayhemBundleUpdate: (callback: (bundle: unknown) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, bundle: unknown) => callback(bundle);
+        ipcRenderer.on('mayhem-bundle-updated', listener);
+        return () => ipcRenderer.removeListener('mayhem-bundle-updated', listener);
+    },
     refreshMayhemBundle: () => ipcRenderer.invoke('mayhem-refresh'),
     getMayhemOwned: () => ipcRenderer.invoke('mayhem-get-owned'),
     getMayhemRoll: () => ipcRenderer.invoke('mayhem-get-roll'),
