@@ -32,6 +32,8 @@ import {
 
 /** Consecutive failed polls before we admit the match is over. */
 const FAILURES_TO_NOT_IN_GAME = 3;
+/** Past this trusted clock, only the match lifecycle may decide the match ended. */
+const MIDGAME_CLOCK_SEC = 60;
 /** Rolling fight-start buffer, in milliseconds of real time. */
 const DEFAULT_SNAPSHOT_WINDOW_MS = 10_000;
 /** Bounded debug log ring. */
@@ -211,7 +213,11 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
             failures += 1;
             // "Not in game" is a normal state (lobby, loading screen, game
             // over) — a single blip must not blank a live match.
-            if (failures >= FAILURES_TO_NOT_IN_GAME) markNotInGame(`${failures} failed reads`);
+            const silenceMs = lastSuccessAt > 0 ? Math.max(0, now() - lastSuccessAt) : 0;
+            const midgame = state.inGame && state.gameTime > MIDGAME_CLOCK_SEC && silenceMs > 0;
+            if (failures >= FAILURES_TO_NOT_IN_GAME && !midgame) {
+                markNotInGame(`${failures} failed reads`);
+            }
             lastFingerprint = '';
             return {
                 ok: false,

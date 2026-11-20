@@ -121,6 +121,11 @@ ok(
   fixtures.find((fx) => fx.id === 'negative-full-width-teal')?.label === 'negative',
   'full-width teal fixture is labelled negative'
 );
+ok(
+  fixtures.find((fx) => fx.id === 'positive-gold-teal-geometry')?.label === 'positive' &&
+    fixtures.find((fx) => fx.id === 'positive-gold-teal-geometry')?.synthetic === true,
+  'gold-body fixture is labelled positive and synthetic'
+);
 
 // A hand-built/older payload with aligned strong slots but no explicit gap must
 // never pass the pixel gate, even with cardsVisible:true (the fail-closed boundary).
@@ -193,6 +198,24 @@ function liveOcr(): void {
         live.decision === 'accept' && live.ids.length === 3 &&
           live.cardCount === 3 && live.knownIds.length === 0 && live.placeholderIds.length === 3,
         `${fx.id}: live PNG classifies accept with 3 placeholders`
+      );
+    }
+    if (fx.id === 'positive-gold-teal-geometry') {
+      ok(parsed.cardsVisible === true, `${fx.id}: gold bodies set the pixel gate`);
+      ok(lines.length === 3, `${fx.id}: three boxed unfamiliar titles`);
+      const goldCardSlots = (parsed.cardSlots ?? []).filter(
+        (slot) => [0.33, 0.5, 0.67].some((c) => Math.abs(slot.x - c) <= 0.03)
+      );
+      ok(
+        goldCardSlots.length >= 2 && goldCardSlots.every((slot) => slot.body >= 8 && slot.gap === 0),
+        `${fx.id}: gold bodies yield body>=8 with clean gaps on the card columns`
+      );
+      const live = liveDecision(parsed);
+      ok(
+        live.decision === 'accept' && live.reasons.includes('all-unknown-card-pixels') &&
+          live.ids.length === 3 && live.cardCount === 3 &&
+          live.knownIds.length === 0 && live.placeholderIds.length === 3,
+        `${fx.id}: live PNG classifies accept via all-unknown-card-pixels`
       );
     }
     if (fx.id === 'negative-headerless-no-teal') {

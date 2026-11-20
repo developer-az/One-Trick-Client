@@ -101,10 +101,8 @@ async function main(): Promise<void> {
       parts.push(`__OT_CARDS_VISIBLE ${f.rawOcr.cardsVisible ? 1 : 0}__`);
     }
     if (f.rawOcr.cardSlots) {
-      // Frozen fixtures predate the explicit-gap contract; the live sampler emits
-      // gap:0 for these bounded teal patches, so model that in the marker.
-      const slots = f.rawOcr.cardSlots.map((s) => ({ ...s, gap: s.gap ?? 0 }));
-      parts.push(`__OT_CARD_SLOTS__${JSON.stringify(slots)}`);
+      // Frozen slots are the sampler's own output, gaps included; no adapter gap.
+      parts.push(`__OT_CARD_SLOTS__${JSON.stringify(f.rawOcr.cardSlots)}`);
     }
     parts.push(f.rawOcr.text, `__OT_LINES__${JSON.stringify(f.rawOcr.lines)}`);
     return parseMayhemOcrOutput(parts.join('\n'));
@@ -383,6 +381,36 @@ async function main(): Promise<void> {
         gated.ids.length === 3 && gated.knownIds.length === 0 &&
         gated.placeholderIds.length === 3 &&
         gated.ids.every((id) => gated.placeholderIds.includes(id))
+    );
+  }
+  {
+    const goldFx = fixture('positive-gold-teal-geometry');
+    const goldSlots = (parsedFixture(goldFx).cardSlots ?? []).filter((s) =>
+      [0.33, 0.5, 0.67].some((c) => Math.abs(s.x - c) <= 0.03)
+    );
+    assert(
+      'gold fixture freezes the sampler gaps at the card columns',
+      goldSlots.length === 3 && goldSlots.every((s) => s.body >= 8 && s.gap === 0)
+    );
+    const gatedGold = fromFixture(goldFx, 7000);
+    assert(
+      'headerless all-unknown row with gold bodies accepts via card pixels',
+      gatedGold.cardCount === 3 && gatedGold.decision === 'accept' &&
+        gatedGold.reasons.includes('all-unknown-card-pixels') &&
+        gatedGold.ids.length === 3 && gatedGold.knownIds.length === 0 &&
+        gatedGold.placeholderIds.length === 3
+    );
+    // Identical gold bodies, but leaking gaps: still one band, not three cards.
+    const leakingGold = classifyMayhemFrame({
+      lines: frameLines(goldFx), augments, mode: 'mayhem-likely',
+      state: createMayhemPipelineState(), now: 7000,
+      cardsVisible: true,
+      cardSlots: (parsedFixture(goldFx).cardSlots ?? []).map((s) => ({ ...s, gap: 6 })),
+    });
+    assert(
+      'gold bodies with leaking gaps still fail closed',
+      leakingGold.decision === 'unverified' && leakingGold.ids.length === 0 &&
+        leakingGold.knownIds.length === 0 && leakingGold.placeholderIds.length === 0
     );
   }
   {

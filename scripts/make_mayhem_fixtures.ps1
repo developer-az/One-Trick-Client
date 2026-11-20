@@ -192,3 +192,9 @@ Draw-HeaderlessFixture 'negative-aligned-teal.png' `
 Draw-HeaderlessFixture 'negative-full-width-teal.png' `
   ([System.Drawing.Color]::FromArgb(8, 22, 26)) `
   ([System.Drawing.Color]::FromArgb(60, 180, 190)) $unfamiliar $threeX -FullWidthTealBand
+# Gold bodies on the same 3-card geometry. The rim is bright but just outside
+# the gold body range, so neither rim contrast nor the gaps can count: only the
+# new gold body predicate can set the pixel gate here.
+Draw-HeaderlessFixture 'positive-gold-teal-geometry.png' `
+  ([System.Drawing.Color]::FromArgb(201, 169, 98)) `
+  ([System.Drawing.Color]::FromArgb(200, 170, 135)) $unfamiliar

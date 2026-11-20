@@ -35,6 +35,8 @@ function ocrScriptPath(): string {
 }
 
 let ocrInFlight = false;
+/** A PageDown press was refused because another capture held the single OCR slot. */
+let pendingManual = false;
 let lastOfferIds: string[] = [];
 /** Hysteresis for the geometry-gated pipeline (lone-card confirm / ignore window). */
 const pipelineState = createMayhemPipelineState();
@@ -82,6 +84,28 @@ export function getMayhemOcrDebug(): {
 /** The augment OCR saw an all-black frame this match (exclusive fullscreen). */
 export function mayhemOcrBlackFrameSeen(): boolean {
   return blackFrameSeen;
+}
+
+/** True while a capture/OCR pass holds the single scan slot. */
+export function isMayhemOcrInFlight(): boolean {
+  return ocrInFlight;
+}
+
+/** Remember a manual press that could not run because a capture was in flight. */
+export function noteMayhemManualPressInFlight(): void {
+  pendingManual = true;
+}
+
+/** Consume the queued manual press once, so at most one follow-up scan runs. */
+export function takePendingMayhemManual(): boolean {
+  if (!pendingManual) return false;
+  pendingManual = false;
+  return true;
+}
+
+/** Drop a queued manual press (match end). */
+export function clearPendingMayhemManual(): void {
+  pendingManual = false;
 }
 
 /** Called when a match's mode loop starts; the hint is per match, not per pick. */
@@ -227,6 +251,8 @@ function logMayhemFrame(detail: {
   owner: boolean | undefined;
   acceptedIds: string[];
   decision: MayhemFrameDecision;
+  /** Per-slot mean body RGB (`x=r,g,b;…`) so a real run records gold-window evidence. */
+  slotBodyRgb: string;
 }): void {
   overlayLog('mayhem-frame', {
     reason: detail.reason.slice(0, 200),
@@ -236,6 +262,7 @@ function logMayhemFrame(detail: {
     owner: detail.owner ?? null,
     acceptedIds: detail.acceptedIds,
     decision: detail.decision,
+    slotBodyRgb: detail.slotBodyRgb,
   });
 }
 
@@ -572,6 +599,9 @@ export async function detectMayhemOffers(
       owner,
       acceptedIds,
       decision,
+      slotBodyRgb: (parsed.cardSlots ?? [])
+        .map((s) => `${s.x}=${s.bodyR ?? '?'},${s.bodyG ?? '?'},${s.bodyB ?? '?'}`)
+        .join(';'),
     });
     if (decision === 'accept') {
       // Keep reroll/fast-poll bookkeeping; the pipeline owns the display ids

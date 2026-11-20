@@ -199,11 +199,17 @@ $CARD_GAP_OFFSET = 0.085
 
 function Test-CardBody {
   param([int]$R, [int]$G, [int]$B)
-  return (($R -le 12) -and
+  $teal = (($R -le 12) -and
           ($G -ge 7 -and $G -le 32) -and
           ($B -ge 7 -and $B -le 36) -and
           ([Math]::Abs($G - $B) -le 7) -and
           ($G -gt ($R + 4)))
+  # Gold-rarity bodies are warm, not teal: accept them so a gold roll is not stuck "Cannot verify".
+  $gold = (($R -ge 150 -and $R -le 230) -and
+          ($G -ge 120 -and $G -le 190) -and
+          ($B -ge 40 -and $B -le 130) -and
+          ([Math]::Abs($R - $G) -le 60))
+  return ($teal -or $gold)
 }
 
 function Get-CardSlotEvidence {
@@ -217,12 +223,15 @@ function Get-CardSlotEvidence {
   $body = 0
   $rim = 0
   $gap = 0
+  # Mean body RGB is logged so a real run can confirm the gold window without trusting the predicate.
+  $sumR = 0; $sumG = 0; $sumB = 0; $bodySamples = 0
   foreach ($dx in @(-0.02, 0.0, 0.02)) {
     foreach ($dy in @(-0.02, 0.0, 0.02)) {
       $x = [int][Math]::Round($cx + $dx * $w)
       $y = [int][Math]::Round($bodyY + $dy * $h)
       if ($x -lt 0 -or $x -ge $w -or $y -lt 0 -or $y -ge $h) { continue }
       $c = $Bitmap.GetPixel($x, $y)
+      $sumR += [int]$c.R; $sumG += [int]$c.G; $sumB += [int]$c.B; $bodySamples += 1
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
     }
   }
@@ -252,6 +261,9 @@ function Get-CardSlotEvidence {
     body = $body
     rim = $rim
     gap = $gap
+    bodyR = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumR / $bodySamples) } else { 0 })
+    bodyG = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumG / $bodySamples) } else { 0 })
+    bodyB = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumB / $bodySamples) } else { 0 })
   }
 }
 

@@ -119,12 +119,17 @@ import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
 import { decideMayhemPageUp } from '../src/logic/mayhem/hotkey';
 import { loadMayhemBundle, refreshMayhemBundleIfStale } from './mayhem-data';
 import {
+    clearPendingMayhemManual,
     detectMayhemOffers,
+    isMayhemOcrInFlight,
     isMayhemOcrRerollPending,
     mayhemOcrBlackFrameSeen,
+    noteMayhemManualPressInFlight,
     resetMayhemOcrCache,
     resetMayhemOcrMatchFlags,
     setMayhemOcrRetainOffers,
+    takePendingMayhemManual,
+    type MayhemScreenReader,
 } from './mayhem-ocr';
 import {
     getMayhemPicksTaken,
@@ -773,9 +778,14 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
     // as non-fresh must still let the next scan show the roll.
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
+    // Every press gets an immediate, visible status change before any await.
+    mayhemManualRestoreActive = true;
+    pushMayhemManualFeedback('Scanning…');
     const bundle = loadMayhemBundle();
     if (!bundle?.augments?.length) {
         logMayhemHotkeyRoute({ key, routed: false, reason: 'no-bundle' });
+        mayhemManualRestoreActive = false;
+        pushMayhemManualFeedback('retrying…');
         return;
     }
     // The player asked for this roll: invalidate any auto scan that started
@@ -788,11 +798,15 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
         read = await detectMayhemOffers(
             bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
             0,
-            { minMatches: 1, mayhemMatch: modeMayhem, forcedManual: true }
+            { minMatches: 1, mayhemMatch: modeMayhem, forcedManual: true, readScreen: mayhemVerifyReader }
         );
     } finally {
         mayhemHotkeyRestoreInFlight -= 1;
     }
+    mayhemManualRestoreActive = false;
+    // This pass just released the OCR slot: run any press that was queued while
+    // it was held (possibly by a different key press during this scan).
+    flushPendingMayhemManual();
     const ids = read.ids;
     logMayhemHotkeyRoute({
         key,
@@ -813,6 +827,14 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
     // so writing them here would purge the panel the player is looking at — the
     // recovery key must not destroy it.
     if (!read.fresh) {
+        // The press still counts: queue one forced scan to run as soon as the
+        // capture that holds the slot settles, and show the retry status now.
+        if (read.refusal === 'in-flight') {
+            noteMayhemManualPressInFlight();
+            pushMayhemManualFeedback('scan-in-flight, retrying…');
+        } else {
+            pushMayhemManualFeedback('retrying…');
+        }
         return;
     }
     // A preview (one card awaiting a second read) and an unverified frame are
@@ -822,9 +844,8 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
         if (read.decision === 'unverified' && mayhemOfferIds.length === 0) {
             // Nothing verified is on screen: show the persistent retry panel.
             mayhemUnverified = true;
-            pushMayhemOverlayPatch();
-            notifyMayhemOverlayStateChanged();
         }
+        pushMayhemManualFeedback(read.decision === 'preview' ? 'preview · retrying…' : 'retrying…');
         return;
     }
     mayhemUnverified = false;
@@ -847,8 +868,7 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
         mayhemManualScanUntilMs = 0;
     }
     applyMayhemOfferVisibilityAfterOcr();
-    pushMayhemOverlayPatch();
-    notifyMayhemOverlayStateChanged();
+    pushMayhemManualFeedback(`offers:${ids.length}`);
 }
 
 /** Diagnostics for the performance panel. */
@@ -1210,9 +1230,8 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
-        mayhemOcrHint: mayhemOcrBlackFrameSeen()
-            ? 'Use borderless for augment detection'
-            : undefined,
+        mayhemOcrHint: mayhemOcrHintValue(),
+        mayhemOcrFeedbackNonce,
         timestamp: Date.now(),
     };
 
@@ -1266,6 +1285,7 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         payload.mayhemWaitingForDeath ? 1 : 0,
         payload.mayhemAugmentDismissedAt ?? 0,
         payload.mayhemOcrHint || '',
+        payload.mayhemOcrFeedbackNonce ?? 0,
     ].join('~');
 }
 
@@ -1279,6 +1299,16 @@ let mayhemUnverified = false;
 function mayhemVerificationValue(): 'verified' | 'unverified' {
     return mayhemUnverified ? 'unverified' : 'verified';
 }
+/** Bumped on every manual press so its hint always changes the overlay fingerprint. */
+let mayhemOcrFeedbackNonce = 0;
+/** Transient manual-scan status shown instead of the idle "Cannot verify" text. */
+let mayhemOcrFeedbackHint: string | undefined;
+/** A settled press with no accept: an explicit prompt, never a claim of running work. */
+const MAYHEM_OCR_UNVERIFIED_OUTCOME = 'Could not verify — press PageDown to retry';
+/** A manual restore is between its Scanning push and its OCR settle. */
+let mayhemManualRestoreActive = false;
+/** Verify seam: an injected reader drives the real hotkey/poll scans without a capture. */
+let mayhemVerifyReader: MayhemScreenReader | undefined;
 /**
  * The roll that vanished when the pick counter fired. A reroll re-deals the
  * shop within seconds; a disjoint roll inside the window means that "pick" was
@@ -1727,6 +1757,64 @@ function startMayhemPoll(): void {
     scheduleMayhemPoll(1200);
 }
 
+/** The manual-scan status (with its per-press nonce) or the black-frame warning. */
+function mayhemOcrHintValue(): string | undefined {
+    if (!mayhemOcrFeedbackHint) {
+        return mayhemOcrBlackFrameSeen() ? 'Use borderless for augment detection' : undefined;
+    }
+    // "Scanning…"/"retrying…" is only true while a capture is in flight (a
+    // queued press keeps one in flight too). Once it settles the press has
+    // ended, so report its outcome instead of implying retry work is running.
+    const transient =
+        mayhemOcrFeedbackHint === 'Scanning…' || mayhemOcrFeedbackHint.includes('retrying…');
+    const working = isMayhemOcrInFlight() || mayhemManualRestoreActive;
+    const hint = transient && !working ? MAYHEM_OCR_UNVERIFIED_OUTCOME : mayhemOcrFeedbackHint;
+    return `${hint} · #${mayhemOcrFeedbackNonce}`;
+}
+
+/** Force a fresh overlay patch with a visible manual-scan status. */
+function pushMayhemManualFeedback(hint: string): void {
+    mayhemOcrFeedbackNonce += 1;
+    mayhemOcrFeedbackHint = hint;
+    pushMayhemOverlayPatch();
+}
+
+/**
+ * Verify-only harness: prime a live Mayhem match and inject the screen reader
+ * every production detectMayhemOffers call uses. Pass null to restore idle.
+ */
+export function setMayhemHotkeyVerifyHarness(harness: {
+    readScreen: MayhemScreenReader;
+    gameMode?: string;
+    mapName?: string;
+} | null): void {
+    mayhemVerifyReader = harness?.readScreen;
+    if (!harness) return;
+    inGame = true;
+    const payload = buildOverlayPayload(null, null);
+    lastGoodPayload = {
+        ...payload,
+        gameMode: harness.gameMode ?? 'KIWI',
+        mapName: harness.mapName ?? 'Map11',
+    };
+}
+
+/** Run the manual scan a press queued while another capture held the OCR slot. */
+export function flushPendingMayhemManual(
+    runManual: () => void = () => {
+        void triggerManualMayhemOcrFromHotkey();
+    }
+): void {
+    if (!takePendingMayhemManual()) return;
+    if (isMayhemOcrInFlight()) {
+        // The scan that just settled was not the one holding the slot; wait for
+        // the real in-flight pass to finish before retrying.
+        noteMayhemManualPressInFlight();
+        return;
+    }
+    runManual();
+}
+
 function pushMayhemOverlayPatch(): void {
     if (!lastGoodPayload) return;
     const merged = mergedMayhemOfferIds(mayhemOfferIds);
@@ -1739,16 +1827,16 @@ function pushMayhemOverlayPatch(): void {
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
-        mayhemOcrHint: mayhemOcrBlackFrameSeen()
-            ? 'Use borderless for augment detection'
-            : undefined,
+        mayhemOcrHint: mayhemOcrHintValue(),
+        mayhemOcrFeedbackNonce,
         timestamp: Date.now(),
     };
     const fp = overlayFingerprint(payload);
     if (fp === lastOverlayFingerprint) return;
     lastGoodPayload = payload;
     lastOverlayFingerprint = fp;
-    sendFullOverlayUpdate(payload);
+    // The verify harness counts patches through the nonce; it has no BrowserWindow.
+    if (!mayhemVerifyReader) sendFullOverlayUpdate(payload);
 }
 
 /** Dashboard owned/roll edits — push merged offers without waiting for the next live poll. */
@@ -1845,13 +1933,16 @@ async function tickMayhemOcr(): Promise<void> {
             const read = await detectMayhemOffers(
                 bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
                 minGap,
-                { minMatches, mayhemMatch: active }
+                { minMatches, mayhemMatch: active, readScreen: mayhemVerifyReader }
             );
             scan.decision = read.decision;
             scan.unverifiedFrame = read.fresh && !read.valid && read.decision === 'unverified';
             return read;
         }
     );
+    // This scan just released the OCR slot: a PageDown press that arrived while
+    // it ran must not be dropped — run it now as a forced manual scan.
+    flushPendingMayhemManual();
     // Only a scan that no purge/reset overtook may write back: its cloned state
     // predates the purge and would re-show the roll the player already picked.
     const commit = commitMayhemMonitorScan(
@@ -1935,6 +2026,10 @@ export function getMayhemLiveOfferIds(): string[] {
 }
 
 function resetMatchCaches(): void {
+    clearPendingMayhemManual();
+    mayhemManualRestoreActive = false;
+    mayhemOcrFeedbackNonce = 0;
+    mayhemOcrFeedbackHint = undefined;
     mayhemPickVoidRollIds = [];
     mayhemPickVoidAtMs = 0;
     lastChampSelectEnemies = [];
@@ -2770,4 +2865,6 @@ export {
     momentCueContent,
     resetMatchCaches,
     liveTick,
+    mayhemOcrHintValue,
+    pushMayhemManualFeedback,
 };

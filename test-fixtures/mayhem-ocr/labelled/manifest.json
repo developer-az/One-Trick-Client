@@ -565,13 +565,13 @@
                            }
                          ],
                          "cardSlots": [
-                           { "x": 0.33, "body": 9, "rim": 9 },
-                           { "x": 0.5, "body": 9, "rim": 9 },
-                           { "x": 0.67, "body": 9, "rim": 9 },
-                           { "x": 0.245, "body": 3, "rim": 4 },
-                           { "x": 0.415, "body": 6, "rim": 8 },
-                           { "x": 0.585, "body": 6, "rim": 8 },
-                           { "x": 0.755, "body": 3, "rim": 4 }
+                           { "x": 0.33, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.5, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.67, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.245, "body": 3, "rim": 4, "gap": 3 },
+                           { "x": 0.415, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.585, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.755, "body": 3, "rim": 4, "gap": 3 }
                          ],
                          "cardsVisible": true
                        }
@@ -617,13 +617,13 @@
                            }
                          ],
                          "cardSlots": [
-                           { "x": 0.33, "body": 0, "rim": 0 },
-                           { "x": 0.5, "body": 0, "rim": 0 },
-                           { "x": 0.67, "body": 0, "rim": 0 },
-                           { "x": 0.245, "body": 0, "rim": 0 },
-                           { "x": 0.415, "body": 0, "rim": 0 },
-                           { "x": 0.585, "body": 0, "rim": 0 },
-                           { "x": 0.755, "body": 0, "rim": 0 }
+                           { "x": 0.33, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.5, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.67, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.245, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.415, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.585, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.755, "body": 0, "rim": 0, "gap": 0 }
                          ],
                          "cardsVisible": false
                        }
@@ -646,13 +646,13 @@
                            { "text": "Nebula", "rect": { "x": 0.7068, "y": 0.3796, "w": 0.0948, "h": 0.0389 } }
                          ],
                          "cardSlots": [
-                           { "x": 0.33, "body": 6, "rim": 8 },
-                           { "x": 0.5, "body": 6, "rim": 8 },
-                           { "x": 0.67, "body": 6, "rim": 8 },
-                           { "x": 0.245, "body": 9, "rim": 9 },
-                           { "x": 0.415, "body": 9, "rim": 9 },
-                           { "x": 0.585, "body": 9, "rim": 9 },
-                           { "x": 0.755, "body": 9, "rim": 9 }
+                           { "x": 0.33, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.5, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.67, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.245, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.415, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.585, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.755, "body": 9, "rim": 9, "gap": 0 }
                          ],
                          "cardsVisible": true
                        }
@@ -709,6 +709,58 @@
                            { "x": 0.415, "body": 9, "rim": 0, "gap": 6 },
                            { "x": 0.585, "body": 9, "rim": 0, "gap": 6 },
                            { "x": 0.755, "body": 9, "rim": 0, "gap": 6 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "positive-gold-teal-geometry",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-gold-teal-geometry.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; gold bodies on the teal-card geometry)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns x=0.33/0.50/0.67 with gold (#c9a962) bodies and non-gold rims, no shop text. Body>=8 on the bounded card slots sets the pixel gate; synthetic.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.5, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.67, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.245, "body": 3, "rim": 0, "gap": 3 },
+                           { "x": 0.415, "body": 6, "rim": 0, "gap": 6 },
+                           { "x": 0.585, "body": 6, "rim": 0, "gap": 6 },
+                           { "x": 0.755, "body": 3, "rim": 0, "gap": 3 }
                          ],
                          "cardsVisible": true
                        }

@@ -75,7 +75,11 @@ import {
 } from '../logic/mayhem';
 import type { MayhemBundle } from '../logic/mayhem/types';
 import { validateMayhemBundle } from '../logic/mayhem/bundleSanitize';
-import { OverlayMayhemPanel } from './OverlayMayhemPanel';
+import {
+  isMayhemManualScanHint,
+  OverlayMayhemPanel,
+  shouldActivateMayhemSlot,
+} from './OverlayMayhemPanel';
 import { OverlayPet } from './OverlayPet';
 import { LoadingCard } from './LoadingCard';
 import { cardRect } from './loadingScreenGeometry';
@@ -976,14 +980,20 @@ export const OverlayApp: React.FC = () => {
     () => false
   );
 
-  // An unverified frame activates the slot with ZERO offer ids so the persistent
-  // "press PageDown to retry" panel can render — a verified roll still needs ids.
+  // An unverified frame OR a live PageDown press activates the slot with ZERO
+  // offer ids so the persistent retry/scanning panel can render — a verified
+  // roll still needs ids.
   const mayhemUnverified = state.mayhemVerification === 'unverified';
-  const mayhemPanelActive =
-    (inMayhem || inAram) &&
-    hudModules.mayhem &&
-    !mayhemDismissedRecently &&
-    (mayhemUnverified || (!!state.mayhemAugmentWindow && displayMayhemOfferIds.length > 0));
+  const mayhemPanelActive = shouldActivateMayhemSlot({
+    mayhemFamily: inMayhem || inAram,
+    moduleOn: hudModules.mayhem,
+    dismissedRecently: mayhemDismissedRecently,
+    unverified: mayhemUnverified,
+    augmentWindow: !!state.mayhemAugmentWindow,
+    offerCount: displayMayhemOfferIds.length,
+    ocrHint: state.mayhemOcrHint,
+  });
+  const mayhemScanHintActive = (inMayhem || inAram) && isMayhemManualScanHint(state.mayhemOcrHint);
 
   const mayhemLayoutPos =
     layoutElement(hudLayout, 'mayhem') ||
@@ -1102,7 +1112,7 @@ export const OverlayApp: React.FC = () => {
         hudModules.buy &&
         buyQueue.length > 0 &&
         slotHasModule('buy')) ||
-      (mayhemPanelActive &&
+      ((mayhemPanelActive || mayhemScanHintActive) &&
         (slotHasModule('mayhem') || slotHasModule('vision') || slot?.id === 'slot-center' || slot?.id === 'slot-0'))
     );
   })();
@@ -1773,6 +1783,7 @@ export const OverlayApp: React.FC = () => {
                   ranked={mayhemRanked}
                   mode="roll"
                   verification={state.mayhemVerification}
+                  ocrHint={state.mayhemOcrHint}
                 />
               </div>
             </OverlayChromePanel>
@@ -1855,6 +1866,7 @@ export const OverlayApp: React.FC = () => {
                   ranked={mayhemRanked}
                   mode="roll"
                   verification={state.mayhemVerification}
+                  ocrHint={state.mayhemOcrHint}
                 />
               ) : null}
               {!inAram && showGank ? <GankSquare threat={gankStatus} compact /> : null}

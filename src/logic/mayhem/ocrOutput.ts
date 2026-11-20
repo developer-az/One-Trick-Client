@@ -24,6 +24,10 @@ export interface MayhemCardSlot {
    * Hand-built reads may omit it, but the parser drops such slots: only an explicit finite gap carries evidence.
    */
   gap?: number;
+  /** Mean RGB of the sampled body patch, for logging only; absent in older/hand-built reads. */
+  bodyR?: number;
+  bodyG?: number;
+  bodyB?: number;
 }
 
 export interface MayhemOcrOutput {
@@ -208,7 +212,12 @@ function cardSlotsFromJson(json: string): MayhemCardSlot[] {
       typeof v === 'number' && Number.isFinite(v) ? v : undefined;
     const x = num(src.x), body = num(src.body), rim = num(src.rim), gap = num(src.gap);
     if (x === undefined || body === undefined || rim === undefined || gap === undefined) continue;
-    slots.push({ x: unit(x), body, rim, gap });
+    const slot: MayhemCardSlot = { x: unit(x), body, rim, gap };
+    const r = num(src.bodyR), g = num(src.bodyG), b = num(src.bodyB);
+    if (r !== undefined) slot.bodyR = r;
+    if (g !== undefined) slot.bodyG = g;
+    if (b !== undefined) slot.bodyB = b;
+    slots.push(slot);
   }
   return slots;
 }

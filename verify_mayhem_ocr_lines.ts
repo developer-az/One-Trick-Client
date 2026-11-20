@@ -207,6 +207,34 @@ ok(
   );
 }
 
+// (c9) gold-body evidence rides the same slot marker and schema as teal: no new
+// field, and the same fail-closed rules for a missing gap.
+{
+  const goldMarked = parseMayhemOcrOutput(
+    ['__OT_CARDS_VISIBLE 1__', '__OT_CARD_SLOTS__[{"x":0.33,"body":9,"rim":0,"gap":0}]', 'Zephyr'].join('\n')
+  );
+  const goldSlot = goldMarked.cardSlots?.[0];
+  ok(
+    goldMarked.cardsVisible === true && goldMarked.text === 'Zephyr',
+    'gold-body evidence keeps the coarse flag and text projection unchanged'
+  );
+  ok(
+    goldSlot !== undefined &&
+      Object.keys(goldSlot).sort().join(',') === 'body,gap,rim,x' &&
+      goldSlot.body === 9 && goldSlot.rim === 0 && goldSlot.gap === 0,
+    'gold body evidence decodes with the unchanged card-slot schema (no new fields)'
+  );
+  ok(
+    parseMayhemOcrOutput('__OT_CARD_SLOTS__[{"x":0.33,"body":9,"rim":0}]').cardSlots?.length === 0,
+    'a gold-shaped slot with no explicit gap still fails closed'
+  );
+  const tealSlot = parseMayhemOcrOutput('__OT_CARD_SLOTS__[{"x":0.33,"body":9,"rim":9,"gap":0}]').cardSlots?.[0];
+  ok(
+    tealSlot?.body === 9 && tealSlot?.rim === 9 && tealSlot?.gap === 0,
+    'teal slot evidence still decodes unchanged beside gold support'
+  );
+}
+
 // (d) the script emits the marker with boxes when OCR runs on a file
 function live(): void {
   if (process.platform !== 'win32') {
