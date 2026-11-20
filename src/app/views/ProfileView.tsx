@@ -7,7 +7,7 @@
  * visible, disabled placeholder so the next brief has a home. The key field
  * never stores or sends anything.
  */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import { isDesktop, type DraftState, type LeagueState } from '../hooks';
 import type { ViewId } from '../App';
@@ -50,6 +50,10 @@ export const ProfileView: React.FC<{
   onNavigate,
 }) => {
   const status = leagueStatus(league, draft);
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v)).catch(() => undefined);
+  }, []);
   const summoner = league.lcu?.summonerName || '';
   const connected = league.lcu?.state === 'connected';
   const activePinChampion = activeChampion
@@ -211,6 +215,7 @@ export const ProfileView: React.FC<{
           <p className="ot-profile-about">
             {isDesktop ? 'Desktop' : 'Browser preview'} · not endorsed by Riot Games.
           </p>
+          <p className="ot-profile-about">Version {appVersion ? `v${appVersion}` : ''}</p>
           <p className="ot-profile-about">
             Auto-clip plays FFmpeg 6.1.1 as a separate program. That build is GPL-3.0. License and source are in
             THIRD_PARTY_NOTICES.txt.

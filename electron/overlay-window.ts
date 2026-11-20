@@ -1850,6 +1850,7 @@ export function broadcastOverlayMeta(): void {
         displayWidth: display.bounds.width,
         displayHeight: display.bounds.height,
         slot: currentSlot(),
+        version: app.getVersion(),
     });
 }
 

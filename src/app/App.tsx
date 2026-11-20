@@ -118,6 +118,10 @@ export const App: React.FC = () => {
   const status = leagueStatus(league, draft);
   const { tier, disk } = useOrbitShell();
   const titlebar = titlebarMetrics();
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v)).catch(() => undefined);
+  }, []);
 
   // Jump to champ select when it starts; a lobby is the one moment the user
   // needs this screen without having to look for it.
@@ -508,6 +512,7 @@ export const App: React.FC = () => {
         }}
       >
         FFmpeg 6.1.1 · GPL-3.0 · <span className="ot-licence-link">Licenses</span>
+        {appVersion ? ` · v${appVersion}` : ''}
       </a>
 
       <PixelPet stage={status.stage} preference={pet} />

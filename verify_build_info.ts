@@ -22,9 +22,8 @@ ok(readTestBuildLabel(null) === null && readTestBuildLabel(undefined) === null &
 ok((readTestBuildLabel({ testBuildLabel: 'x'.repeat(200) }) || '').length <= 60, 'label: capped at 60 chars');
 ok(!(readTestBuildLabel({ testBuildLabel: 'a\nb' }) || '').includes('\n'), 'label: single line');
 
-ok(windowTitleFor(null) === 'One Trick', 'title: normal build unchanged');
-const title = windowTitleFor('overlay-fix-3');
-ok(title.startsWith('One Trick') && title.includes('TEST BUILD') && title.includes('overlay-fix-3'), `title: test build is labelled (${title})`);
+ok(windowTitleFor(null, '1.7.1-test.16') === 'One Trick v1.7.1-test.16', 'title: normal build unchanged');
+ok(windowTitleFor('first-run', '1.7.1-test.16') === 'One Trick v1.7.1-test.16 · TEST BUILD first-run', 'title: test build is labelled');
 
 const msg = secondInstanceMessage('overlay-fix-3');
 ok(msg.title.length > 0 && msg.title.length <= 80, 'second instance: has a short title');

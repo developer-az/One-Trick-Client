@@ -85,6 +85,7 @@ import { resetJungleThreatClock } from '../src/logic/jungleLogic';
 import {
     HOWLING_ABYSS_MAP_ID,
     detectMayhemMode,
+    inferMayhemQueueFromMode,
     isAramOrMayhem,
     isMayhemMode,
     type MayhemMode,
@@ -215,8 +216,20 @@ let champSelectSlot: LoadingSlot | null = null;
 /** Queue + map for this game, captured at load entry and kept all match (Step H). */
 let matchQueueId: number | null = null;
 let matchMapId: number | null = null;
-/** Increments once per beginMatch; scopes the one in-game queue GET. */
+/** Bumped on each phase change/match start so a late queue read lands in the right game. */
 let matchStartToken = 0;
+/**
+ * hexsight-style queue read: retry each tick in Lobby/ChampSelect/InGame until a
+ * real queue (and, in game, the session's game id) is seen. A failed read keeps
+ * the previous queue instead of turning the match into an unknown one.
+ */
+let matchQueueReadDone = false;
+let matchQueueGameId: number | null = null;
+let matchQueueIdTries = 0;
+let queueRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let queueReadInFlight = false;
+const QUEUE_RETRY_MS = 1000;
+const QUEUE_GAME_ID_MAX_TRIES = 30;
 /** Load token whose one reconnect summaries prefetch already ran (0 = none). */
 let reconnectSummaryPrefetched = 0;
 /**
@@ -395,6 +408,10 @@ function beginChampSelectSession(): void {
     champSelectSession += 1;
     champSelectHistoryPrefetched = false;
     prematchHistoryCache.reset();
+    // A new pick is a genuine new session: drop the previous game's queue here,
+    // not at GameStart where it would strand a KIWI match on a failed load read.
+    matchQueueId = null;
+    matchMapId = null;
 }
 
 /**
@@ -1225,6 +1242,11 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
     return [
         payload.gameflowPhase || '',
         payload.gameMode || '',
+        // A late queue patch changes the mode/routing decision; force a resend
+        // so the overlay sees the queue even when no live stat moved.
+        payload.queueId ?? '',
+        payload.mapId ?? '',
+        payload.mapName || '',
         timeBucket,
         lp?.level ?? 0,
         lp?.isDead ? 1 : 0,
@@ -1541,7 +1563,7 @@ function mayhemPicksResolved(level: number): number {
 
 function syncMayhemPickPhase(live: LiveClientAllGameData): void {
     const localPlayer = findLocalPlayer(live);
-    const level = localPlayer?.level ?? live.activePlayer?.level ?? 1;
+    const level = localPlayer?.level ?? live.activePlayer?.level ?? 0;
     const isDead = !!localPlayer?.isDead;
     const ownedCount = mayhemPicksResolved(level);
     const prevOpen = mayhemPickPhase.pickWindowOpen;
@@ -1594,7 +1616,7 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
 function syncMayhemPickPhaseFromPayload(): void {
     if (!lastGoodPayload) return;
     const lp = lastGoodPayload.localPlayer;
-    const level = lp?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const level = lp?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     const isDead = !!lp?.isDead;
 
     const ownedCount = mayhemPicksResolved(level);
@@ -1643,7 +1665,7 @@ function nextMayhemPollDelayMs(): number {
     syncMayhemPickPhaseFromPayload();
     if (mayhemPickPhase.pickWindowOpen) return 900;
     if (mayhemPickPhase.waitingForDeath) return 4000;
-    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     const plan = planMayhemOcr({
         level,
         previousLevel: mayhemLastLevel,
@@ -1763,11 +1785,16 @@ async function tickMayhemOcr(): Promise<void> {
         pushMayhemOverlayPatch();
     }
 
-    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     mayhemLastLevel = level;
 
     const bundle = loadMayhemBundle();
-    if (!bundle?.augments?.length) return;
+    if (!bundle?.augments?.length) {
+        overlayLog('mayhem-no-bundle', { level, mode, discovery });
+        // No OCR data yet: keep the poll armed and leave the discovery latch
+        // untouched. The bundle can arrive on a later tick; no scan ran here.
+        return;
+    }
 
     // Computed once: the gate advances the per-level re-arm state, so a second
     // call in this tick would see a different answer.
@@ -1917,6 +1944,8 @@ function resetMatchCaches(): void {
     champSelectSlot = null;
     matchQueueId = null;
     matchMapId = null;
+    stopQueueRead();
+    resetQueueRead();
     prematchStats = null;
     prematchStatsToken += 1;
     loadingSessionToken = 0;
@@ -2005,7 +2034,7 @@ function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): Retur
     // moment-cue channel. Cooldowns reset on match start.
     const coachCue = tickCoachCues(getGameState(), getObjectiveTimers(), {
         gameTime: payload.gameTime || 0,
-        level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 1,
+        level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 0,
         isDead: payload.localPlayer?.isDead ?? false,
         respawnSec: 0,
         currentGold: payload.localPlayer?.currentGold ?? null,
@@ -2175,8 +2204,8 @@ function enterPrematchLoading(phase: string | null): void {
     // first payload).
     loadingSlot = null;
     applyLoadingSlot(champSelectSlot);
-    matchQueueId = null;
-    matchMapId = null;
+    // The queue learned in Lobby/ChampSelect survives loading: the queue reader
+    // is idle in GameStart, so clearing here would lose it on a failed load read.
     const previousHide = isOverlayUserHidden();
     overlayLog('prematch-loading enter', {
         phase: phase ?? 'none',
@@ -2257,7 +2286,7 @@ function maybeKeepOverlayOnTop(): void {
 function beginMatch(live?: LiveClientAllGameData | null): void {
     console.info('[match] started');
     inGame = true;
-    matchStartToken += 1;
+    resetQueueRead();
     // A live board arrived: the load screen is over, no hide (this is a match).
     exitPrematchLoading('match-start', false);
     let windowMode: string | null = null;
@@ -2310,9 +2339,9 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
         // or re-showing it at match start flickers the handoff, so reuse it.
         ensureOverlayShown();
     }
-    // The Live Client often reports no queue yet. One in-game session read
-    // fills queue/map, then the mode is classified again (never during load).
-    void resolveMatchQueueAfterStart(matchStartToken);
+    // The Live Client often reports no queue yet. Retry the session read each
+    // tick until the game id appears, then re-classify (never during load).
+    scheduleQueueRead(0);
     try {
         onMatchStartHotkeys?.();
     } catch {
@@ -2321,31 +2350,86 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
     onGameStateChange?.(true);
 }
 
+/** Phases in which the client can name a queue for the upcoming/current game. */
+function wantsQueueRead(phase: string | null): boolean {
+    return phase === 'Lobby' || phase === 'ChampSelect' || isInGamePhase(phase);
+}
+
+/** Forget an in-flight queue read and start a fresh one (phase change / new match). */
+function resetQueueRead(): void {
+    matchStartToken += 1;
+    matchQueueReadDone = false;
+    matchQueueGameId = null;
+    matchQueueIdTries = 0;
+}
+
+function stopQueueRead(): void {
+    if (queueRetryTimer) clearTimeout(queueRetryTimer);
+    queueRetryTimer = null;
+}
+
+function scheduleQueueRead(delayMs = QUEUE_RETRY_MS): void {
+    if (queueRetryTimer || !monitorStarted || matchQueueReadDone) return;
+    const token = matchStartToken;
+    queueRetryTimer = setTimeout(() => {
+        queueRetryTimer = null;
+        void readMatchQueueOnce(token).finally(() => {
+            if (!matchQueueReadDone && wantsQueueRead(lcuSocket.phase)) scheduleQueueRead();
+        });
+    }, delayMs);
+}
+
 /**
- * The loading payload usually carries the queue from the champ-select session
- * read. When it is still unknown at match start, spend exactly one
- * `/lol-gameflow/v1/session` GET, then re-run mode detection.
+ * One tick of the queue read. A real queue from the session replaces the last
+ * one; a failed pass keeps it. In game the game id is chased for a few passes
+ * because the session names a queue before it names the game, and the game API
+ * mode (KIWI) fills the queue when the client keeps it null.
  */
-async function resolveMatchQueueAfterStart(token: number): Promise<void> {
-    if (matchQueueId != null && matchMapId != null) return;
+async function readMatchQueueOnce(token: number): Promise<void> {
+    if (queueReadInFlight || matchQueueReadDone || !wantsQueueRead(lcuSocket.phase)) return;
+    queueReadInFlight = true;
     let session: unknown = null;
     try {
         session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
     } catch {
-        return;
+        // Keep the previous queue; the next tick retries.
+    } finally {
+        queueReadInFlight = false;
     }
-    if (token !== matchStartToken || !inGame || !session) return;
-    applyQueueMetadata(session);
+    const phase = lcuSocket.phase;
+    if (token !== matchStartToken || !wantsQueueRead(phase)) return;
+    const previousQueue = matchQueueId;
+    const previousMap = matchMapId;
+    let metaQueueId: number | null = null;
+    let sessionGameMode: string | null | undefined = null;
+    if (session) {
+        const meta = queueMetadataFromGameflowSession(session);
+        metaQueueId = meta.queueId ?? null;
+        if (meta.queueId != null) matchQueueId = meta.queueId;
+        if (meta.mapId != null) matchMapId = meta.mapId;
+        const data = (session as { gameData?: { gameId?: number; gameMode?: string } }).gameData;
+        sessionGameMode = data?.gameMode;
+        if (typeof data?.gameId === 'number' && data.gameId > 0) matchQueueGameId = data.gameId;
+    }
+    const inGame = isInGamePhase(phase);
+    // A failed session GET must not leave a KIWI match unarmed: infer from the
+    // Live Client mode whenever the client named no queue. A real queue wins.
+    if (matchQueueId == null) {
+        const inferred = inferMayhemQueueFromMode(lastGoodPayload?.gameMode ?? sessionGameMode);
+        if (inferred != null) matchQueueId = inferred;
+    }
+    if (inGame) matchQueueIdTries += 1;
+    matchQueueReadDone =
+        !wantsQueueRead(phase) ||
+        (metaQueueId != null &&
+            (!inGame || matchQueueGameId != null || matchQueueIdTries >= QUEUE_GAME_ID_MAX_TRIES));
+    if (matchQueueId === previousQueue && matchMapId === previousMap) return;
     if (lastGoodPayload) {
-        lastGoodPayload = {
-            ...lastGoodPayload,
-            queueId: matchQueueId,
-            mapId: matchMapId,
-        };
+        lastGoodPayload = { ...lastGoodPayload, queueId: matchQueueId, mapId: matchMapId };
     }
     syncMayhemPollForMode({
         ...currentMayhemSignals(),
-        level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 1,
+        level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 0,
         isDead: !!lastGoodPayload?.localPlayer?.isDead,
     });
     pushMayhemOverlayPatch();
@@ -2374,7 +2458,7 @@ function syncMayhemPollForMode(signals: {
         // able to open a burst after an earlier one read nothing.
         noteMayhemDiscoveryTrigger(mayhemMonitorState, {
             now: Date.now(),
-            level: signals.level ?? 1,
+            level: signals.level ?? 0,
             isDead: signals.isDead === true,
             signals,
         }, { anyAramQueue: true });
@@ -2489,7 +2573,7 @@ async function liveTick(): Promise<void> {
                 mapName: payload.mapName,
                 queueId: payload.queueId,
                 mapId: payload.mapId,
-                level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 1,
+                level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 0,
                 isDead: !!payload.localPlayer?.isDead,
             });
             lastGoodPayload = payload;
@@ -2541,6 +2625,13 @@ async function liveTick(): Promise<void> {
             considerMatchEnd(clock.gameTime);
             if (!inGame) return;
             noteLiveClock(clock.gameTime);
+            // The cheap clock proves the match is live, so queue + phase + level
+            // must still route the Mayhem poll here (the live-board branch does).
+            syncMayhemPollForMode({
+                ...currentMayhemSignals(),
+                level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 0,
+                isDead: !!lastGoodPayload?.localPlayer?.isDead,
+            });
             if (!overlayHidden) {
                 ensureOverlayShown();
                 holdLastBoard(false, clock.gameTime);
@@ -2568,6 +2659,13 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
+    // A phase change may mean a different game: start a fresh queue read and
+    // drop owned augments left over from a finished match / previous pick.
+    resetQueueRead();
+    scheduleQueueRead(0);
+    if (phase === 'Offline' || phase === 'ChampSelect') {
+        resetMayhemMatchState();
+    }
     // One history prefetch per champ select, on entry. A pick lock retries it
     // through ingestChampSelectSession if the client was still walking in.
     if (phase === 'ChampSelect') {
@@ -2651,6 +2749,7 @@ export function stopGameMonitor(): void {
     loadingChampion = null;
     prematchStats = null;
     prematchHistoryCache.reset();
+    stopQueueRead();
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();

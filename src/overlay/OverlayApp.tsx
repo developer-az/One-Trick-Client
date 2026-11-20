@@ -251,10 +251,12 @@ const BuyRailPanel = React.memo(function BuyRailPanel({
 const SwitchProfileRailPanel = React.memo(function SwitchProfileRailPanel({
   profile,
   liveChampionName,
+  version,
   onCollapse,
 }: {
   profile: ChampionProfile;
   liveChampionName?: string;
+  version?: string;
   onCollapse: () => void;
 }) {
   return (
@@ -269,7 +271,7 @@ const SwitchProfileRailPanel = React.memo(function SwitchProfileRailPanel({
               className="hud-champ-icon shrink-0"
             />
             <div className="min-w-0">
-              <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
+              <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick{version ? ` v${version}` : ''}</div>
               <div className="hud-chrome-meta !text-[11px]">{profile.shortLabel}</div>
             </div>
           </div>
@@ -472,6 +474,7 @@ export const OverlayApp: React.FC = () => {
   } | null>(null);
   const [calibration, setCalibration] = useState<OverlayCalibration>({ ability: emptyCalibration(), minimap: emptyCalibration() });
   const [petPreference, setPetPreference] = useState<PetSettings>(PET_DEFAULTS);
+  const [appVersion, setAppVersion] = useState('');
   const compactPanel = !clickThrough && !alignMode;
   const [profileId, setProfileId] = useState<ProfileId>(() =>
     typeof window !== 'undefined' ? loadStoredProfileId() : 'pyke-support'
@@ -632,8 +635,10 @@ export const OverlayApp: React.FC = () => {
           mode: 'locked' | 'compact' | 'align';
         };
         pet?: unknown;
+        version?: string;
       };
       if (meta.pet) setPetPreference(normalizePet(meta.pet));
+      if (typeof meta.version === 'string') setAppVersion(meta.version);
       if (typeof meta.displayWidth === 'number' && typeof meta.displayHeight === 'number') {
         setDisplaySize({ w: meta.displayWidth, h: meta.displayHeight });
       }
@@ -1778,6 +1783,7 @@ export const OverlayApp: React.FC = () => {
             <SwitchProfileRailPanel
               profile={profile}
               liveChampionName={state.localPlayer?.championName}
+              version={appVersion}
               onCollapse={handleCollapse}
             />
           )}
@@ -1810,7 +1816,7 @@ export const OverlayApp: React.FC = () => {
                 className="hud-champ-icon shrink-0"
               />
               <div className="min-w-0">
-                <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick</div>
+                <div className="hud-chrome-title truncate min-w-0 text-[11px]">One Trick{appVersion ? ` v${appVersion}` : ''}</div>
                 <div className="hud-chrome-meta !text-[11px]">
                   {profile.shortLabel}
                   <OverlayClockMeta />

@@ -1,9 +1,31 @@
+/** The queue the game API's KIWI mode implies when the client names none. */
+export const MAYHEM_KIWI_QUEUE_ID = 2400;
+
 /**
- * Queue ids Riot uses for ARAM Mayhem. Kept in one place so the classifier can
- * be updated without touching every call site (the exact id is not verified
- * against a live game yet — see the open question in the handoff).
+ * ARAM Mayhem queues (2400 and variants, plus Classic Mayhem 2450/3280), per
+ * hexsight's queue model. Kept in one place so the classifier changes need no
+ * call-site edits.
  */
-export const MAYHEM_QUEUE_IDS: readonly number[] = [2400];
+export const MAYHEM_QUEUE_IDS: readonly number[] = [
+    MAYHEM_KIWI_QUEUE_ID,
+    2401,
+    2403,
+    2405,
+    2410,
+    2450,
+    3240,
+    3270,
+    3280,
+];
+
+/**
+ * Infer the Mayhem queue from the game API mode. Only call this in-game with no
+ * client-provided queue: a named queue always wins.
+ */
+export function inferMayhemQueueFromMode(gameMode: string | null | undefined): number | null {
+    const mode = (gameMode || '').trim().toUpperCase();
+    return mode.includes('KIWI') || mode.includes('MAYHEM') ? MAYHEM_KIWI_QUEUE_ID : null;
+}
 
 /** Classic ARAM queues. They share Howling Abyss with Mayhem but have no augments. */
 export const ARAM_QUEUE_IDS: readonly number[] = [450, 100];

@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // App settings + diagnostics
     getAppSettings: () => ipcRenderer.invoke('app-settings-get'),
+    getAppVersion: () => ipcRenderer.invoke('app-get-version'),
     setAppSettings: (patch: unknown) => ipcRenderer.invoke('app-settings-set', patch),
     getMatchHistory: () => ipcRenderer.invoke('match-history-get'),
     getMayhemBundle: () => ipcRenderer.invoke('mayhem-get'),

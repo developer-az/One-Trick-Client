@@ -98,7 +98,7 @@ import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
 import { overlayLog } from './overlay-log';
 import { isWinAlive, safeCall, installCrashNet } from './safe-window';
-import { readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
+import { readAppVersion, readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
@@ -115,15 +115,18 @@ installCrashNet((message) => {
     }
 });
 
-// Read our own package.json once at startup so a test build can identify itself.
+// Read our own package.json once at startup so the build can identify itself.
 let testBuildLabel: string | null = null;
+let appVersion: string | null = null;
 try {
     const packageJson = JSON.parse(
         fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
     ) as unknown;
     testBuildLabel = readTestBuildLabel(packageJson);
+    appVersion = readAppVersion(packageJson);
 } catch {
     testBuildLabel = null;
+    appVersion = null;
 }
 
 let win: BrowserWindow | null;
@@ -253,14 +256,12 @@ function createWindow() {
         }
     });
 
-    if (testBuildLabel) {
-        const title = windowTitleFor(testBuildLabel);
-        win.setTitle(title);
-        win.on('page-title-updated', (event) => {
-            event.preventDefault();
-            win?.setTitle(title);
-        });
-    }
+    const title = windowTitleFor(testBuildLabel, appVersion ?? app.getVersion());
+    win.setTitle(title);
+    win.on('page-title-updated', (event) => {
+        event.preventDefault();
+        win?.setTitle(title);
+    });
 
     win.on('close', (event) => {
         if (!quittingApp) {
@@ -554,6 +555,8 @@ app.whenReady().then(() => {
         });
 
     // IPC Handlers
+    ipcMain.handle('app-get-version', () => appVersion ?? app.getVersion());
+
     // User-initiated connect: allowed to use the slow process probe once.
     ipcMain.handle('lcu-connect', async () => {
         if (lcuSocket.state === 'connected') return { success: true };
@@ -1070,6 +1073,7 @@ app.whenReady().then(() => {
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,
+            version: appVersion ?? app.getVersion(),
         };
     });
 

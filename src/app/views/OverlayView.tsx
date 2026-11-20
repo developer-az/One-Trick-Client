@@ -122,6 +122,10 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
   const { state, patch } = useOverlayControls();
   const { champions } = useCatalog();
   const api = window.electronAPI;
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v)).catch(() => undefined);
+  }, []);
 
   const setModules = (modules: HudModules, layout = applyModulesToLayout(state.layout, modules)) => {
     patch({ modules, layout });
@@ -195,6 +199,11 @@ export const OverlayView: React.FC<{ inGame: boolean; summoners: OverlayBotSummo
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="General" />
+          <SettingRow
+            title="Version"
+            hint="Installed client build."
+            control={<span className="ot-muted">{appVersion ? `v${appVersion}` : '—'}</span>}
+          />
           <SettingRow
             title="Overlay in matches"
             hint="Master switch. Off means nothing is ever drawn over League."

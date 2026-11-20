@@ -256,6 +256,7 @@ declare global {
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;
+                version?: string;
             }>;
             onOverlayUpdate: (callback: (payload: unknown) => void) => (() => void) | void;
             onOverlayMeta: (callback: (payload: unknown) => void) => (() => void) | void;
@@ -268,6 +269,7 @@ declare global {
             getScouting?: () => Promise<{ success: boolean; players: ScoutingPlayer[]; error?: string }>;
 
             getAppSettings?: () => Promise<AppSettings>;
+            getAppVersion?: () => Promise<string>;
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;
             relaunchApp?: () => Promise<void>;
             getPerfStats?: () => Promise<PerfStats>;
