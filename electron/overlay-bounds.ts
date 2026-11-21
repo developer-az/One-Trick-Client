@@ -257,9 +257,9 @@ export function overlayWindowFaults(health: OverlayWindowHealth): OverlayFault[]
 }
 
 /**
- * Whether a locked overlay window should exist on screen.
- * A live match does not override this: an empty transparent HWND over League
- * keeps DWM compositing the game even when the slot has nothing to draw.
+ * Whether a locked overlay window should exist on screen. Content alone used
+ * to decide this (an empty transparent HWND keeps DWM compositing the game),
+ * but while a game is live presence wins over that cost.
  */
 export function overlayWindowWanted(opts: {
     userHidden: boolean;
@@ -268,10 +268,12 @@ export function overlayWindowWanted(opts: {
     holdToShow: boolean;
     holdDown: boolean;
     emptySlot: boolean;
+    gameLive?: boolean;
 }): boolean {
     if (opts.userHidden || !opts.overlayEnabled) return false;
     if (!opts.locked) return true;
     if (opts.holdToShow && !opts.holdDown) return false;
+    if (opts.gameLive) return true;
     return !opts.emptySlot;
 }
 

@@ -1497,7 +1497,9 @@ export const OverlayApp: React.FC = () => {
   }, [handoffPhase, reducedMotion]);
 
   const handoffActive = handoffPhase !== 'idle';
-  const loadingLayerMounted = state.loading || (state.inGame && loadingSnapshotRef.current !== null);
+  // The layer keeps rendering from the snapshot after inGame flips false, so
+  // presence must follow the mount, not the game flag.
+  const loadingLayerMounted = state.loading || loadingSnapshotRef.current !== null;
   const hudHiddenForHandoff = loadingSnapshotRef.current !== null && handoffPhase !== 'fading';
 
   // The loading layer draws live values during the load and the frozen snapshot
@@ -1542,11 +1544,10 @@ export const OverlayApp: React.FC = () => {
 
   // Content stays reported through the handoff: the loading layer (or the load
   // itself) is still mounted, so the window must not hide before the HUD paints.
+  const hasAnyContent = state.loading || loadingLayerMounted || slotHasContent;
   useEffect(() => {
-    window.electronAPI?.reportOverlayContent?.(
-      state.loading || loadingLayerMounted || slotHasContent
-    );
-  }, [state.loading, loadingLayerMounted, slotHasContent]);
+    window.electronAPI?.reportOverlayContent?.(hasAnyContent);
+  }, [hasAnyContent]);
 
   if (state.loading) {
     // Your loading-screen portrait, only when the side AND the index came from

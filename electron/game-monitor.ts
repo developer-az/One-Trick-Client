@@ -2576,7 +2576,8 @@ function endGameSession(): void {
     resetMatchCaches();
     // Ring buffer pauses with the match; captured segments stay available.
     void setClipperActive(false);
-    hideOverlay();
+    // No hide: content stops here, but window presence owns visibility while a
+    // game is live, so the window must not drop out from under the match-end.
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
     // A new load/match cancels this gate before the 12 s elapse.
     overlayDestroyGate.schedule();

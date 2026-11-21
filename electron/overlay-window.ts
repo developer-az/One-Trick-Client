@@ -194,7 +194,8 @@ const HEALTH_LOG_EVERY_MS = 60_000;
 /**
  * Match start used to clear the empty set and force every overlay HWND on
  * screen for the whole game. That is the DWM cost this module exists to avoid.
- * Callers still notify match start and end; visibility follows content.
+ * Callers still notify match start and end; that signal now keeps the window
+ * up for a live game even when the renderer reports an empty slot.
  */
 export function setOverlayMatchActive(active: boolean): void {
     matchActive = active;
@@ -223,6 +224,7 @@ function shouldShowWindow(): boolean {
         holdToShow: holdToShowActive(),
         holdDown,
         emptySlot: !pageHasContent,
+        gameLive: matchActive,
     });
 }
 
@@ -300,6 +302,7 @@ function syncNativeVisibility(): void {
                 reason: 'slot-content',
                 userHidden,
                 content: pageHasContent,
+                gameLive: matchActive,
                 holdToShow: holdToShowActive(),
             });
         }
@@ -310,6 +313,7 @@ function syncNativeVisibility(): void {
             reason: 'slot-content',
             userHidden,
             content: pageHasContent,
+            gameLive: matchActive,
             holdToShow: holdToShowActive(),
         });
     }
@@ -326,6 +330,7 @@ function syncWindowVisibility(win: BrowserWindow): void {
             reason: 'slot-content',
             userHidden,
             content: pageHasContent,
+            gameLive: matchActive,
             holdToShow: holdToShowActive(),
         });
     } else if (!want && visible) {
@@ -337,6 +342,7 @@ function syncWindowVisibility(win: BrowserWindow): void {
             reason: 'slot-content',
             userHidden,
             content: pageHasContent,
+            gameLive: matchActive,
             holdToShow: holdToShowActive(),
         });
     }
@@ -463,8 +469,8 @@ function armOverlayRenderer(win: BrowserWindow): void {
 
 /**
  * Reload a crashed overlay renderer while a match is running. Visibility is
- * not forced here — keepOverlayOnTop re-shows a window that should be shown,
- * and a window with nothing to draw is hidden on purpose.
+ * not forced here — keepOverlayOnTop re-shows a window that should be shown;
+ * an empty window is hidden only outside a live game.
  * Does not re-bind mouse passthrough — that path freezes the cursor over League.
  */
 export function healOverlayWindows(): void {
@@ -1235,6 +1241,8 @@ export function createOverlayWindow(): BrowserWindow {
 
     // Default: a fullscreen click-through surface, so the game is never blocked.
     setClickThrough(true);
+    // A fresh HWND during a live game shows at once: the loading layer counts as content.
+    if (matchActive) syncWindowVisibility(overlayWin);
 
     // No OS chrome / context menu — accidental right-clicks must not surface UI that
     // steals focus from League or makes the overlay feel like it "closed".
@@ -1310,7 +1318,11 @@ export function keepOverlayOnTop(): void {
     for (const win of overlayWindows()) {
         try {
             syncWindowVisibility(win);
-            if (win.isVisible() && !win.isAlwaysOnTop()) assertAlwaysOnTop(win);
+            if (win.isVisible()) {
+                if (!win.isAlwaysOnTop()) assertAlwaysOnTop(win);
+                // showInactive raises without focus — League keeps mouse/keyboard input.
+                if (matchActive) win.showInactive();
+            }
         } catch {
             // ignore
         }
@@ -1330,6 +1342,10 @@ export function showOverlay(): void {
         applyLockedBounds();
         syncWindowVisibility(win);
     } else if (!win.isVisible()) {
+        win.showInactive();
+    }
+    // Live-game presence does not wait for the renderer's content report.
+    if (matchActive && !win.isVisible() && (!holdToShowActive() || holdDown)) {
         win.showInactive();
     }
     syncOverlayPaintBudget();
