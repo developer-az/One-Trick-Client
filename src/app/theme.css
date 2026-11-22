@@ -3055,23 +3055,6 @@ html:not(.overlay-root)[data-ot-glass-on][data-ot-scrolling] .ot-toast {
   background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
 }
 
-/* The reference's one primary action is neutral chrome, whatever the accent. */
-.ot-home-primary {
-  background: linear-gradient(180deg, #f2f4f7 0%, #c6cad1 46%, #8b919b 54%, #dde0e5 100%);
-  color: #0a0a0c;
-}
-.ot-home-primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ffffff 0%, #d3d7dd 46%, #979da6 54%, #e6e9ed 100%);
-}
-
-/* The dock wraps to two rows below lg; keep the hero clear of it (brief K). */
-@media (max-width: 1099px) {
-  .ot-home-hero,
-  .ot-home-play {
-    bottom: 250px;
-  }
-}
-
 /* The dock wraps to two rows below lg; keep the hero clear of it (brief K). */
 @media (max-width: 1099px) {
   .ot-home-hero,

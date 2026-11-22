@@ -1286,7 +1286,6 @@ export const OverlayApp: React.FC = () => {
   // Measurement triggers only: the effect body re-attaches the observer when
   // geometry, visibility or rail content changes; the observer catches size
   // changes between renders.
-  /* eslint-disable react-hooks/exhaustive-deps */
   useLayoutEffect(() => {
     const node = visionStackRef.current;
     if (!node) {
@@ -1312,7 +1311,6 @@ export const OverlayApp: React.FC = () => {
     state.inGame,
     state.loading,
   ]);
-  /* eslint-enable react-hooks/exhaustive-deps */
   const visionStackStyle = useMemo<React.CSSProperties>(() => {
     const base = { ...layoutStyle(visionAnchor, paintGeo), ...RAIL_PANEL_SIZE };
     const stack: React.CSSProperties = {

@@ -147,7 +147,7 @@ import {
  * Match lifecycle, driven by League Client events (see lcu-socket.ts).
  *
  * Nothing here polls the League client. Game state comes from the State Service
- * (`state-service.ts`), which samples the Live Client at 400 ms and owns the
+ * (`state-service.ts`), which samples the Live Client at 600 ms and owns the
  * event cursor, objective timers and snapshot buffer. This module runs a slower
  * timer purely to decide what the HUD should draw, and to end the match when
  * the Live Client goes quiet.
@@ -2647,7 +2647,7 @@ async function liveTick(): Promise<void> {
     const hudBuildStart = performance.now();
     try {
         const phase = lcuSocket.phase;
-        // Board comes from the State Service's 400 ms sample loop — no network
+        // Board comes from the State Service's 600 ms sample loop — no network
         // call on this path. This tick only decides what the HUD should draw.
         const live = readLiveBoard();
         liveReadsTotal += 1;
