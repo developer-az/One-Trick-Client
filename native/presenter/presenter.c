@@ -302,6 +302,68 @@ static void applyBounds(int x, int y, int w, int h) {
     if (g_shown) present();
 }
 
+static char g_lastState[512] = "";
+static DWORD g_lastStateLog = 0;
+
+// Foreground window's exe basename, spaces -> '_' so the log stays k=v tokens.
+static void foregroundExe(HWND fg, char *out, size_t cap) {
+    snprintf(out, cap, "-");
+    DWORD pid = 0;
+    if (!fg || !GetWindowThreadProcessId(fg, &pid) || !pid) return;
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) return;
+    char path[MAX_PATH];
+    DWORD n = MAX_PATH;
+    if (QueryFullProcessImageNameA(proc, 0, path, &n)) {
+        const char *base = strrchr(path, '\\');
+        snprintf(out, cap, "%s", base ? base + 1 : path);
+        for (char *c = out; *c; c++) if (*c == ' ') *c = '_';
+    }
+    CloseHandle(proc);
+}
+
+// Diagnostic only (changes nothing): what Windows says about us and the game,
+// logged on every change and once a minute. quns 3 = exclusive D3D fullscreen.
+static void logState(HWND hwnd, int covered) {
+    typedef HRESULT(WINAPI * QunsFn)(int *);
+    static QunsFn quns = NULL;
+    static int qunsLoaded = 0;
+    if (!qunsLoaded) {
+        qunsLoaded = 1;
+        HMODULE shell = LoadLibraryA("shell32.dll");
+        if (shell) quns = (QunsFn)(void *)GetProcAddress(shell, "SHQueryUserNotificationState");
+    }
+    int qunsState = -1;
+    if (quns && quns(&qunsState) != S_OK) qunsState = -1;
+    HWND fg = GetForegroundWindow();
+    int fgAbove = 0, fgFull = 0;
+    HWND above = GetWindow(hwnd, GW_HWNDPREV);
+    for (int hops = 0; fg && above && hops < 512; hops++, above = GetWindow(above, GW_HWNDPREV)) {
+        if (above == fg) { fgAbove = 1; break; }
+    }
+    RECT fgRect;
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (fg && GetWindowRect(fg, &fgRect) &&
+        GetMonitorInfoA(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi)) {
+        fgFull = EqualRect(&fgRect, &mi.rcMonitor) ? 1 : 0;
+    }
+    char exe[128];
+    foregroundExe(fg, exe, sizeof(exe));
+    char state[512];
+    snprintf(state, sizeof(state),
+        "state shown=%d visible=%d topmost=%d covered=%d fgAbove=%d fgFull=%d quns=%d fg=%s",
+        g_shown, IsWindowVisible(hwnd) ? 1 : 0,
+        (GetWindowLongPtrA(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) ? 1 : 0,
+        covered, fgAbove, fgFull, qunsState, exe);
+    DWORD now = GetTickCount();
+    if (strcmp(state, g_lastState) != 0 || now - g_lastStateLog >= 60000) {
+        snprintf(g_lastState, sizeof(g_lastState), "%s", state);
+        g_lastStateLog = now;
+        logLine("%s frames=%ld", state, g_frameCount);
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_DESTROY:
@@ -315,12 +377,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         return DefWindowProcA(hwnd, msg, wParam, lParam);
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
-    case WM_TIMER:
-        if (wParam == 1 && g_shown) {
+    case WM_TIMER: {
+        if (wParam != 1) return 0;
+        int coveredByVisibleTopmost = 0;
+        if (g_shown) {
             LONG_PTR style = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
             // Walk everything above us: hidden topmost helper windows (IME etc.)
             // can sit between us and a visible topmost window.
-            int coveredByVisibleTopmost = 0;
             RECT ourRect;
             HWND above = GetWindow(hwnd, GW_HWNDPREV);
             for (int hops = 0; above && hops < 256; hops++, above = GetWindow(above, GW_HWNDPREV)) {
@@ -348,7 +411,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 } else g_suppressedZ++;
             }
         }
+        logState(hwnd, coveredByVisibleTopmost);
         return 0;
+    }
     default:
         return DefWindowProcA(hwnd, msg, wParam, lParam);
     }

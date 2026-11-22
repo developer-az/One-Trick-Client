@@ -1,5 +1,6 @@
 /** Mayhem augment selection happens at these champion levels. */
-export const MAYHEM_AUGMENT_LEVELS = [3, 7, 11, 15] as const;
+// First pick is offered on spawn; the start level differs by patch (1 or 3), so it is level-free.
+export const MAYHEM_AUGMENT_LEVELS = [1, 7, 11, 15] as const;
 
 export type MayhemOcrCadence = 'off' | 'snooze' | 'warmup' | 'burst';
 

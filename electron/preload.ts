@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
     connectLCU: () => ipcRenderer.invoke('lcu-connect'),
+    riotStatus: () => ipcRenderer.invoke('riot-status'),
+    riotSetKey: (key: string) => ipcRenderer.invoke('riot-set-key', key),
+    riotClearKey: () => ipcRenderer.invoke('riot-clear-key'),
+    getLiveBuild:(champion: string, role: string, mode?: string) => ipcRenderer.invoke('live-build-get', champion, role, mode),
     requestLCU: (method: string, endpoint: string, body?: unknown) => ipcRenderer.invoke('lcu-request', method, endpoint, body),
     onUpdate: (callback: (value: unknown) => void) => ipcRenderer.on('main-process-message', (_event, value) => callback(value)),
     exportItemSet: (build: {

@@ -873,13 +873,20 @@ class NativeSurface implements NativeSurfaceHandle {
             this.socket = null;
         }
         if (this.child) {
-            this.child.removeAllListeners();
-            try {
-                this.child.kill();
-            } catch {
-                // ignore
-            }
+            const child = this.child;
+            child.removeAllListeners();
             this.child = null;
+            // The pipe is closed above, so the presenter exits by itself and logs
+            // `destroy` (the match-end acceptance line); kill only a straggler.
+            const straggler = setTimeout(() => {
+                if (child.exitCode !== null || child.signalCode !== null) return;
+                try {
+                    child.kill();
+                } catch {
+                    // ignore
+                }
+            }, CHILD_EXIT_TIMEOUT_MS);
+            straggler.unref?.();
         }
         if (!this.osrWin.isDestroyed()) {
             try {

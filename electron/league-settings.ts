@@ -31,6 +31,25 @@ const CANDIDATE_CFG = [
   path.join(process.env.USERPROFILE || '', 'Riot Games', 'League of Legends', 'Config', 'game.cfg'),
 ];
 
+/** Riot's own record of where League is installed, for installs outside the folders above. */
+const RIOT_PRODUCT_SETTINGS = path.join(
+  process.env['ProgramData'] || 'C:\\ProgramData',
+  'Riot Games', 'Metadata', 'league_of_legends.live', 'league_of_legends.live.product_settings.yaml'
+);
+
+export function installCfgFromProductSettings(yaml: string): string | null {
+  const m = yaml.match(/product_install_full_path:\s*"?([^"\r\n]+)"?/);
+  return m?.[1] ? path.join(m[1].trim(), 'Config', 'game.cfg') : null;
+}
+
+function riotInstallCfg(): string | null {
+  try {
+    return installCfgFromProductSettings(fs.readFileSync(RIOT_PRODUCT_SETTINGS, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Remember which path worked so match-start sync isn't a multi-drive scan. */
 let cachedCfgPath: string | null = null;
 
@@ -95,7 +114,8 @@ export function readLeagueHudScales(): LeagueHudScales | null {
     cachedCfgPath = null;
   }
 
-  for (const cfgPath of CANDIDATE_CFG) {
+  const riotCfg = riotInstallCfg();
+  for (const cfgPath of riotCfg ? [riotCfg, ...CANDIDATE_CFG] : CANDIDATE_CFG) {
     const hit = tryPath(cfgPath);
     if (hit) return hit;
   }

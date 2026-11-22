@@ -121,7 +121,7 @@ export const StatsView: React.FC<{
         <Stat label="Champions played" value={String(rows.length)} hint={`Most: ${byKey.get(rows[0].championId)?.name || '–'}`} />
       </div>
 
-      <Card className="mb-5">
+      <Card className="mb-4">
         <CardHeader title="Your tier list" sub="Tiers from your own match history and Wilson intervals — not global meta." />
         <div className="flex flex-wrap gap-2 mt-2">
           {rows.slice(0, 12).map((r) => {
@@ -136,7 +136,7 @@ export const StatsView: React.FC<{
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2" pad={false}>
           <div className="ot-card-pad !pb-2">
             <CardHeader title="By champion" sub="Select a row, then use Matchups for enemies or allies." />

@@ -298,7 +298,7 @@ async function main(): Promise<void> {
       'the PS1 target marker emits owner as a bool (the field parseTargetOwner reads)'
     );
     ok(
-      ocrSource.includes("'-PanelScale'") && ocrSource.includes('overlayScaleFromHud('),
+      /\bPanelScale:/.test(ocrSource) && ocrSource.includes('overlayScaleFromHud('),
       'Electron passes the live --overlay-scale to the capture'
     );
     ok(

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { isDesktop, useAppSettings } from '../hooks';
 import { recapGrade, type RecapGrade } from '../../logic/playMoments';
 import { Card, CardHeader, Pill, SettingRow, Switch, type Tone } from '../ui';
+import { overlaySettingsAdvice } from '../overlayAdvice';
 
 const GRADE_TONE: Record<RecapGrade, Tone> = {
   Brilliant: 'live',
@@ -224,6 +225,7 @@ export const PerformanceView: React.FC = () => {
             ))}
           </dl>
           {stats?.hotkeys.error ? <div className="ot-callout ot-callout-warn mt-3">{stats.hotkeys.error}</div> : null}
+          {stats ? <OverlaySettingsNote stats={stats} /> : null}
           {stats ? <OverlayCostNote stats={stats} overlayOn={!!settings?.overlayEnabled} /> : null}
         </Card>
 
@@ -356,6 +358,26 @@ const Stat: React.FC<{ label: string; value: string; hint: string }> = ({ label,
     <div className="text-sm ot-muted mt-1">{hint}</div>
   </Card>
 );
+
+/** Settings that can hide the overlay entirely, each with its fix. */
+const OverlaySettingsNote: React.FC<{ stats: PerfStats }> = ({ stats }) => {
+  const advice = overlaySettingsAdvice(stats.environment);
+  if (!advice.length) return null;
+  return (
+    <div className="ot-callout ot-callout-warn mt-3">
+      <div>
+        <strong>These settings can hide the overlay in game:</strong>
+        <ul className="mt-1">
+          {advice.map((a) => (
+            <li key={a.id} className="mt-1">
+              {a.problem} <span className="ot-muted">Fix: {a.fix}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+};
 
 /**
  * Any window over a borderless game makes Windows composite every frame. That

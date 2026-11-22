@@ -1,11 +1,9 @@
 /**
  * Profile (brief J) — the real shell for everything tied to the player account.
  *
- * Nothing here talks to Riot: the summoner header reads the League client's
- * connection state (the only account data the app already has), the pinned
- * champion section manages the orbit rail, and the Riot API section is a
- * visible, disabled placeholder so the next brief has a home. The key field
- * never stores or sends anything.
+ * The summoner header reads the League client; with a personal Riot API key the
+ * Riot API card adds level, rank and recent matches (electron/riot-api.ts).
+ * Without a key everything comes from the client, and the card says so.
  */
 import React, { useEffect, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
@@ -54,7 +52,25 @@ export const ProfileView: React.FC<{
   useEffect(() => {
     window.electronAPI?.getAppVersion?.().then((v) => setAppVersion(v)).catch(() => undefined);
   }, []);
-  const summoner = league.lcu?.summonerName || '';
+  const [riot, setRiot] = useState<RiotStatus | null>(null);
+  const [keyDraft, setKeyDraft] = useState('');
+  const [keyError, setKeyError] = useState('');
+  const refreshRiot = (): void => {
+    window.electronAPI?.riotStatus?.().then(setRiot).catch(() => undefined);
+  };
+  useEffect(refreshRiot, [league.lcu?.state, league.lcu?.puuid]);
+  const saveKey = async (): Promise<void> => {
+    const res = await window.electronAPI?.riotSetKey?.(keyDraft.trim());
+    setKeyDraft('');
+    setKeyError(res && !res.ok ? res.error || 'Could not save the key.' : '');
+    refreshRiot();
+  };
+  const clearKey = async (): Promise<void> => {
+    await window.electronAPI?.riotClearKey?.();
+    setKeyError('');
+    refreshRiot();
+  };
+  const summoner = (riot?.riotId ?? '') || league.lcu?.summonerName || '';
   const connected = league.lcu?.state === 'connected';
   const activePinChampion = activeChampion
     ? champions.find((c) => c.id === activeChampion.id) || { id: activeChampion.id, name: activeChampion.name || '' }
@@ -93,11 +109,19 @@ export const ProfileView: React.FC<{
           </div>
           <div>
             <dt>Level</dt>
-            <dd className="ot-faint" title="Needs the Riot API">Not linked</dd>
+            {riot?.level != null ? <dd>{riot.level}</dd> : <dd className="ot-faint" title="Needs the Riot API">Not linked</dd>}
           </div>
           <div>
             <dt>Rank</dt>
-            <dd className="ot-faint" title="Needs the Riot API">Not linked</dd>
+            {riot?.state === 'ok' ? (
+              <dd>
+                {riot.ranks.length
+                  ? riot.ranks.map((r) => `${r.queue} ${r.tier[0]}${r.tier.slice(1).toLowerCase()} ${r.rank} ${r.lp} LP`).join(' · ')
+                  : 'Unranked'}
+              </dd>
+            ) : (
+              <dd className="ot-faint" title="Needs the Riot API">Not linked</dd>
+            )}
           </div>
           <div>
             <dt>Active champion</dt>
@@ -105,6 +129,26 @@ export const ProfileView: React.FC<{
           </div>
         </dl>
       </Card>
+
+      {riot?.state === 'ok' && riot.recentMatches.length > 0 && (
+        <Card className="mb-4">
+          <CardHeader title="Recent matches" sub="Your last games, from Riot." />
+          <ul className="flex flex-col gap-2">
+            {riot.recentMatches.map((m) => (
+              <li key={m.id} className="flex items-center gap-3">
+                <Portrait champion={{ id: m.champion, name: m.champion }} size={32} />
+                <Badge tone={m.win ? 'teal' : 'muted'}>{m.win ? 'Win' : 'Loss'}</Badge>
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {m.kills}/{m.deaths}/{m.assists} · {m.cs} CS · {m.queue}
+                </span>
+                <span className="text-xs ot-faint whitespace-nowrap">
+                  {m.durationMin} min · {m.endedAt ? new Date(m.endedAt).toLocaleDateString() : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <div className="ot-profile-grid">
         <Card>
@@ -161,30 +205,39 @@ export const ProfileView: React.FC<{
         <Card className="ot-profile-riot">
           <CardHeader
             title="Riot API"
-            sub="League-wide stats, rank history and champion mastery — coming soon."
-            action={<Badge tone="amber">Not active</Badge>}
+            sub="Your level, rank and recent matches from Riot, with your personal API key."
+            action={<Badge tone={riot?.state === 'ok' ? 'teal' : 'amber'}>{riot?.state === 'ok' ? 'Linked' : 'Not linked'}</Badge>}
           />
           <label className="ot-profile-field">
             <span className="ot-profile-label">Riot API key</span>
             <input
               className="ot-input ot-profile-key"
               type="password"
-              defaultValue=""
-              placeholder="RGAPI-…"
-              disabled
+              autoComplete="off"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+              placeholder={riot && riot.state !== 'no-key' ? 'Key saved (hidden)' : 'RGAPI-…'}
+              disabled={!isDesktop}
               aria-describedby="ot-riot-api-note"
             />
           </label>
-          <div className="ot-profile-note" id="ot-riot-api-note">
+          <div className="ot-profile-note" id="ot-riot-api-note" role="status">
             <IconInfo />
             <p>
-              Coming soon: league-wide stats. One Trick does not accept, store or send a Riot API key yet — this field
-              is disabled until that pipeline ships. Everything on this screen today comes from your own client.
+              {keyError || riot?.message || 'Checking…'} The key is stored encrypted on this PC only and is never shown
+              or logged.
             </p>
           </div>
-          <Button variant="primary" disabled>
-            Connect Riot API
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="primary" disabled={!keyDraft.trim()} onClick={() => void saveKey()}>
+              Save key
+            </Button>
+            {riot && riot.state !== 'no-key' && (
+              <Button variant="secondary" onClick={() => void clearKey()}>
+                Remove key
+              </Button>
+            )}
+          </div>
         </Card>
       </div>
 

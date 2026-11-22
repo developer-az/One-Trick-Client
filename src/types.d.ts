@@ -1,6 +1,31 @@
 export { };
 
 declare global {
+    /** Structural twin of electron/riot-api.ts RiotStatus. */
+    interface RiotStatus {
+        state: 'no-key' | 'no-identity' | 'ok' | 'invalid-key' | 'error';
+        message: string;
+        riotId: string | null;
+        region: string | null;
+        level: number | null;
+        profileIconId: number | null;
+        ranks: Array<{ queue: string; tier: string; rank: string; lp: number; games: number }>;
+        recentMatchIds: string[];
+        recentMatches: Array<{
+            id: string;
+            champion: string;
+            kills: number;
+            deaths: number;
+            assists: number;
+            win: boolean;
+            queue: string;
+            cs: number;
+            durationMin: number;
+            endedAt: number;
+        }>;
+        fetchedAt: number | null;
+    }
+
     interface FrameCalibration {
         dx: number;
         dy: number;
@@ -180,7 +205,12 @@ declare global {
         /** Hold-to-show is on and the key helper can see Tab. */
         overlayHold: boolean;
         /** League's display mode and screen recorders running right now. */
-        environment: { windowMode: 'fullscreen' | 'windowed' | 'borderless' | null; recorders: string[] };
+        environment: {
+            windowMode: 'fullscreen' | 'windowed' | 'borderless' | null;
+            recorders: string[];
+            mpoOff: boolean | null;
+            windowedGameOptimizations: boolean | null;
+        };
         lcu: LcuStatus;
         inGame: boolean;
         livePollMs: number | null;
@@ -191,6 +221,10 @@ declare global {
     interface Window {
         electronAPI?: {
             connectLCU: () => Promise<{ success: boolean; credentials?: { port: string; token: string; protocol: string }; error?: string }>;
+            riotStatus?: () => Promise<RiotStatus>;
+            riotSetKey?: (key: string) => Promise<{ ok: boolean; error?: string }>;
+            riotClearKey?: () => Promise<void>;
+            getLiveBuild?:(champion: string, role: string, mode?: 'ranked' | 'aram') => Promise<import('./logic/liveBuild').LiveBuild | null>;
             requestLCU: (method: string, endpoint: string, body?: unknown) => Promise<{ success: boolean; data?: unknown; error?: string }>;
             exportItemSet: (build: {
                 starter: Array<{ id: string }>;

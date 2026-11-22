@@ -99,6 +99,8 @@ import { buildIconCandidates, distDir, publicDir } from './paths';
 import { overlayLog } from './overlay-log';
 import { isWinAlive, safeCall, installCrashNet } from './safe-window';
 import { readAppVersion, readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
+import { getLiveBuild, type LiveBuildRole } from './live-builds';
+import { clearRiotKey, getRiotStatus, setRiotKey } from './riot-api';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
@@ -556,6 +558,23 @@ app.whenReady().then(() => {
 
     // IPC Handlers
     ipcMain.handle('app-get-version', () => appVersion ?? app.getVersion());
+    ipcMain.handle('riot-status', async () => {
+        const lcu = lcuSocket.summary();
+        let region: string | null = null;
+        if (lcu.state === 'connected') {
+            try {
+                region = ((await makeLCURequest('GET', '/riotclient/region-locale', undefined, 3000)) as { region?: string } | null)?.region ?? null;
+            } catch {
+                /* keep the remembered region */
+            }
+        }
+        return getRiotStatus({ puuid: lcu.puuid ?? null, gameName: lcu.gameName ?? null, tagLine: lcu.tagLine ?? null, region });
+    });
+    ipcMain.handle('riot-set-key', (_e, key: unknown) => setRiotKey(String(key ?? '')));
+    ipcMain.handle('riot-clear-key', () => clearRiotKey());
+    ipcMain.handle('live-build-get',(_e, champion: unknown, role: unknown, mode: unknown) =>
+        getLiveBuild(String(champion), String(role) as LiveBuildRole, mode === 'aram' ? 'aram' : 'ranked')
+    );
 
     // User-initiated connect: allowed to use the slow process probe once.
     ipcMain.handle('lcu-connect', async () => {

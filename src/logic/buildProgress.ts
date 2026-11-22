@@ -232,6 +232,9 @@ export interface SupportBuildMaturity {
   nearComplete: boolean;
 }
 
+/** Support quest items past the starter tiers (Atlas / Compass / Bounty). */
+const FINISHED_SUPPORT_ITEM_IDS = new Set([...SUPPORT_QUEST_IDS].filter((id) => !['3865', '3866', '3867'].includes(id)));
+
 function pathLegendaryStep(item: BuildItemRef, bootsId?: string): boolean {
   if (ALL_BOOT_IDS.has(item.id) || MID_TIER_BOOT_IDS.has(item.id)) return false;
   if (bootsId && item.id === bootsId) return false;
@@ -251,11 +254,22 @@ export function supportBuildMaturity(
     if (item.id === '3877' && hasSupportQuest) return true;
     return false;
   });
+  // Finished items off the planned path still fill slots: an off-path legendary
+  // or a completed support item counts toward "build is near done".
+  const onPath = new Set(legendarySteps.map((item) => item.id));
+  const offPath = [...progress.ownedIds].filter(
+    (id) =>
+      !onPath.has(id) &&
+      !ALL_BOOT_IDS.has(id) &&
+      !MID_TIER_BOOT_IDS.has(id) &&
+      (isLegendaryItemId(id) || FINISHED_SUPPORT_ITEM_IDS.has(id))
+  ).length;
+  const ownedCount = owned.length + offPath;
   const nearComplete =
-    legendarySteps.length > 0 && owned.length >= Math.max(1, legendarySteps.length - 1);
+    legendarySteps.length > 0 && ownedCount >= Math.max(1, legendarySteps.length - 1);
   return {
     legendariesOnPath: legendarySteps.length,
-    ownedLegendaries: owned.length,
+    ownedLegendaries: ownedCount,
     nearComplete,
   };
 }

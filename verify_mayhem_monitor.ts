@@ -27,6 +27,7 @@ import {
   mayhemAutoOcrGate,
   mayhemMonitorMode,
   mayhemMonitorWantsScan,
+  mayhemUnverifiedAfterRead,
   noteMayhemDiscoveryTrigger,
   noteMayhemManualScan,
   runMayhemMonitorScan,
@@ -298,20 +299,20 @@ async function main(): Promise<void> {
     ok(
       !noteMayhemDiscoveryTrigger(state, {
         now: 1_000,
-        level: 1,
+        level: 0,
         isDead: false,
         signals: UNKNOWN_ARAM,
       }),
-      'below level 3 with no death: no burst'
+      'no level read yet, no death: no burst'
     );
     ok(
       noteMayhemDiscoveryTrigger(state, {
         now: 2_000,
-        level: 3,
+        level: 1,
         isDead: false,
         signals: UNKNOWN_ARAM,
       }),
-      'level 3 opens a burst'
+      'spawn (level 1) opens the first-augment burst'
     );
     const classic = createMayhemMonitorState();
     ok(
@@ -724,12 +725,12 @@ async function main(): Promise<void> {
     });
     ok(raised.wanted && raised.rearmedAtLevel === 11, 'level 11 re-arms scanning again');
     ok(
-      !mayhemAutoOcrGate({ level: 2, ownedCount: 0, hudVisible: false, rearmedAtLevel: null }).wanted,
-      'below the first augment level the gate still says no'
+      !mayhemAutoOcrGate({ level: 5, ownedCount: 1, hudVisible: false, rearmedAtLevel: 1 }).wanted,
+      'below the next augment level the gate still says no'
     );
-    ok(mayhemAugmentLevelEdge(6) === 3, 'level 6 is on the level-3 augment edge');
+    ok(mayhemAugmentLevelEdge(6) === 1, 'level 6 is on the first augment edge');
     ok(mayhemAugmentLevelEdge(7) === 7, 'level 7 is its own augment edge');
-    ok(mayhemAugmentLevelEdge(2) === null, 'no augment edge before level 3');
+    ok(mayhemAugmentLevelEdge(0) === null && mayhemAugmentLevelEdge(1) === 1, 'the first augment edge is spawn (level 1)');
   }
 
   console.log('--- discovery budget resets on a new augment level ---');
@@ -944,6 +945,18 @@ async function main(): Promise<void> {
       'verify:release runs verify:mayhem-offers between the monitor and OCR checks'
     );
   }
+}
+
+{
+  const r = (decision: string, cards: number, extra: { fresh?: boolean; blackFrame?: boolean } = {}) => ({
+    decision, frameDisplayCount: cards, fresh: extra.fresh ?? true, blackFrame: extra.blackFrame ?? false,
+  });
+  ok(mayhemUnverifiedAfterRead(false, r('unverified', 2), false), 'card-shaped unverified frame raises the warning');
+  ok(!mayhemUnverifiedAfterRead(true, r('unverified', 0), false), 'plain gameplay frame clears a stuck warning');
+  ok(mayhemUnverifiedAfterRead(false, r('unverified', 0, { blackFrame: true }), false), 'black frame raises the borderless warning');
+  ok(mayhemUnverifiedAfterRead(true, r('unverified', 0, { fresh: false }), false), 'a read that never ran keeps the warning');
+  ok(!mayhemUnverifiedAfterRead(true, r('accept', 3), true), 'accepted roll clears the warning');
+  ok(!mayhemUnverifiedAfterRead(false, r('unverified', 2), true), 'a shown roll is not covered by the warning');
 }
 
 void main().then(() => {

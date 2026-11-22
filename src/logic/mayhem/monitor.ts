@@ -44,7 +44,7 @@ export const MAYHEM_DISCOVERY_INTERVAL_MS = 10_000;
  */
 export const MAYHEM_DISCOVERY_BURST_MS = 90_000;
 /** Champion levels that can open the augment shop. */
-export const MAYHEM_DISCOVERY_LEVELS: readonly number[] = [3, 7, 11, 15];
+export const MAYHEM_DISCOVERY_LEVELS: readonly number[] = MAYHEM_AUGMENT_LEVELS;
 /** Two cards on the same frame are required to classify an unknown queue. */
 export const MAYHEM_DISCOVERY_MIN_OFFERS = 2;
 /**
@@ -692,4 +692,20 @@ export function createMayhemPollChain(options: MayhemPollChainOptions): MayhemPo
       return !stopped && (armed || ticking > 0);
     },
   };
+}
+
+/**
+ * The "Cannot verify the augment screen" warning after one read. Only a frame
+ * that looked like cards (or came back black) may raise it; a fresh frame with
+ * no card shape is ordinary gameplay and clears it, so it cannot stick all game.
+ */
+export function mayhemUnverifiedAfterRead(
+  prev: boolean,
+  read: Pick<MayhemMonitorRead, 'fresh' | 'frameDisplayCount' | 'blackFrame'> & { decision: string },
+  hasRoll: boolean
+): boolean {
+  if (read.decision === 'accept') return false;
+  if (!read.fresh) return prev;
+  if (read.frameDisplayCount > 0 || read.blackFrame) return hasRoll ? prev : true;
+  return false;
 }

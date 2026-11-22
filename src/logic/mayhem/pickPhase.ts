@@ -1,5 +1,8 @@
 import { MAYHEM_AUGMENT_LEVELS, xpProgressToNextLevel } from './augmentSchedule';
 
+/** Game seconds after load during which the spawn shop offers the first augment. */
+export const MAYHEM_SPAWN_PICK_SECONDS = 120;
+
 /** Required champion level before each augment slot (you start ARAM at 3). */
 export function nextMayhemPickLevel(ownedAugmentCount: number): number | null {
   if (ownedAugmentCount < 0 || ownedAugmentCount >= MAYHEM_AUGMENT_LEVELS.length) return null;
@@ -101,7 +104,9 @@ export function computeMayhemPickPhase(input: MayhemPickPhaseInput): MayhemPickP
     };
   }
 
-  if (isDead && levelReady) {
+  // The first augment is offered on spawn, alive, in the opening seconds.
+  const spawnPick = picksTaken === 0 && input.gameTime < MAYHEM_SPAWN_PICK_SECONDS;
+  if ((isDead || spawnPick) && levelReady) {
     pickWindowOpen = true;
     hint =
       picksTaken === 0 ? 'First augment — choose on screen' : `Augment pick (L${nextPickLevel})`;
@@ -111,7 +116,7 @@ export function computeMayhemPickPhase(input: MayhemPickPhaseInput): MayhemPickP
   }
 
   const justDied = isDead && !wasDead;
-  const ocrBurst = pickWindowOpen && justDied;
+  const ocrBurst = pickWindowOpen && (justDied || spawnPick);
 
   return {
     pickWindowOpen,

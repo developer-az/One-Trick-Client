@@ -1,5 +1,4 @@
 import { app, desktopCapturer, nativeImage, screen } from 'electron';
-import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -23,6 +22,7 @@ import {
   type MayhemFrameLine,
 } from '../src/logic/mayhem/pipeline';
 import { runMayhemOcrOnImageFile } from '../src/logic/mayhem/ocrRunner';
+import { PsScriptWorker } from './ps-worker';
 import type { MayhemAugment } from '../src/logic/mayhem/types';
 import { overlayLog } from './overlay-log';
 import { overlayScaleFromHud } from './overlay-bounds';
@@ -295,77 +295,44 @@ export interface DetectMayhemOffersOptions {
  */
 const OCR_PROCESS_TIMEOUT_MS = 30_000;
 
-function runPowerShellCaptureAndOcr(): Promise<ScreenRead> {
-  return new Promise((resolve, reject) => {
-    const tmp = path.join(os.tmpdir(), `onetrick-mayhem-${Date.now()}.png`);
-    const args = [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
+/**
+ * Warm PowerShell host: ~40 ms per capture+OCR instead of ~550 ms cold. It
+ * exits on its own when Electron exits (its stdin pipe closes).
+ */
+const ocrWorker = new PsScriptWorker();
+
+async function runPowerShellCaptureAndOcr(): Promise<ScreenRead> {
+  const tmp = path.join(os.tmpdir(), `onetrick-mayhem-${Date.now()}.png`);
+  try {
+    const { out, err, code } = await ocrWorker.run(
       ocrScriptPath(),
-      '-CaptureScreen',
-      '-UseGameWindow',
-      '-ImagePath',
-      tmp,
-      // Ownership: the game window or this process (our overlay) must own the
-      // foreground, so a browser sitting over the game's rect cannot be read
-      // as an offer frame.
-      '-OwnerPid',
-      String(process.pid),
-      // The panel mask is derived inside the script from the captured frame;
-      // only the overlay's own scale crosses the boundary.
-      '-PanelScale',
-      panelScaleForCapture().toFixed(3),
-    ];
-    const ps = spawn('powershell.exe', args, { windowsHide: true });
-    let out = '';
-    let err = '';
-    let settled = false;
-    let killTimer: ReturnType<typeof setTimeout> | null = null;
-    const removeTemp = (): void => {
-      try {
-        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
-      } catch {
-        /* ignore */
-      }
-    };
-    const finish = (action: () => void): void => {
-      if (settled) return;
-      settled = true;
-      if (killTimer) clearTimeout(killTimer);
-      removeTemp();
-      action();
-    };
-    killTimer = setTimeout(() => {
-      try {
-        ps.kill();
-      } catch {
-        /* already gone */
-      }
-      finish(() => {
-        logOcrError(`PowerShell capture/OCR timed out after ${OCR_PROCESS_TIMEOUT_MS} ms`);
-        reject(new Error(`PowerShell capture/OCR timed out after ${OCR_PROCESS_TIMEOUT_MS} ms`));
-      });
-    }, OCR_PROCESS_TIMEOUT_MS);
-    ps.stdout.on('data', (c) => {
-      out += String(c);
-    });
-    ps.stderr.on('data', (c) => {
-      err += String(c);
-    });
-    ps.on('close', (code) => {
-      finish(() => {
-        if (code !== 0 && code !== null) {
-          reject(new Error(err.trim() || `PowerShell capture/OCR exit ${code}`));
-          return;
-        }
-        lastCaptureMethod = 'powershell';
-        resolve({ parsed: parseMayhemOcrOutput(out), owner: parseTargetOwner(out) });
-      });
-    });
-    ps.on('error', (error) => finish(() => reject(error)));
-  });
+      {
+        CaptureScreen: true,
+        UseGameWindow: true,
+        ImagePath: tmp,
+        // Ownership: the game window or this process (our overlay) must own the
+        // foreground, so a browser sitting over the game's rect cannot be read
+        // as an offer frame.
+        OwnerPid: process.pid,
+        // The panel mask is derived inside the script from the captured frame;
+        // only the overlay's own scale crosses the boundary.
+        PanelScale: panelScaleForCapture().toFixed(3),
+      },
+      OCR_PROCESS_TIMEOUT_MS
+    );
+    if (code !== 0) throw new Error(err.trim() || `PowerShell capture/OCR exit ${code}`);
+    lastCaptureMethod = 'powershell';
+    return { parsed: parseMayhemOcrOutput(out), owner: parseTargetOwner(out) };
+  } catch (error) {
+    if (/timed out/.test(String(error))) logOcrError(String(error));
+    throw error;
+  } finally {
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 async function captureCenterRegionPng(): Promise<Buffer | null> {

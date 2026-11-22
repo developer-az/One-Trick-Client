@@ -48,6 +48,7 @@ import {
 } from './overlay-window';
 import { overlayLog, formatOverlayLogLine } from './overlay-log';
 import { readLeagueHudScales } from './league-settings';
+import { overlayEnvironment } from './environment';
 import {
     ingestChampSelectTeam,
     ingestLiveEvents,
@@ -111,6 +112,7 @@ import {
     isMayhemDiscoverySignals,
     noteMayhemDiscoveryTrigger,
     noteMayhemManualScan,
+    mayhemUnverifiedAfterRead,
     runMayhemMonitorScan,
     type MayhemMonitorResult,
     type MayhemMonitorState,
@@ -130,6 +132,7 @@ import {
     setMayhemOcrRetainOffers,
     takePendingMayhemManual,
     type MayhemScreenReader,
+    type MayhemOcrRead,
 } from './mayhem-ocr';
 import {
     getMayhemPicksTaken,
@@ -841,10 +844,7 @@ async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promis
     // NOT authoritative. Neither may replace a verified roll, latch discovery,
     // start a pick session, count a pick, arm the fast poll or evict a roll.
     if (read.decision !== 'accept') {
-        if (read.decision === 'unverified' && mayhemOfferIds.length === 0) {
-            // Nothing verified is on screen: show the persistent retry panel.
-            mayhemUnverified = true;
-        }
+        mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, read, mayhemOfferIds.length > 0);
         pushMayhemManualFeedback(read.decision === 'preview' ? 'preview · retrying…' : 'retrying…');
         return;
     }
@@ -1917,7 +1917,7 @@ async function tickMayhemOcr(): Promise<void> {
     }
 
     const scanTicket = beginMayhemScanTicket(mayhemMonitorState);
-    const scan = { decision: 'unverified' as 'accept' | 'preview' | 'unverified', unverifiedFrame: false };
+    const scan: { read: MayhemOcrRead | null } = { read: null };
     const result = await runMayhemMonitorScan(
         mayhemMonitorState,
         {
@@ -1935,8 +1935,7 @@ async function tickMayhemOcr(): Promise<void> {
                 minGap,
                 { minMatches, mayhemMatch: active, readScreen: mayhemVerifyReader }
             );
-            scan.decision = read.decision;
-            scan.unverifiedFrame = read.fresh && !read.valid && read.decision === 'unverified';
+            scan.read = read;
             return read;
         }
     );
@@ -1965,8 +1964,7 @@ async function tickMayhemOcr(): Promise<void> {
     mayhemOfferIds = commit.displayIds;
     // Only an accepted frame clears the unverified warning; a boxed frame that
     // could not be verified turns it on when there is no roll to keep showing.
-    if (scan.decision === 'accept') mayhemUnverified = false;
-    else if (scan.unverifiedFrame && mayhemOfferIds.length === 0) mayhemUnverified = true;
+    if (scan.read) mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, scan.read, mayhemOfferIds.length > 0);
 
     // A reroll re-deals the roll the empty gap just retired: within the reroll
     // window a disjoint roll means that gap was the shop refreshing, not a
@@ -2400,6 +2398,15 @@ function beginMatch(live?: LiveClientAllGameData | null): void {
         mapName: mapName ?? 'unknown',
         windowMode,
     });
+    // The Windows settings that decide whether any overlay can show over League.
+    void overlayEnvironment()
+        .then((env) => overlayLog('environment', {
+            windowMode: env.windowMode,
+            mpoOff: env.mpoOff,
+            windowedGameOptimizations: env.windowedGameOptimizations,
+            recorders: env.recorders.join('+') || 'none',
+        }))
+        .catch(() => undefined);
     lastMatchEndReason = null;
     playMomentSnapshot = null;
     lastSentOverlayPayload = null;

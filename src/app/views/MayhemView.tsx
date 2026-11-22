@@ -5,6 +5,7 @@ import { findAugment, rankMayhemChoices, searchAugments, suggestMayhemAugments }
 import type { MayhemAugment } from '../../logic/mayhem/types';
 import { useMayhemBundle } from '../mayhem/useMayhemBundle';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
+import { LiveBuildCard } from '../LiveBuildCard';
 
 const OWNED_KEY = 'onetrick.mayhem.owned';
 const ROLL_KEY = 'onetrick.mayhem.roll';
@@ -201,6 +202,8 @@ export const MayhemView: React.FC<{
         {lastFromNetwork === false ? ' · offline bundle (fetch failed)' : ''}
         {lastFromNetwork === true ? ' · updated from network' : ''}
       </p>
+
+      {champion && <LiveBuildCard championId={champion.id} role="Mid" mode="aram" />}
 
       <div className="grid gap-4 lg:grid-cols-2 mb-4">
         <Card>

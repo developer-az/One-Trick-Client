@@ -10,6 +10,7 @@ import { IconArrowRight, IconLoadout, IconUpload } from '../icons';
 import { ROLES, isDesktop, useAppSettings } from '../hooks';
 import { Badge, Card, CardHeader, ChampionCombobox, EmptyState, Item, Portrait, SettingRow, Switch, type Toast } from '../ui';
 import { OneTrickCard } from './OneTrickCard';
+import { LiveBuildCard } from '../LiveBuildCard';
 
 export interface Loadout {
   build: Build;
@@ -32,6 +33,7 @@ export const LoadoutView: React.FC<{
 
   const planSection = (
     <>
+      <LiveBuildCard championId={profile.championId} role={profile.role} />
       <PlanSection
         profile={profile}
         champions={champions}
