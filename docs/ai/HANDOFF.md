@@ -213,3 +213,9 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - Cause 2: any fresh frame with no card geometry set `mayhemUnverified`; only an accepted roll cleared it. Fix: `mayhemUnverifiedAfterRead` (monitor.ts) raises it only on card-shaped or black frames and clears it on a plain gameplay frame; used by auto and manual paths in game-monitor.ts.
 - Tests updated: verify_mayhem_monitor (level-1 semantics + 6 warning checks), verify_augment_schedule (spawn checks). verify:release green. Published test-mayhem-spawn-27; test-aram-build-26 marked superseded.
 - Still open: "mid-game didn't work well" needs logs (frame reasons in mayhem frame log lines).
+
+## 2026-11-22 - Source history for prereleases test.19-27
+
+- Those builds were packaged from uncommitted working-tree changes, so all nine `test-*` tags originally pointed at `8664a3c` (v1.7.1-test.18) - a commit without their code. Commit `ce5d658` now records the full cumulative change; the tags were force-moved to it locally and on origin so each release points at source that contains its feature.
+- Caveat: all nine tags share that one cumulative commit; there are no per-round snapshots. The published zip is still the exact artifact for a round - use the tag to find the code, not to reproduce that round's precise diff.
+- `package.json` stays at `1.7.1-test.18`: `scripts/package-test-build.ps1` stamps the release version through `extraMetadata`, which is how each zip got its own version.
