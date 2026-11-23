@@ -230,3 +230,9 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - Item gold (Blitz/Porofessor/Hexgate method): every `playerlist` item carries `price` and `consumable`; `goldDiff.ts` sums held-item shop prices per team, excluding consumables and free trinkets. The rail shows `Items 24.1k vs 23.3k +800`. This is item gold, not total earned gold; unspent gold is not visible to any companion app.
 - New `verify:mayhem-pick-selection` (cursor mapping, cards-gone expiry, pick count, fallback exclusion, OCR cursor parsing, ps1 marker, item gold) wired into `verify:release`. Frozen verifies untouched. `verify:release` exits 0.
 - Published `test-mayhem-pick-items-31` from `3b4d4ef` on `fix/overlay-aram-identity`; the tag and branch point at that commit, so the source matches the zip.
+
+## 2026-11-23 - Open: the native bottom HUD is not skinned
+
+- User report: the custom HUD skins style the app rails but the bottom-centre area (health/mana bar + abilities + summoners/items) is only a transparent calibration frame, so it doesn't feel skinned.
+- Diagnosis is written up for the next owner in `docs/ai/OPUS-MASTER-PROMPT.md`: `ChromeGameHud` draws `.chrome-frame-live` (1px outline + corner brackets, deliberately no fill); `hud-skins.css` targets `.ov-panel` / `.hud-overlay-panel` / `.hud-rail-card` only; `frames` is off by default.
+- The master prompt asks for a static, non-interactive skin perimeter over the cluster, reusing `HudSkinOrnaments` and the `data-ov-skin` variables, with a readability gate (native bars/icons never obscured), geometry tests, screenshots and test.32.
