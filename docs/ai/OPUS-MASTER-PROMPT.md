@@ -7,7 +7,7 @@
 > **Mission:** the user's custom HUD skin does not appear over League's bottom-centre native HUD cluster (health bar, mana bar, abilities, summoner spells, items). Right now that area only gets a transparent calibration outline with corner brackets. Make the selected HUD skin actually skin that cluster — ornamental, readable, static, and non-interactive — without hiding the native bars, numbers, cooldowns or icons.
 >
 > **Repo:** `C:\Users\Az040\Projects\One-Trick-Client`
-> **Branch:** `fix/overlay-aram-identity` at `192c3f6` (test.31 is the latest published build).
+> **Branch:** `fix/overlay-aram-identity` at `3f033cc` (test.31 is the latest published build; this brief is the next commit).
 > **Read first:** `docs/ai/HANDOFF.md`, `docs/ai/OPUS-MASTER-PROMPT.md` (this file), `src/overlay/ChromeGameHud.tsx`, `src/overlay/leagueGeometry.ts`, `src/overlay/hudSkins.ts`, `src/overlay/hudSkinOrnaments.tsx`, `src/overlay/hud-skins.css`, `src/overlay/OverlayApp.tsx` (`ChromeGameHud` call site), `src/index.css` (`.chrome-*`), `verify_layout.ts`, `verify_hud_geometry.ts`, `verify_hud_skins.ts`, `verify_overlay_bounds.ts`.
 >
 > **Do not** change ranked guardrails, overlay presenter/supervisor behaviour, the Mayhem pick logic from test.31, the `package.json` version, or frozen verify files. Add a new verify file instead.
