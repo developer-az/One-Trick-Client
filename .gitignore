@@ -33,3 +33,7 @@ native/bin
 
 # Local OCR / vision scratch output
 out/
+recordings/
+
+# Knowledge-graph analysis output (regenerate with /graphify)
+graphify-out/

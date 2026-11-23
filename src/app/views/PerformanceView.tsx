@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { isDesktop, useAppSettings } from '../hooks';
 import { recapGrade, type RecapGrade } from '../../logic/playMoments';
 import { Card, CardHeader, Pill, SettingRow, Switch, type Tone } from '../ui';
+import { overlaySettingsAdvice } from '../overlayAdvice';
 
 const GRADE_TONE: Record<RecapGrade, Tone> = {
   Brilliant: 'live',
@@ -87,7 +88,7 @@ export const PerformanceView: React.FC = () => {
     return (
       <div className="ot-page">
         <div className="ot-page-header">
-          <h1 className="ot-page-title">Performance</h1>
+          <h1 className="ot-page-title ot-orn-title">Performance</h1>
         </div>
         <Card>
           <p className="ot-muted">Live performance numbers are available in the desktop app.</p>
@@ -160,18 +161,18 @@ export const PerformanceView: React.FC = () => {
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Performance</h1>
+          <h1 className="ot-page-title ot-orn-title">Performance</h1>
           <p className="ot-page-sub">What One Trick costs your PC right now. During a match it should be close to nothing.</p>
         </div>
       </div>
 
-      <div className="grid gap-5 sm:grid-cols-3 mb-5">
+      <div className="grid gap-4 sm:grid-cols-3 mb-4">
         <Stat label="CPU" value={stats ? `${stats.totalCpu.toFixed(1)}%` : '–'} hint="All One Trick processes" />
         <Stat label="Memory" value={stats ? `${stats.totalMemoryMb} MB` : '–'} hint="All One Trick processes" />
         <Stat label="Game reads" value={stats ? String(stats.liveReads) : '–'} hint="Live Client requests this session" />
       </div>
 
-      <Card className="mb-5">
+      <Card className="mb-4">
         <CardHeader
           title="Clips"
           sub="Turn Auto-clip on before the next game. A kill, a death, or a Great play saves a video here."
@@ -210,12 +211,12 @@ export const PerformanceView: React.FC = () => {
         )}
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="Right now" />
           <dl>
             {rows.map((r) => (
-              <div key={r.label} className="flex items-center justify-between gap-4 py-2.5 border-b border-[color:var(--ot-border)] last:border-0">
+              <div key={r.label} className="flex items-center justify-between gap-4 py-2 border-b border-[color:var(--ot-border)] last:border-0">
                 <dt className="ot-muted">{r.label}</dt>
                 <dd>
                   <Pill tone={r.tone}>{r.value}</Pill>
@@ -224,6 +225,7 @@ export const PerformanceView: React.FC = () => {
             ))}
           </dl>
           {stats?.hotkeys.error ? <div className="ot-callout ot-callout-warn mt-3">{stats.hotkeys.error}</div> : null}
+          {stats ? <OverlaySettingsNote stats={stats} /> : null}
           {stats ? <OverlayCostNote stats={stats} overlayOn={!!settings?.overlayEnabled} /> : null}
         </Card>
 
@@ -325,20 +327,20 @@ export const PerformanceView: React.FC = () => {
 
         <Card className="lg:col-span-2">
           <CardHeader title="Processes" />
-          <table className="w-full text-sm">
+          <table className="ot-table w-full text-sm">
             <thead>
               <tr className="text-left ot-faint text-xs uppercase tracking-wide">
-                <th className="py-1.5 font-semibold">Process</th>
-                <th className="py-1.5 font-semibold text-right">CPU</th>
-                <th className="py-1.5 font-semibold text-right">Memory</th>
+                <th className="font-semibold">Process</th>
+                <th className="font-semibold text-right">CPU</th>
+                <th className="font-semibold text-right">Memory</th>
               </tr>
             </thead>
             <tbody className="ot-num">
               {processes.map((p, i) => (
                 <tr key={`${p.type}-${i}`} className="border-t border-[color:var(--ot-border)]">
-                  <td className="py-2">{p.name}</td>
-                  <td className="py-2 text-right">{p.cpu.toFixed(1)}%</td>
-                  <td className="py-2 text-right">{p.memoryMb} MB</td>
+                  <td>{p.name}</td>
+                  <td className="text-right">{p.cpu.toFixed(1)}%</td>
+                  <td className="text-right">{p.memoryMb} MB</td>
                 </tr>
               ))}
             </tbody>
@@ -356,6 +358,26 @@ const Stat: React.FC<{ label: string; value: string; hint: string }> = ({ label,
     <div className="text-sm ot-muted mt-1">{hint}</div>
   </Card>
 );
+
+/** Settings that can hide the overlay entirely, each with its fix. */
+const OverlaySettingsNote: React.FC<{ stats: PerfStats }> = ({ stats }) => {
+  const advice = overlaySettingsAdvice(stats.environment);
+  if (!advice.length) return null;
+  return (
+    <div className="ot-callout ot-callout-warn mt-3">
+      <div>
+        <strong>These settings can hide the overlay in game:</strong>
+        <ul className="mt-1">
+          {advice.map((a) => (
+            <li key={a.id} className="mt-1">
+              {a.problem} <span className="ot-muted">Fix: {a.fix}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+};
 
 /**
  * Any window over a borderless game makes Windows composite every frame. That

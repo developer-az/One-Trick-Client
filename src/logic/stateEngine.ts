@@ -32,6 +32,8 @@ import {
 
 /** Consecutive failed polls before we admit the match is over. */
 const FAILURES_TO_NOT_IN_GAME = 3;
+/** Past this trusted clock, only the match lifecycle may decide the match ended. */
+const MIDGAME_CLOCK_SEC = 60;
 /** Rolling fight-start buffer, in milliseconds of real time. */
 const DEFAULT_SNAPSHOT_WINDOW_MS = 10_000;
 /** Bounded debug log ring. */
@@ -54,7 +56,7 @@ export interface StateEngineStatus {
     lastSuccessAt: number;
     /** ms since the last successful board read; 0 when never. */
     silenceMs: number;
-    /** Highest EventID consumed. */
+    /** Highest EventID consumed; -1 when nothing has been consumed yet. */
     eventCursor: number;
     polling: boolean;
 }
@@ -95,7 +97,9 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
     const now = deps.now ?? (() => Date.now());
     const snapshotWindowMs = deps.snapshotWindowMs ?? DEFAULT_SNAPSHOT_WINDOW_MS;
 
-    let eventCursor = 0;
+    // Highest EventID already consumed. -1 = nothing consumed, so EventID 0
+    // (GameStart) is a real event rather than a sentinel.
+    let eventCursor = -1;
     let allEvents: GameEvent[] = [];
     let objectiveEvents: GameEvent[] = [];
     let state: GameState = emptyGameState(now());
@@ -190,7 +194,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         timers = { ...EMPTY_TIMERS };
         allEvents = [];
         objectiveEvents = [];
-        eventCursor = 0;
+        eventCursor = -1;
         snapshots = [];
         if (wasInGame) log(`[state] match end (${reason})`);
     }
@@ -209,7 +213,11 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
             failures += 1;
             // "Not in game" is a normal state (lobby, loading screen, game
             // over) — a single blip must not blank a live match.
-            if (failures >= FAILURES_TO_NOT_IN_GAME) markNotInGame(`${failures} failed reads`);
+            const silenceMs = lastSuccessAt > 0 ? Math.max(0, now() - lastSuccessAt) : 0;
+            const midgame = state.inGame && state.gameTime > MIDGAME_CLOCK_SEC && silenceMs > 0;
+            if (failures >= FAILURES_TO_NOT_IN_GAME && !midgame) {
+                markNotInGame(`${failures} failed reads`);
+            }
             lastFingerprint = '';
             return {
                 ok: false,
@@ -225,11 +233,16 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
         lastSuccessAt = now();
         const wasInGame = state.inGame;
 
-        const diff = diffNewEvents(eventCursor, board.events?.Events);
-        if (diff.restarted) {
+        let diff = diffNewEvents(eventCursor, board.events?.Events);
+        const restarted = diff.restarted;
+        if (restarted) {
             log('[state] event ids restarted — new match detected');
             allEvents = [];
             objectiveEvents = [];
+            // The cursor belonged to the previous match. Re-diff the same
+            // payload from "nothing consumed" so the new match's events —
+            // including EventID 0 — are emitted exactly once, in id order.
+            diff = diffNewEvents(-1, board.events?.Events);
         }
         eventCursor = diff.maxEventId;
         if (diff.events.length) retainEvents(diff.events);
@@ -253,7 +266,7 @@ export function createStateEngine(deps: StateEngineDeps): StateEngine {
             newEvents: diff.events,
             gameState: next,
             changed,
-            restarted: diff.restarted,
+            restarted,
         };
 
         for (const listener of [...stateListeners]) {

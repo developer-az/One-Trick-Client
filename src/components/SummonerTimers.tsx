@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { OverlayBotSummoner } from '../overlay/overlayLogic';
 import { formatCd } from '../logic/summonerSpells';
+import { chipTone } from '../logic/summonerChip';
 import { HudFrame } from './HudFrame';
 import { ChromeMark } from '../overlay/ChromeMark';
 import { ChampionIcon } from './GameIcons';
@@ -32,7 +33,11 @@ function formatPrimaryClipboard(lanes: OverlayBotSummoner[], now: number): strin
   return `${label} ${primary.championName}: ${bits.join(' · ')}`;
 }
 
-export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact }) => {
+export const SummonerTimers: React.FC<Props> = React.memo(function SummonerTimers({
+  lanes,
+  accentColor,
+  compact,
+}) {
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
@@ -108,7 +113,7 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
     <div className={compact ? 'space-y-1.5' : 'space-y-3'}>
       {liveLanes.map((lane) => (
         <div key={lane.role} className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <ChampionIcon
               championName={lane.championName}
               championKey={lane.championId}
@@ -121,12 +126,15 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
             >
               {lane.role}
             </span>
-            <span className={`text-chrome-bright truncate ${compact ? 'text-[11px]' : 'text-sm'} min-w-[4rem]`}>
+            <span className={`text-chrome-bright truncate ${compact ? 'text-[11px]' : 'text-sm'} min-w-0`}>
               {lane.championName}
             </span>
-            <div className="flex flex-wrap gap-1">
-              {lane.spells.map((sp) => {
+            <div className="flex flex-wrap gap-1 shrink-0">
+              {[...lane.spells]
+                .sort((a, b) => Number(chipTone(b).priority === 'primary') - Number(chipTone(a).priority === 'primary'))
+                .map((sp) => {
                 const ready = sp.ready || sp.remaining <= 0;
+                const tone = chipTone(sp);
                 return (
                   <button
                     key={`${lane.role}-${sp.short}`}
@@ -141,11 +149,14 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
                       e.preventDefault();
                       markSpell(lane.role, sp.name, true);
                     }}
-                    className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100 ${
+                    className={`hud-chip !py-0.5 flex-none whitespace-nowrap ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100 hud-chip--${tone.priority} hud-chip--${tone.state} ${
                       ready ? 'hud-accent-green !text-chrome-bright' : 'is-down'
                     }`}
                   >
                     {sp.short} {ready ? 'UP' : formatCd(sp.remaining)}
+                    {!ready && tone.fillPct > 0 ? (
+                      <span className="hud-chip-fill" style={{ width: `${tone.fillPct}%` }} aria-hidden />
+                    ) : null}
                   </button>
                 );
               })}
@@ -153,11 +164,11 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
           </div>
         </div>
       ))}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 min-w-0">
         <button
           type="button"
           onClick={() => void handleCopy()}
-          className={`hud-chip !py-0.5 ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100`}
+          className={`hud-chip !py-0.5 flex-none whitespace-nowrap ${compact ? '!text-[11px]' : '!text-[12px]'} cursor-pointer hover:opacity-100`}
           title={midFocus ? 'Copy mid laner summoner timers' : 'Copy ADC summoner timers'}
         >
           {copied ? copiedLabel : copyLabel}
@@ -181,4 +192,4 @@ export const SummonerTimers: React.FC<Props> = ({ lanes, accentColor, compact })
       {body}
     </HudFrame>
   );
-};
+});

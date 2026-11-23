@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useScouting, isDesktop } from '../hooks';
 import type { Champion } from '../../logic/pykeLogic';
 import type { ChampionProfile } from '../../logic/profiles';
 import type { ViewId } from '../App';
@@ -27,6 +28,13 @@ export const DraftView: React.FC<{
   onClear: () => void;
   onNavigate: (view: ViewId) => void;
 }> = ({ draft, champions, profile, loadout, history, onManual, onClear, onNavigate }) => {
+  const scouting = useScouting(draft.live && isDesktop);
+  const scoutingByChamp = useMemo(() => {
+    const map = new Map<number, ScoutingPlayer>();
+    for (const row of scouting.players) map.set(row.championId, row);
+    return map;
+  }, [scouting.players]);
+
   const taken = useMemo(() => {
     const ids = new Set<string>();
     for (const r of ROLES) {
@@ -42,7 +50,7 @@ export const DraftView: React.FC<{
     <div className="ot-page">
       <div className="ot-page-header">
         <div>
-          <h1 className="ot-page-title">Champ select</h1>
+          <h1 className="ot-page-title ot-orn-title">Champ select</h1>
           <p className="ot-page-sub">
             {draft.live
               ? `Live from the client${draft.timerPhase ? ` · ${PHASE_LABEL[draft.timerPhase] || draft.timerPhase}` : ''}. Click any slot to correct it.`
@@ -63,7 +71,7 @@ export const DraftView: React.FC<{
         </div>
       </div>
 
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <TeamColumn
           title="Your team"
           tone="blue"
@@ -71,6 +79,8 @@ export const DraftView: React.FC<{
           members={draft.ally}
           champions={champions}
           taken={taken}
+          scoutingByChamp={scoutingByChamp}
+          scoutingLoading={scouting.loading}
           onManual={onManual}
         />
         <TeamColumn
@@ -81,6 +91,8 @@ export const DraftView: React.FC<{
           champions={champions}
           taken={taken}
           history={history}
+          scoutingByChamp={scoutingByChamp}
+          scoutingLoading={scouting.loading}
           onManual={onManual}
         />
       </div>
@@ -94,7 +106,7 @@ export const DraftView: React.FC<{
         </div>
       ) : null}
 
-      <div className="mt-6">
+      <div className="mt-4">
         {loadout ? (
           <MatchupCard loadout={loadout} profile={profile} />
         ) : (
@@ -119,8 +131,10 @@ const TeamColumn: React.FC<{
   champions: Champion[];
   taken: Set<string>;
   history?: MatchSummary[] | null;
+  scoutingByChamp: Map<number, ScoutingPlayer>;
+  scoutingLoading: boolean;
   onManual: (side: 'ally' | 'enemy', role: Role, champion: Champion | null) => void;
-}> = ({ title, tone, side, members, champions, taken, history, onManual }) => (
+}> = ({ title, tone, side, members, champions, taken, history, scoutingByChamp, scoutingLoading, onManual }) => (
   <Card>
     <CardHeader title={title} action={<span className={`ot-dot ${tone === 'blue' ? '' : 'ot-tone-bad'}`} style={tone === 'blue' ? { background: 'var(--ot-blue)' } : undefined} />} />
     <div className="space-y-2">
@@ -139,7 +153,7 @@ const TeamColumn: React.FC<{
                 exclude={taken}
               />
             </div>
-            <div className="flex gap-1.5">
+            <div className="flex flex-wrap gap-1.5 justify-end">
               {m?.isLocal ? <Badge tone="gold">You</Badge> : null}
               {m?.hovering ? <Badge>Hovering</Badge> : null}
               {m?.champion && history ? (
@@ -147,6 +161,12 @@ const TeamColumn: React.FC<{
                   history={history}
                   champKey={Number(m.champion.key)}
                   mode={side === 'enemy' ? 'against' : 'with'}
+                />
+              ) : null}
+              {m?.champion ? (
+                <ScoutingBadges
+                  row={scoutingByChamp.get(Number(m.champion.key))}
+                  loading={scoutingLoading}
                 />
               ) : null}
             </div>
@@ -161,7 +181,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
   const { analysis, dominance } = loadout;
   return (
     <Card>
-      <div className="flex flex-wrap items-start justify-between gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 max-w-2xl">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <Badge tone="gold">{profile.label}</Badge>
@@ -177,9 +197,9 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
         </div>
       </div>
 
-      <div className="ot-divider my-5" />
+      <div className="ot-divider my-4" />
 
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <div>
           <h3 className="ot-card-title mb-2">Win condition</h3>
           <p className="text-[15px] leading-relaxed">{analysis.winCondition}</p>
@@ -200,7 +220,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
 
       {analysis.tips.length || analysis.loadingDoctrine?.length ? (
         <>
-          <div className="ot-divider my-5" />
+          <div className="ot-divider my-4" />
           <h3 className="ot-card-title mb-2">{analysis.loadingDoctrine?.length ? 'First 90 seconds' : 'Tips'}</h3>
           <ul className="space-y-2 text-[15px] leading-relaxed">
             {(analysis.loadingDoctrine?.length ? analysis.loadingDoctrine : analysis.tips).slice(0, 6).map((t, i) => (
@@ -215,7 +235,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
 
       {analysis.botLaneMatchup ? (
         <>
-          <div className="ot-divider my-5" />
+          <div className="ot-divider my-4" />
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <h3 className="ot-card-title">Bot lane</h3>
             <Badge tone={analysis.botLaneMatchup.matchupDifficulty === 'EASY' ? 'teal' : analysis.botLaneMatchup.matchupDifficulty === 'MEDIUM' ? 'gold' : 'red'}>
@@ -227,7 +247,7 @@ const MatchupCard: React.FC<{ loadout: Loadout; profile: ChampionProfile }> = ({
         </>
       ) : null}
 
-      <p className="mt-5 text-xs ot-faint">
+      <p className="mt-4 text-xs ot-faint">
         A heuristic read from champion classes and {profile.shortLabel}'s doctrine. It is not based on win-rate data.
       </p>
     </Card>
@@ -259,6 +279,40 @@ const ChampList: React.FC<{ title: string; names: string[]; tone: 'teal' | 'red'
 function titleCase(s: string): string {
   return s.charAt(0) + s.slice(1).toLowerCase();
 }
+
+function formatRank(tier: string | null | undefined, division: string | null | undefined): string | null {
+  if (!tier) return null;
+  const t = titleCase(tier);
+  return division ? `${t} ${division}` : t;
+}
+
+const ScoutingBadges: React.FC<{ row: ScoutingPlayer | undefined; loading: boolean }> = ({ row, loading }) => {
+  if (!row) {
+    if (!loading) return null;
+    return (
+      <span title="Loading LCU scouting">
+        <Badge tone="muted">…</Badge>
+      </span>
+    );
+  }
+  const rank = formatRank(row.rankTier, row.rankDivision);
+  const mastery = typeof row.masteryLevel === 'number' && row.masteryLevel > 0 ? `M${row.masteryLevel}` : null;
+  const recent =
+    (row.recentGames ?? 0) > 0 ? `${row.recentWins ?? 0}W-${(row.recentGames ?? 0) - (row.recentWins ?? 0)}L/5` : null;
+  if (!rank && !mastery && !recent) return null;
+  const title = [rank, mastery, recent].filter(Boolean).join(' · ');
+  return (
+    <span className="flex flex-wrap gap-1 justify-end" title={title}>
+      {rank ? <Badge tone="muted">{rank}</Badge> : null}
+      {mastery ? <Badge tone="teal">{mastery}</Badge> : null}
+      {recent ? (
+        <span title="Last 5 games in client history">
+          <Badge tone="gold">{recent}</Badge>
+        </span>
+      ) : null}
+    </span>
+  );
+};
 
 /** Your record with or against this champion from match history. */
 const HistoryRecord: React.FC<{

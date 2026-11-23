@@ -1,27 +1,73 @@
-import { app, desktopCapturer, screen } from 'electron';
-import { spawn } from 'child_process';
+import { app, desktopCapturer, nativeImage, screen } from 'electron';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { matchAugmentsFromOcr } from '../src/logic/mayhem/match';
+import { mayhemFallbackCropRect, maskRectInCapture, mayhemPanelMaskRect } from '../src/logic/mayhem/captureMask';
+import { bestAugmentMatchConfidence } from '../src/logic/mayhem/match';
+import { parseMayhemOcrOutput, type MayhemOcrOutput } from '../src/logic/mayhem/ocrOutput';
 import {
-  stabilizeMayhemOffers,
-  type MayhemOfferStabilityState,
-} from '../src/logic/mayhem/offerStability';
+  toMayhemMonitorRead,
+  type MayhemMonitorRead,
+  type MayhemMonitorReadFields,
+} from '../src/logic/mayhem/monitor';
+import {
+  mayhemOcrScriptCandidates,
+  resolveOcrScriptPath,
+} from '../src/logic/mayhem/ocrScriptPath';
+import { stabilizeMayhemOffers, type MayhemOfferStabilityState } from '../src/logic/mayhem/offerStability';
+import {
+  classifyMayhemFrame,
+  createMayhemPipelineState,
+  type MayhemFrameDecision,
+  type MayhemFrameLine,
+} from '../src/logic/mayhem/pipeline';
 import { runMayhemOcrOnImageFile } from '../src/logic/mayhem/ocrRunner';
+import { PsScriptWorker } from './ps-worker';
 import type { MayhemAugment } from '../src/logic/mayhem/types';
+import { overlayLog } from './overlay-log';
+import { overlayScaleFromHud } from './overlay-bounds';
+import { getHudScale } from './overlay-window';
+import { recordLatency } from './state-service';
 
 function ocrScriptPath(): string {
-  const nextToBundle = path.join(__dirname, 'scripts', 'mayhem-ocr.ps1');
-  if (fs.existsSync(nextToBundle)) return nextToBundle;
-  return path.join(app.getAppPath(), 'electron', 'scripts', 'mayhem-ocr.ps1');
+  const appPath = app.getAppPath();
+  return resolveOcrScriptPath(mayhemOcrScriptCandidates(appPath, __dirname));
 }
 
 let ocrInFlight = false;
+/** A PageDown press was refused because another capture held the single OCR slot. */
+let pendingManual = false;
 let lastOfferIds: string[] = [];
+/** Hysteresis for the geometry-gated pipeline (lone-card confirm / ignore window). */
+const pipelineState = createMayhemPipelineState();
 let lastOcrAt = 0;
 let lastOcrSnippet = '';
 let lastCaptureMethod: 'powershell' | 'desktop' | 'none' = 'none';
+let lastFuzzyScore = 0;
+let blackFrameSeen = false;
+/** One `ocr-target` line per captured window per match (the game pid changes every game). */
+let loggedTargetSignature = '';
+
+/** Why a `detectMayhemOffers` call did not capture at all. */
+export type MayhemOcrRefusal = 'in-flight' | 'throttled' | 'unsupported' | null;
+
+/**
+ * One OCR frame for the monitor.
+ *
+ * An alias of the monitor's own type, so a field can never be added on one side
+ * only, and every return of `detectMayhemOffers` is built by
+ * `toMayhemMonitorRead` (which requires an explicit `owner` decision).
+ *
+ * `refusal` is the scan's own verdict on why it did not run: sampled here, at
+ * the moment the throttle/in-flight check decides, instead of by the caller
+ * re-reading module state after the await (a scan that finished in the same
+ * turn would be mislabelled).
+ */
+export type MayhemOcrRead = MayhemMonitorRead & {
+  refusal: MayhemOcrRefusal;
+  /** The geometry-gated pipeline's decision for this frame. */
+  decision: MayhemFrameDecision;
+};
 
 export function getMayhemOcrDebug(): {
   lastSnippet: string;
@@ -35,6 +81,41 @@ export function getMayhemOcrDebug(): {
   };
 }
 
+/** The augment OCR saw an all-black frame this match (exclusive fullscreen). */
+export function mayhemOcrBlackFrameSeen(): boolean {
+  return blackFrameSeen;
+}
+
+/** True while a capture/OCR pass holds the single scan slot. */
+export function isMayhemOcrInFlight(): boolean {
+  return ocrInFlight;
+}
+
+/** Remember a manual press that could not run because a capture was in flight. */
+export function noteMayhemManualPressInFlight(): void {
+  pendingManual = true;
+}
+
+/** Consume the queued manual press once, so at most one follow-up scan runs. */
+export function takePendingMayhemManual(): boolean {
+  if (!pendingManual) return false;
+  pendingManual = false;
+  return true;
+}
+
+/** Drop a queued manual press (match end). */
+export function clearPendingMayhemManual(): void {
+  pendingManual = false;
+}
+
+/** Called when a match's mode loop starts; the hint is per match, not per pick. */
+export function resetMayhemOcrMatchFlags(): void {
+  blackFrameSeen = false;
+  loggedTargetSignature = '';
+  pipelineState.pending = null;
+  pipelineState.ignoreLoneUntil = 0;
+}
+
 function displayForCapture(): Electron.Display {
   try {
     return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -43,47 +124,224 @@ function displayForCapture(): Electron.Display {
   }
 }
 
-function runPowerShellCaptureAndOcr(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const tmp = path.join(os.tmpdir(), `onetrick-mayhem-${Date.now()}.png`);
-    const ps = spawn(
-      'powershell.exe',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        ocrScriptPath(),
-        '-CaptureScreen',
-        '-UseGameWindow',
-        '-ImagePath',
-        tmp,
-      ],
-      { windowsHide: true }
-    );
-    let out = '';
-    let err = '';
-    ps.stdout.on('data', (c) => {
-      out += String(c);
+function logOcrError(message: string): void {
+  console.warn('[mayhem-ocr]', message);
+  overlayLog('ocr-error', { message });
+}
+
+/**
+ * The mayhem panel footprint for the desktopCapturer fallback, filled black in
+ * the captured display image so our own HUD text never reaches the OCR. The
+ * PowerShell path masks inside mayhem-ocr.ps1 from the window it captured; this
+ * is the same rect in the fallback image's own pixels.
+ */
+function maskFallbackPanel(img: Electron.NativeImage, display: Electron.Display): Electron.NativeImage {
+  try {
+    const scale = display.scaleFactor || 1;
+    const size = img.getSize();
+    const mask = mayhemPanelMaskRect(display.bounds, scale);
+    // The thumbnail starts at the display's own origin, so the screen-space
+    // rect is translated into the capture before it is filled.
+    const local = maskRectInCapture(mask, {
+      x: Math.round(display.bounds.x * scale),
+      y: Math.round(display.bounds.y * scale),
+      width: size.width,
+      height: size.height,
     });
-    ps.stderr.on('data', (c) => {
-      err += String(c);
-    });
-    ps.on('close', (code) => {
-      try {
-        if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
-      } catch {
-        /* ignore */
+    if (!local) return img;
+    const buffer = img.toBitmap();
+    if (buffer.length !== size.width * size.height * 4) return img;
+    const right = Math.min(size.width, local.x + local.width);
+    const bottom = Math.min(size.height, local.y + local.height);
+    for (let y = Math.max(0, local.y); y < bottom; y += 1) {
+      for (let x = Math.max(0, local.x); x < right; x += 1) {
+        const offset = (y * size.width + x) * 4;
+        buffer[offset] = 0;
+        buffer[offset + 1] = 0;
+        buffer[offset + 2] = 0;
+        buffer[offset + 3] = 255;
       }
-      if (code !== 0 && code !== null) {
-        reject(new Error(err.trim() || `PowerShell capture/OCR exit ${code}`));
-        return;
+    }
+    const masked = nativeImage.createFromBitmap(buffer, { width: size.width, height: size.height });
+    return masked.isEmpty() ? img : masked;
+  } catch {
+    return img;
+  }
+}
+
+/** The hudScale the overlay is currently rendered with, as --overlay-scale. */
+function panelScaleForCapture(): number {
+  try {
+    return overlayScaleFromHud(getHudScale());
+  } catch {
+    return 0.85;
+  }
+}
+
+/**
+ * `owner` from the PowerShell target marker; older scripts omit it.
+ *
+ * A truncated JSON payload (the marker line always starts with `{` because the
+ * script uses ConvertTo-Json) is a target line whose owner could not be read:
+ * that is present-but-unparsable, so it is reported untrusted. A payload that
+ * is not JSON at all is an older key=value line that never reported an owner:
+ * absent, so `undefined` (the seam's documented legacy default).
+ */
+export function parseTargetOwner(raw: string): boolean | undefined {
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('__OT_TARGET__')) continue;
+    const payload = trimmed.slice('__OT_TARGET__'.length).trim();
+    try {
+      const src = JSON.parse(payload) as Record<string, unknown>;
+      if (typeof src.owner === 'boolean') return src.owner;
+      if (typeof src.owner === 'string') {
+        const value = src.owner.toLowerCase();
+        if (value === 'true') return true;
+        if (value === 'false') return false;
       }
-      lastCaptureMethod = 'powershell';
-      resolve(out);
-    });
-    ps.on('error', reject);
+    } catch {
+      return payload.startsWith('{') ? false : undefined;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+function logCaptureTarget(parsed: MayhemOcrOutput, owner: boolean | undefined): void {
+  if (parsed.language) overlayLog('ocr-language', { language: parsed.language });
+  if (parsed.noTarget) {
+    logOcrError('game window not found (League of Legends / RiotWindowClass)');
+    return;
+  }
+  if (parsed.fallback) {
+    if (loggedTargetSignature !== 'fallback') {
+      loggedTargetSignature = 'fallback';
+      overlayLog('ocr-target', { target: 'fallback', source: 'fallback' });
+    }
+    return;
+  }
+  const target = parsed.target;
+  if (!target) return;
+  const signature = `${target.pid}|${target.rect}|${target.frame}`;
+  if (signature === loggedTargetSignature) return;
+  loggedTargetSignature = signature;
+  // Pending in-game verification: the process name, window class and client
+  // rect are inferred from the game executable, not yet confirmed live.
+  overlayLog('ocr-target', {
+    target: 'window',
+    source: 'window',
+    pid: target.pid ?? 'unknown',
+    exe: target.exe ?? 'unknown',
+    class: target.className ?? 'unknown',
+    rect: target.rect ?? 'unknown',
+    frame: target.frame ?? 'unknown',
+    black: target.black === true,
+    fg: target.foreground !== false,
+    owner: owner ?? null,
   });
+}
+
+/** One bounded, redacted line per classified frame (no summoner names, no card text). */
+function logMayhemFrame(detail: {
+  reason: string;
+  lineCount: number;
+  cardCount: number;
+  target: string;
+  owner: boolean | undefined;
+  acceptedIds: string[];
+  decision: MayhemFrameDecision;
+  /** Per-slot mean body RGB (`x=r,g,b;…`) so a real run records gold-window evidence. */
+  slotBodyRgb: string;
+  /** Per-slot sample counts (`x=b8/g0/r2;…`): which condition of the gate failed. */
+  slotPixels: string;
+  /** Pixel gate verdict (`true/false/?`), the post-selection "cards gone" signal. */
+  cardsVisible: string;
+  /** Cursor in the captured band (`x,y`) at this frame, when reported. */
+  cursor: string;
+}): void {
+  overlayLog('mayhem-frame', {
+    reason: detail.reason.slice(0, 200),
+    lineCount: detail.lineCount,
+    cardCount: detail.cardCount,
+    target: detail.target,
+    owner: detail.owner ?? null,
+    acceptedIds: detail.acceptedIds,
+    decision: detail.decision,
+    slotBodyRgb: detail.slotBodyRgb,
+    slotPixels: detail.slotPixels,
+    cardsVisible: detail.cardsVisible,
+    cursor: detail.cursor,
+  });
+}
+
+export interface ScreenRead {
+  parsed: MayhemOcrOutput;
+  owner: boolean | undefined;
+}
+
+/** Test seam: replace the PowerShell/desktopCapturer capture+OCR pass. */
+export type MayhemScreenReader = () => Promise<ScreenRead>;
+
+export interface DetectMayhemOffersOptions {
+  minMatches?: number;
+  /**
+   * The match is already Mayhem (queue/latch), so a roll of cards the bundle
+   * does not know must still display. Without it a title-case junk line cannot
+   * become a placeholder on a classic ARAM read.
+   */
+  mayhemMatch?: boolean;
+  /** Injected reader, so a verify can drive the real parse/accept path. */
+  readScreen?: MayhemScreenReader;
+  /** A forced manual read (PageDown): the only case a `preview` decision is honoured. */
+  forcedManual?: boolean;
+}
+
+/**
+ * A hung PowerShell must never be able to wedge the scan loop: the child is
+ * killed and the call rejects, so `ocrInFlight` is released in the finally and
+ * later scans still run.
+ */
+const OCR_PROCESS_TIMEOUT_MS = 30_000;
+
+/**
+ * Warm PowerShell host: ~40 ms per capture+OCR instead of ~550 ms cold. It
+ * exits on its own when Electron exits (its stdin pipe closes).
+ */
+const ocrWorker = new PsScriptWorker();
+
+async function runPowerShellCaptureAndOcr(): Promise<ScreenRead> {
+  const tmp = path.join(os.tmpdir(), `onetrick-mayhem-${Date.now()}.png`);
+  try {
+    const { out, err, code } = await ocrWorker.run(
+      ocrScriptPath(),
+      {
+        CaptureScreen: true,
+        UseGameWindow: true,
+        ImagePath: tmp,
+        // Ownership: the game window or this process (our overlay) must own the
+        // foreground, so a browser sitting over the game's rect cannot be read
+        // as an offer frame.
+        OwnerPid: process.pid,
+        // The panel mask is derived inside the script from the captured frame;
+        // only the overlay's own scale crosses the boundary.
+        PanelScale: panelScaleForCapture().toFixed(3),
+      },
+      OCR_PROCESS_TIMEOUT_MS
+    );
+    if (code !== 0) throw new Error(err.trim() || `PowerShell capture/OCR exit ${code}`);
+    lastCaptureMethod = 'powershell';
+    return { parsed: parseMayhemOcrOutput(out), owner: parseTargetOwner(out) };
+  } catch (error) {
+    if (/timed out/.test(String(error))) logOcrError(String(error));
+    throw error;
+  } finally {
+    try {
+      if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 async function captureCenterRegionPng(): Promise<Buffer | null> {
@@ -103,17 +361,22 @@ async function captureCenterRegionPng(): Promise<Buffer | null> {
       sources[0];
     const img = source?.thumbnail;
     if (!img || img.isEmpty()) return null;
-    const crop = {
-      x: Math.floor(width * 0.1),
-      y: Math.floor(height * 0.2),
-      width: Math.floor(width * 0.8),
-      height: Math.floor(height * 0.55),
-    };
-    const cropped = img.crop(crop);
+    // Blank the mayhem panel in the full frame first, then cut the offer band:
+    // the panel is inside the band and its text must not reach the OCR.
+    const masked = maskFallbackPanel(img, display);
+    // Same offer band as the PowerShell capture (0.08/0.18/0.84x0.62): a
+    // wider fallback crop could read UI outside the cards the OCR expects.
+    const crop = mayhemFallbackCropRect(width, height);
+    const cropped = masked.crop({
+      x: crop.x,
+      y: crop.y,
+      width: crop.width,
+      height: crop.height,
+    });
     lastCaptureMethod = 'desktop';
     return cropped.toPNG();
   } catch (error) {
-    console.warn('[mayhem-ocr] desktop capture failed:', error);
+    logOcrError(`desktop capture failed: ${String(error)}`);
     return null;
   }
 }
@@ -132,47 +395,232 @@ async function runWindowsOcrOnFile(png: Buffer): Promise<string> {
   }
 }
 
-async function readScreenText(): Promise<string> {
+async function readScreenText(): Promise<ScreenRead> {
   if (process.platform === 'win32') {
     try {
       return await runPowerShellCaptureAndOcr();
     } catch (error) {
-      console.warn('[mayhem-ocr] PowerShell capture failed, trying desktopCapturer:', error);
+      logOcrError(`PowerShell capture failed, trying desktopCapturer: ${String(error)}`);
     }
   }
   const png = await captureCenterRegionPng();
-  if (!png) return '';
-  return runWindowsOcrOnFile(png);
+  if (!png) {
+    return {
+      parsed: { text: '', target: null, blackFrame: false, language: null, noTarget: true, fallback: false },
+      owner: undefined,
+    };
+  }
+  const text = await runWindowsOcrOnFile(png);
+  return {
+    parsed: { text, target: null, blackFrame: false, language: null, noTarget: false, fallback: true },
+    owner: undefined,
+  };
 }
 
 /**
- * Read augment card titles from the center of the screen (Windows OCR).
+ * Read augment card titles from the game window (Windows OCR).
+ * Returns enough metadata for the monitor to know whether it may trust this
+ * frame (fresh read, a real game window, non-black). `foreground` is recorded
+ * for logs only: the overlay can steal focus while the game is still captured.
+ *
+ * Every return crosses `toMayhemMonitorRead`, so `owner` (the trust gate) is a
+ * required decision on all of them — the success path once returned a bare
+ * literal that silently dropped it.
  */
-export async function detectMayhemOfferIds(
+export async function detectMayhemOffers(
   augments: MayhemAugment[],
   minIntervalMs = 2800,
-  opts: { minMatches?: number } = {}
-): Promise<string[]> {
-  const minMatches = opts.minMatches ?? 1;
-  if (process.platform !== 'win32') return lastOfferIds;
+  opts: DetectMayhemOffersOptions = {}
+): Promise<MayhemOcrRead> {
+  const mayhemMatch = opts.mayhemMatch === true;
+  const idleFields = {
+    ids: lastOfferIds,
+    candidateIds: [],
+    frameIds: [],
+    frameDisplayCount: 0,
+    fresh: false,
+    valid: false,
+    fuzzyScore: lastFuzzyScore,
+    blackFrame: blackFrameSeen,
+    foreground: true,
+    fallback: false,
+  } satisfies MayhemMonitorReadFields;
+  // A throttled/idle read never counts (fresh is false); it still crosses the
+  // seam so the gate is a decision on every return, never an omission.
+  const idle = { ...toMayhemMonitorRead(idleFields, undefined), decision: 'unverified' as const };
+  /** A call that actually captured: it crosses the seam and carries no refusal. */
+  const ran = (
+    fields: MayhemMonitorReadFields,
+    trust: boolean | undefined,
+    decision: MayhemFrameDecision = 'unverified'
+  ): MayhemOcrRead => ({
+    ...toMayhemMonitorRead(fields, trust),
+    refusal: null,
+    decision,
+  });
+  // Non-Windows has no capture/OCR path at all: this is not a throttle, and the
+  // hotkey log must not claim one. Sentinels stay untrusted/unusable.
+  if (process.platform !== 'win32') return { ...idle, refusal: 'unsupported' };
   const now = Date.now();
-  if (now - lastOcrAt < minIntervalMs) return lastOfferIds;
-  if (ocrInFlight) return lastOfferIds;
+  if (now - lastOcrAt < minIntervalMs) return { ...idle, refusal: 'throttled' };
+  if (ocrInFlight) return { ...idle, refusal: 'in-flight' };
   ocrInFlight = true;
   lastOcrAt = now;
+  const ocrStart = performance.now();
   try {
-    const text = await readScreenText();
-    lastOcrSnippet = text.slice(0, 400);
-    if (!text.trim()) {
-      lastCaptureMethod = 'none';
-      return lastOfferIds;
+    const readScreen = opts.readScreen ?? readScreenText;
+    const { parsed, owner } = await readScreen();
+    logCaptureTarget(parsed, owner);
+    if (parsed.blackFrame) {
+      blackFrameSeen = true;
+      overlayLog('ocr-black-frame', { reason: 'exclusive-fullscreen-or-hidden-window' });
     }
-    const matched = matchAugmentsFromOcr(text, augments);
-    return applyMatchedOffers(text, matched, minMatches);
+    // Keep the focus state for logs. It no longer gates trust on its own: our
+    // overlay can own the foreground while the game window is still what was
+    // captured. `owner` is the trust gate: the foreground must belong to the
+    // game or to us, so a browser over the game rect can never count.
+    // A fallback (no game window matched) captured the primary screen: its
+    // offers may display, but it never counts a pick.
+    // Assume foreground for manual scans; the counter refuses to count picks
+    // from a fallback frame (see runMayhemMonitorScan).
+    const foreground = parsed.fallback
+      ? true
+      : parsed.target
+        ? parsed.target.foreground !== false
+        : false;
+    const baseFields = {
+      ids: lastOfferIds,
+      candidateIds: [],
+      frameIds: [],
+      frameDisplayCount: 0,
+      fresh: true,
+      valid: true,
+      fuzzyScore: lastFuzzyScore,
+      blackFrame: parsed.blackFrame,
+      foreground,
+      fallback: parsed.fallback,
+      cardsVisible: parsed.cardsVisible,
+      // Only a real game-window capture can name what the cursor clicked.
+      cursor:
+        !parsed.fallback && !parsed.noTarget && parsed.target ? parsed.cursor : undefined,
+    } satisfies MayhemMonitorReadFields;
+    if (parsed.noTarget) {
+      lastCaptureMethod = 'none';
+      return ran({ ...baseFields, valid: false, foreground: false }, owner);
+    }
+    lastOcrSnippet = parsed.text.slice(0, 400);
+    const lines = parsed.lines;
+    // Windows OCR succeeded on a real game window and saw zero lines. That is a
+    // genuine empty scan the monitor needs to count a completed pick; it emits
+    // no ids and keeps a full roll from being invented out of nothing. A failed,
+    // black, fallback or box-less NONEMPTY read stays invalid below.
+    const emptyGameFrame =
+      parsed.emptyFrame === true &&
+      Boolean(parsed.target) &&
+      !parsed.blackFrame && !parsed.fallback && !parsed.noTarget &&
+      (lines?.length ?? 0) === 0 && !parsed.text.trim();
+    if (emptyGameFrame) {
+      lastCaptureMethod = 'none';
+      lastFuzzyScore = 0;
+      return ran(
+        {
+          ids: [], candidateIds: [], frameIds: [], frameDisplayCount: 0,
+          fresh: true, valid: true, fuzzyScore: 0,
+          blackFrame: false,
+          foreground,
+          fallback: false,
+          cardsVisible: parsed.cardsVisible,
+          cursor: parsed.target ? parsed.cursor : undefined,
+        },
+        owner,
+        'unverified'
+      );
+    }
+    // Without per-line boxes geometry cannot verify a roll. The legacy
+    // text-only matcher is gone: such a frame cannot identify, arm, evict or
+    // purge anything. `lastOcrSnippet` is the only retained diagnostic.
+    if (!lines || lines.length === 0 || !parsed.text.trim()) {
+      lastCaptureMethod = 'none';
+      lastFuzzyScore = 0;
+      return ran(
+        {
+          ids: [], candidateIds: [], frameIds: [], frameDisplayCount: 0,
+          fresh: true, valid: false, fuzzyScore: 0,
+          blackFrame: parsed.blackFrame,
+          foreground,
+          fallback: parsed.fallback,
+          cardsVisible: parsed.cardsVisible,
+          cursor:
+            !parsed.fallback && !parsed.noTarget && parsed.target ? parsed.cursor : undefined,
+        },
+        owner,
+        'unverified'
+      );
+    }
+    const fuzzyScore = bestAugmentMatchConfidence(parsed.text, augments);
+    lastFuzzyScore = fuzzyScore;
+
+    // Geometry-gated pipeline: NO id is emitted until classifyMayhemFrame
+    // accepts the frame. A preview is only honoured for a forced manual read;
+    // unverified emits nothing at all.
+    const evidence = classifyMayhemFrame({
+      lines: lines as MayhemFrameLine[],
+      augments,
+      mode: mayhemMatch ? 'mayhem' : 'classic',
+      state: pipelineState,
+      now,
+      cardsVisible: parsed.cardsVisible,
+      cardSlots: parsed.cardSlots,
+    });
+    const decision: MayhemFrameDecision =
+      !opts.forcedManual && evidence.decision === 'preview' ? 'unverified' : evidence.decision;
+    const acceptedIds = decision === 'accept' ? evidence.ids : [];
+    const frameIds = decision === 'accept' ? evidence.knownIds : [];
+    logMayhemFrame({
+      reason: evidence.reasons.join(','),
+      lineCount: lines.length,
+      cardCount: evidence.cardCount,
+      target: parsed.target ? 'window' : parsed.fallback ? 'fallback' : 'none',
+      owner,
+      acceptedIds,
+      decision,
+      slotBodyRgb: (parsed.cardSlots ?? [])
+        .map((s) => `${s.x}=${s.bodyR ?? '?'},${s.bodyG ?? '?'},${s.bodyB ?? '?'}`)
+        .join(';'),
+      slotPixels: (parsed.cardSlots ?? [])
+        .map((s) => `${s.x}=b${s.body}/g${s.gap ?? '?'}/r${s.rim}`)
+        .join(';'),
+      cardsVisible:
+        parsed.cardsVisible === undefined ? '?' : parsed.cardsVisible ? 'true' : 'false',
+      cursor: parsed.cursor ? `${parsed.cursor.x},${parsed.cursor.y}` : 'none',
+    });
+    if (decision === 'accept') {
+      // Keep reroll/fast-poll bookkeeping; the pipeline owns the display ids
+      // (so a four-card roll is not re-capped by stabilize's 3-id helper).
+      stabilizeMayhemOffers(lastOfferIds, acceptedIds, parsed.text, retainOffersOnEmptyMatch, offerStability);
+      lastOfferIds = acceptedIds;
+    }
+    return ran(
+      {
+        ids: acceptedIds,
+        candidateIds: [],
+        frameIds,
+        frameDisplayCount: evidence.cardCount,
+        fresh: true,
+        valid: decision === 'accept',
+        fuzzyScore,
+        blackFrame: parsed.blackFrame,
+        foreground,
+        fallback: parsed.fallback,
+      },
+      owner,
+      decision
+    );
   } catch (error) {
-    console.warn('[mayhem-ocr]', error);
-    return lastOfferIds;
+    logOcrError(String(error));
+    return ran({ ...idleFields, fresh: true, valid: false }, undefined);
   } finally {
+    recordLatency('ocr.mayhem', performance.now() - ocrStart);
     ocrInFlight = false;
   }
 }
@@ -181,9 +629,17 @@ export async function detectMayhemOfferIds(
 let retainOffersOnEmptyMatch = false;
 const offerStability: MayhemOfferStabilityState = { rerollPending: false };
 
+/**
+ * `retain` follows whether the HUD is on screen, but `rerollPending` belongs to
+ * the roll: a 1-card reroll read arms the 550 ms fast poll, and clearing it here
+ * would drop back to the 1.4 s idle gap for exactly the frames that need the
+ * quick retry. The flag is inert while retain is off — the poll reads it only
+ * when the HUD is up, and a retain-off frame passes through the stability
+ * guard's no-session branch, which clears it — and `stabilizeMayhemOffers`
+ * clears it as soon as the full roll is on screen, so it cannot leak forever.
+ */
 export function setMayhemOcrRetainOffers(retain: boolean): void {
   retainOffersOnEmptyMatch = retain;
-  if (!retain) offerStability.rerollPending = false;
 }
 
 export function isMayhemOcrRerollPending(): boolean {
@@ -195,31 +651,9 @@ export function resetMayhemOcrCache(): void {
   lastOcrAt = 0;
   lastOcrSnippet = '';
   lastCaptureMethod = 'none';
+  lastFuzzyScore = 0;
   offerStability.rerollPending = false;
+  pipelineState.pending = null;
+  pipelineState.ignoreLoneUntil = 0;
 }
 
-function applyMatchedOffers(text: string, matched: string[], minMatches: number): string[] {
-  const previous = lastOfferIds;
-  let next = matched.slice(0, 3);
-
-  if (matched.length >= minMatches) {
-    next = matched.slice(0, 3);
-  } else if (matched.length === 0) {
-    if (!retainOffersOnEmptyMatch) {
-      lastOfferIds = [];
-      return lastOfferIds;
-    }
-    next = previous;
-  } else if (minMatches <= 1 && matched.length >= 1) {
-    next = matched.slice(0, 3);
-  } else {
-    next = previous;
-  }
-
-  if (retainOffersOnEmptyMatch) {
-    lastOfferIds = stabilizeMayhemOffers(previous, next, text, true, offerStability);
-  } else {
-    lastOfferIds = next;
-  }
-  return lastOfferIds;
-}

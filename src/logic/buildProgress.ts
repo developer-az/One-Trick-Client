@@ -6,11 +6,14 @@
 
 import {
   ALL_BOOT_IDS,
+  BASE_BOOT_ID,
   MID_TIER_BOOT_IDS,
-  nextBootStep,
+  bootChainIds,
+  bootStepName,
   ownsAnyCompleteBoots,
   ownsFinishedBoots,
 } from './bootChains';
+import { isComponentItemId, isLegendaryItemId } from './itemTier';
 
 export interface BuildItemRef {
   id: string;
@@ -40,6 +43,90 @@ export const SUPPORT_QUEST_IDS = new Set([
   '3876', // Solstice Sleigh
   '3877', // Bloodsong
 ]);
+
+/** A boots chain step with a human reason. */
+function bootStepRef(id: string, recommended: { id: string; name: string; reason?: string }): BuildItemRef {
+  const chain = bootChainIds(recommended.id);
+  const isLast = chain[chain.length - 1] === id;
+  if (id === BASE_BOOT_ID) {
+    return {
+      id,
+      name: bootStepName(id),
+      reason: `Base Boots (${bootStepName(id)}) — ${recommended.name} needs Boots first.`,
+    };
+  }
+  if (isLast && recommended.id === id) {
+    return {
+      id,
+      name: bootStepName(id),
+      reason: recommended.reason || `Finish ${recommended.name} — mid-tier is enough for support.`,
+    };
+  }
+  return {
+    id,
+    name: bootStepName(id),
+    reason: `Boot path → ${recommended.name}: buy ${bootStepName(id)} next.`,
+  };
+}
+
+/**
+ * The one ordered buy path for a build, resolved live against inventory:
+ * first core → base Boots if absent → recommended mid-tier boots → remaining
+ * core → situational. A higher boot tier (Noxian upgrade) only ever appears
+ * when its ID is the build's own recommendation, and owning any complete boots
+ * absorbs the whole boot segment (base Boots are consumed into them, so the
+ * base step is never offered again). Every id appears at most once.
+ */
+export function resolveOrderedBuyPath(
+  build: {
+    core: BuildItemRef[];
+    boots: BuildItemRef;
+    situational: BuildItemRef[];
+  } | null | undefined,
+  ownedIds: ReadonlySet<string>
+): BuildItemRef[] {
+  if (!build) return [];
+  const path: BuildItemRef[] = [];
+  const seen = new Set<string>();
+  const push = (item: BuildItemRef): void => {
+    if (seen.has(item.id)) return;
+    seen.add(item.id);
+    path.push(item);
+  };
+
+  // 1) First core — the real first spike, ahead of boots.
+  if (build.core[0]) push(build.core[0]);
+
+  // 2) Boots segment, driven by the recommended chain resolved against what is
+  //    actually owned: base Boots first when absent, then the mid-tier, then an
+  //    upgrade tier only when the build's own recommendation is that upgrade.
+  //    Owning a step later on the same line consumes the steps before it (so
+  //    1001 is never offered again), and owning complete boots of a different
+  //    line stops this segment without re-buying a second pair.
+  const chain = bootChainIds(build.boots.id);
+  const pendingFor = (id: string | undefined): boolean => !!id && ownedIds.has(id);
+  const progress =
+    pendingFor(chain[2]) ? 3 : pendingFor(chain[1]) ? 2 : pendingFor(chain[0]) ? 1 : 0;
+  if (progress < chain.length) {
+    const bootsOwnedElsewhere =
+      ownsAnyCompleteBoots(ownedIds) && !ownedIds.has(chain[0]) && !ownedIds.has(chain[1] ?? '');
+    if (!(progress === 0 && bootsOwnedElsewhere)) {
+      for (let i = progress; i < chain.length; i++) {
+        const id = chain[i];
+        if (ownedIds.has(id)) continue;
+        push(bootStepRef(id, build.boots));
+      }
+    }
+  }
+
+  // 3) Remaining core after the boot segment.
+  for (const c of build.core.slice(1)) push(c);
+
+  // 4) Top situational.
+  for (const s of build.situational.slice(0, 2)) push(s);
+
+  return path;
+}
 
 export function trackBuildProgress(
   inventory: Array<{ itemID: number; displayName?: string; count?: number }> | undefined,
@@ -72,50 +159,7 @@ export function trackBuildProgress(
     };
   }
 
-  const path: BuildItemRef[] = [];
-  const pushUnique = (item: BuildItemRef) => {
-    if (!path.some((p) => p.id === item.id)) path.push(item);
-  };
-
-  // 1) First core (Umbral / first legendary) — real first spike, before boots
-  if (build.core[0]) pushUnique(build.core[0]);
-
-  // 2) Boots mid-tier step (only after first core is owned, or if somehow already done)
-  const firstCoreOwned =
-    !build.core[0] ||
-    ownedIds.has(String(build.core[0].id)) ||
-    (build.core[0].id === '3865' && [...ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id)));
-
-  const bootStep = nextBootStep(ownedIds, build.boots.id);
-  if (bootStep && !bootDone && firstCoreOwned) {
-    const chainEnd = bootStep.id === build.boots.id;
-    pushUnique({
-      id: bootStep.id,
-      name: bootStep.name,
-      reason: chainEnd
-        ? build.boots.reason || 'Finish boots (mid-tier is enough for support).'
-        : `Boot path → ${build.boots.name}: buy ${bootStep.name} next.`,
-    });
-  } else if (build.boots && !bootDone && firstCoreOwned) {
-    pushUnique({ ...build.boots });
-  }
-
-  // 3) Remaining core
-  for (const c of build.core.slice(1)) pushUnique(c);
-
-  // 4) If first core not owned yet, still surface boots after it in the list
-  //    (so the full path is visible) but remaining[] will prioritize core first
-  if (!firstCoreOwned && bootStep && !bootDone) {
-    pushUnique({
-      id: bootStep.id,
-      name: bootStep.name,
-      reason: build.boots.reason || 'Boots after first spike.',
-    });
-  }
-
-  // 5) Top situational
-  for (const s of build.situational.slice(0, 2)) pushUnique(s);
-
+  const path = resolveOrderedBuyPath(build, ownedIds);
   const hasSupportQuest = [...ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id));
 
   let completedCount = 0;
@@ -160,6 +204,76 @@ export function countFilledItemSlots(
   }).length;
 }
 
+const INVENTORY_PRESSURE_SKIP = new Set(['2055', '2003', '2010', '2138', '2139', '2140']);
+
+/**
+ * Slots occupied by items that meaningfully block finishing the build path
+ * (excludes trinkets, pinks, pots, and cheap components).
+ */
+export function inventoryPressureSlots(
+  inventory: Array<{ itemID: number; displayName?: string }> | undefined
+): number {
+  let pressure = 0;
+  for (const row of inventory || []) {
+    if (!row.itemID || row.itemID === 0) continue;
+    const id = String(row.itemID);
+    if (TRINKET_ITEM_IDS.has(id)) continue;
+    if (INVENTORY_PRESSURE_SKIP.has(id)) continue;
+    if (isComponentItemId(id)) continue;
+    pressure += 1;
+  }
+  return pressure;
+}
+
+export interface SupportBuildMaturity {
+  legendariesOnPath: number;
+  ownedLegendaries: number;
+  /** True when only the final legendary (or last path step) remains unowned. */
+  nearComplete: boolean;
+}
+
+/** Support quest items past the starter tiers (Atlas / Compass / Bounty). */
+const FINISHED_SUPPORT_ITEM_IDS = new Set([...SUPPORT_QUEST_IDS].filter((id) => !['3865', '3866', '3867'].includes(id)));
+
+function pathLegendaryStep(item: BuildItemRef, bootsId?: string): boolean {
+  if (ALL_BOOT_IDS.has(item.id) || MID_TIER_BOOT_IDS.has(item.id)) return false;
+  if (bootsId && item.id === bootsId) return false;
+  if (item.id === '1001') return false;
+  return isLegendaryItemId(item.id) || item.id === '3865' || item.id === '3877';
+}
+
+export function supportBuildMaturity(
+  progress: BuildProgress,
+  build: { boots?: BuildItemRef } | null | undefined
+): SupportBuildMaturity {
+  const legendarySteps = progress.path.filter((item) => pathLegendaryStep(item, build?.boots?.id));
+  const hasSupportQuest = [...progress.ownedIds].some((id) => SUPPORT_QUEST_IDS.has(id));
+  const owned = legendarySteps.filter((item) => {
+    if (progress.ownedIds.has(item.id)) return true;
+    if (item.id === '3865' && hasSupportQuest) return true;
+    if (item.id === '3877' && hasSupportQuest) return true;
+    return false;
+  });
+  // Finished items off the planned path still fill slots: an off-path legendary
+  // or a completed support item counts toward "build is near done".
+  const onPath = new Set(legendarySteps.map((item) => item.id));
+  const offPath = [...progress.ownedIds].filter(
+    (id) =>
+      !onPath.has(id) &&
+      !ALL_BOOT_IDS.has(id) &&
+      !MID_TIER_BOOT_IDS.has(id) &&
+      (isLegendaryItemId(id) || FINISHED_SUPPORT_ITEM_IDS.has(id))
+  ).length;
+  const ownedCount = owned.length + offPath;
+  const nearComplete =
+    legendarySteps.length > 0 && ownedCount >= Math.max(1, legendarySteps.length - 1);
+  return {
+    legendariesOnPath: legendarySteps.length,
+    ownedLegendaries: ownedCount,
+    nearComplete,
+  };
+}
+
 export interface SupportBootSlotAdvice {
   action: 'sell' | 'keep';
   label: string;
@@ -174,13 +288,37 @@ export function supportBootSlotAdvice(
   inventory: Array<{ itemID: number }> | undefined,
   progress: BuildProgress,
   gameTimeSec: number,
-  opts: { behind?: boolean } = {}
+  opts: { behind?: boolean; build?: { boots?: BuildItemRef } | null } = {}
 ): SupportBootSlotAdvice | null {
   if (!progress.hasFinishedBoots || !progress.next) return null;
   if (ALL_BOOT_IDS.has(progress.next.id)) return null;
 
   const filled = countFilledItemSlots(inventory);
-  if (filled < 6) return null;
+  const pressure = inventoryPressureSlots(inventory);
+  if (filled < 6 && pressure < 5) return null;
+
+  const maturity = supportBuildMaturity(progress, opts.build ?? null);
+  if (!maturity.nearComplete) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Inventory full but build not finished — complete cores before selling MS.',
+    };
+  }
+  if (!isLegendaryItemId(progress.next.id)) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: `Next buy ${progress.next.name} is not your final spike — keep boots for now.`,
+    };
+  }
+  if (pressure < 5) {
+    return {
+      action: 'keep',
+      label: 'Keep boots',
+      detail: 'Components and wards filling slots — finish items before selling boots.',
+    };
+  }
 
   const minutes = gameTimeSec / 60;
   const ownedBootId = [...progress.ownedIds].find((id) => ALL_BOOT_IDS.has(id) || MID_TIER_BOOT_IDS.has(id));

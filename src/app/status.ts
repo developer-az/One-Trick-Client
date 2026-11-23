@@ -1,5 +1,6 @@
 import type { DraftState, LeagueState } from './hooks';
 import { isDesktop } from './hooks';
+import { isMatchLoading } from '../logic/matchLoading';
 import type { Tone } from './ui';
 
 export interface LeagueStatus {
@@ -13,8 +14,19 @@ export interface LeagueStatus {
   stage: 'preview' | 'offline' | 'connecting' | 'idle' | 'queue' | 'draft' | 'loading' | 'game' | 'post';
 }
 
+/** Riot ID for display: `Name#TAG` when the tag is known, else the plain name. */
+export function formatRiotId(
+  gameName: string | null | undefined,
+  tagLine: string | null | undefined,
+  fallbackName?: string | null
+): string | null {
+  const name = gameName?.trim() || fallbackName?.trim() || null;
+  if (!name) return null;
+  const tag = tagLine?.trim();
+  return tag ? `${name}#${tag}` : name;
+}
+
 const QUEUE_PHASES = new Set(['Matchmaking', 'ReadyCheck']);
-const LOADING_PHASES = new Set(['GameStart']);
 const GAME_PHASES = new Set(['InProgress', 'Reconnect']);
 const POST_PHASES = new Set(['WaitingForStats', 'PreEndOfGame', 'EndOfGame']);
 
@@ -32,6 +44,24 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
 
   const lcu = league.lcu;
   const phase = lcu?.phase || null;
+
+  if (
+    league.matchLoading ||
+    isMatchLoading({
+      phase,
+      gameTime: league.liveGameTime,
+      trustedGameTime: league.trustedGameTime,
+      matchEngaged: league.inGame,
+    })
+  ) {
+    return {
+      stage: 'loading',
+      tone: 'live',
+      short: 'Loading',
+      detail: 'Loading into the match. The overlay appears when the game starts.',
+      next: null,
+    };
+  }
 
   if (league.inGame || (phase && GAME_PHASES.has(phase))) {
     return {
@@ -75,16 +105,6 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
     };
   }
 
-  if (phase && LOADING_PHASES.has(phase)) {
-    return {
-      stage: 'loading',
-      tone: 'live',
-      short: 'Loading',
-      detail: 'Loading into the match. The overlay appears when the game starts.',
-      next: null,
-    };
-  }
-
   if (phase && QUEUE_PHASES.has(phase)) {
     return {
       stage: 'queue',
@@ -105,7 +125,8 @@ export function leagueStatus(league: LeagueState, draft: DraftState): LeagueStat
     };
   }
 
-  const who = lcu.summonerName ? ` as ${lcu.summonerName}` : '';
+  const riotId = formatRiotId(lcu.gameName, lcu.tagLine, lcu.summonerName);
+  const who = riotId ? ` as ${riotId}` : '';
   return {
     stage: 'idle',
     tone: 'live',

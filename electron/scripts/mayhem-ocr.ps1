@@ -6,18 +6,450 @@ param(
   [double]$LeftFrac = 0.08,
   [double]$TopFrac = 0.18,
   [double]$WidthFrac = 0.84,
-  [double]$HeightFrac = 0.62
+  [double]$HeightFrac = 0.62,
+  # The Electron main process that hosts the overlay. Ownership of the
+  # foreground window is one half of the capture-trust decision: a game window
+  # that is behind a browser must not be trusted just because it exists.
+  [int]$OwnerPid = 0,
+  # The overlay root's --overlay-scale (0.75 + hudScale/200). The mayhem panel
+  # footprint is 380x220 CSS px multiplied by this, anchored to the right rail.
+  [double]$PanelScale = 0.85
 )
 
 $ErrorActionPreference = 'Stop'
 
-function Capture-RectRegion {
+function Write-Marker {
+  param([string]$Name, [string]$Detail = '')
+  if ($Detail) {
+    Write-Output "__OT_${Name} ${Detail}__"
+  } else {
+    Write-Output "__OT_${Name}__"
+  }
+}
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public class OTMayhemWin32 {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT pt);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  public struct POINT { public int X; public int Y; }
+}
+"@
+
+# Match Electron's physical-pixel coordinates: window rects, CopyFromScreen and
+# the mask rects all come from the same DPI-aware space.
+try { [void][OTMayhemWin32]::SetProcessDPIAware() } catch { }
+
+function Get-ClientScreenRect {
+  param([IntPtr]$Handle)
+  $client = New-Object OTMayhemWin32+RECT
+  if (-not [OTMayhemWin32]::GetClientRect($Handle, [ref]$client)) { return $null }
+  $topLeft = New-Object OTMayhemWin32+POINT
+  $bottomRight = New-Object OTMayhemWin32+POINT
+  $bottomRight.X = $client.Right
+  $bottomRight.Y = $client.Bottom
+  if (-not [OTMayhemWin32]::ClientToScreen($Handle, [ref]$topLeft)) { return $null }
+  if (-not [OTMayhemWin32]::ClientToScreen($Handle, [ref]$bottomRight)) { return $null }
+  $w = $bottomRight.X - $topLeft.X
+  $h = $bottomRight.Y - $topLeft.Y
+  if ($w -lt 200 -or $h -lt 200) { return $null }
+  return [pscustomobject]@{
+    Left = $topLeft.X
+    Top = $topLeft.Y
+    Width = $w
+    Height = $h
+  }
+}
+
+function Find-GameWindow {
+  $script:found = $null
+  $callback = [OTMayhemWin32+EnumWindowsProc]{
+    param([IntPtr]$hWnd, [IntPtr]$lParam)
+    if (-not [OTMayhemWin32]::IsWindowVisible($hWnd)) { return $true }
+    $sb = New-Object System.Text.StringBuilder 256
+    [void][OTMayhemWin32]::GetClassName($hWnd, $sb, 256)
+    $className = $sb.ToString()
+    $processId = [uint32]0
+    [void][OTMayhemWin32]::GetWindowThreadProcessId($hWnd, [ref]$processId)
+    if ($processId -eq 0) { return $true }
+    $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if (-not $proc) { return $true }
+    # The game itself draws in RiotWindowClass and its executable process is
+    # "League of Legends"; some builds report the name with .exe. Accept either
+    # signal, but never the launcher/client (LeagueClientUx).
+    $isRiotClass = $className -eq 'RiotWindowClass'
+    $isGameProcess = $proc.ProcessName -match '^League of Legends(\.exe)?$'
+    if (-not ($isRiotClass -or $isGameProcess)) { return $true }
+    if ($proc.ProcessName -match 'Client|Launcher|UX') { return $true }
+    $rect = Get-ClientScreenRect -Handle $hWnd
+    if (-not $rect) { return $true }
+    $area = $rect.Width * $rect.Height
+    if (-not $script:found -or $area -gt $script:found.Area) {
+      $script:found = [pscustomobject]@{
+        Handle = $hWnd
+        ProcessId = [int]$processId
+        Exe = $proc.ProcessName
+        Class = $className
+        Area = $area
+        Left = $rect.Left
+        Top = $rect.Top
+        Width = $rect.Width
+        Height = $rect.Height
+      }
+    }
+    return $true
+  }
+  [void][OTMayhemWin32]::EnumWindows($callback, [IntPtr]::Zero)
+  return $script:found
+}
+
+# Is the captured game window genuinely on top? Two cases are trusted: the game
+# itself owns the foreground, or our own overlay does (it can steal focus while
+# the game is still the window underneath). Anything else — a browser sitting
+# inside the game rect, for example — means the captured pixels are not the
+# game's augment screen, so the frame must not count a pick.
+function Test-OwnerForeground {
+  param([IntPtr]$GameHandle)
+  $foreground = [OTMayhemWin32]::GetForegroundWindow()
+  if ($foreground -eq [IntPtr]::Zero) { return $false }
+  if ($foreground -eq $GameHandle) { return $true }
+  if ($OwnerPid -le 0) { return $false }
+  $foregroundPid = [uint32]0
+  [void][OTMayhemWin32]::GetWindowThreadProcessId($foreground, [ref]$foregroundPid)
+  return ([int]$foregroundPid -eq $OwnerPid)
+}
+
+function Set-MaskRectangles {
+  param(
+    [System.Drawing.Bitmap]$Bitmap,
+    [int]$CaptureLeft,
+    [int]$CaptureTop,
+    [string]$Spec
+  )
+  if (-not $Spec) { return }
+  $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::Black)
+  $g = [System.Drawing.Graphics]::FromImage($Bitmap)
+  try {
+    foreach ($part in $Spec.Split(';')) {
+      $numbers = $part.Split(',')
+      if ($numbers.Count -ne 4) { continue }
+      $mx = 0; $my = 0; $mw = 0; $mh = 0
+      if (-not [int]::TryParse($numbers[0], [ref]$mx)) { continue }
+      if (-not [int]::TryParse($numbers[1], [ref]$my)) { continue }
+      if (-not [int]::TryParse($numbers[2], [ref]$mw)) { continue }
+      if (-not [int]::TryParse($numbers[3], [ref]$mh)) { continue }
+      $localX = $mx - $CaptureLeft
+      $localY = $my - $CaptureTop
+      $left = [Math]::Max(0, $localX)
+      $top = [Math]::Max(0, $localY)
+      $right = [Math]::Min($Bitmap.Width, $localX + $mw)
+      $bottom = [Math]::Min($Bitmap.Height, $localY + $mh)
+      if ($right -le $left -or $bottom -le $top) { continue }
+      $g.FillRectangle($brush, $left, $top, ($right - $left), ($bottom - $top))
+    }
+  } finally {
+    $g.Dispose()
+    $brush.Dispose()
+  }
+}
+
+function Test-BlackFrame {
+  param([System.Drawing.Bitmap]$Bitmap)
+  $stepX = [Math]::Max(1, [int]($Bitmap.Width / 48))
+  $stepY = [Math]::Max(1, [int]($Bitmap.Height / 48))
+  $samples = 0
+  $dark = 0
+  for ($y = 0; $y -lt $Bitmap.Height; $y += $stepY) {
+    for ($x = 0; $x -lt $Bitmap.Width; $x += $stepX) {
+      $c = $Bitmap.GetPixel($x, $y)
+      $samples += 1
+      $luma = [int](0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B)
+      if ($luma -lt 12) { $dark += 1 }
+    }
+  }
+  if ($samples -eq 0) { return $false }
+  return ($dark / $samples) -ge 0.98
+}
+
+# Name-independent offer evidence: a single teal pixel at a fixed slot can land
+# on an unrelated panel, so each slot must carry CARD-SIZED evidence — a patch of
+# dark-teal body or a run of light-rim/inner contrast. A full-width teal panel
+# also lights every body patch, so the patch must be BOUNDED: the midpoints
+# between neighbouring card columns (and beyond the outer cards) are sampled at
+# the same body rows and must NOT be body-like. The centers are emitted with the
+# evidence; the TS pipeline aligns them with the detected card boxes before any
+# of it can prove a roll.
+# shortcut: fixed normalized slots match our centred offer band, not every HUD scale; upgrade to box-driven sampling if real captures drift.
+$CARD_BODY_MIN = 8
+$CARD_RIM_MIN = 7
+# Both card layouts are 0.17 apart, so half that lands in the inter-card gap.
+$CARD_GAP_OFFSET = 0.085
+
+# Dark indigo card art (real-match capture, 26.23: body 9,18,38 / 8,15,41). It
+# is NOT teal (blue is too strong) and NOT neutral (red is far below 25), so it
+# matched nothing and every scan settled "Could not verify". The window is
+# narrow on purpose: blue-dominant, low red, mid green.
+function Test-CardIndigo {
+  param([int]$R, [int]$G, [int]$B)
+  return (($R -le 26) -and
+          ($G -ge 8 -and $G -le 52) -and
+          ($B -ge 26 -and $B -le 96) -and
+          ($B -ge ($G + 8)) -and
+          ($G -ge ($R - 4)))
+}
+
+function Test-CardBody {
+  param([int]$R, [int]$G, [int]$B)
+  $teal = (($R -le 12) -and
+          ($G -ge 7 -and $G -le 32) -and
+          ($B -ge 7 -and $B -le 36) -and
+          ([Math]::Abs($G - $B) -le 7) -and
+          ($G -gt ($R + 4)))
+  # Gold-rarity bodies are warm, not teal: accept them so a gold roll is not stuck "Cannot verify".
+  $gold = (($R -ge 150 -and $R -le 230) -and
+          ($G -ge 120 -and $G -le 190) -and
+          ($B -ge 40 -and $B -le 130) -and
+          ([Math]::Abs($R - $G) -le 60))
+  # Dark neutral bodies (real-match log: 40,42,41 / 33,35,35 / 46,47,47). Low
+  # chroma only, so the bluish HUD between cards (29,50,59 / 56,67,69) still
+  # reads as a gap and a continuous band is still rejected by the gap check.
+  $hi = [Math]::Max($R, [Math]::Max($G, $B))
+  $lo = [Math]::Min($R, [Math]::Min($G, $B))
+  $neutral = (($lo -ge 25) -and ($hi -le 70) -and (($hi - $lo) -le 10))
+  return ($teal -or $gold -or $neutral)
+}
+
+# The 3x3 patch spans card art and title ink, so per-pixel windows alone reject a
+# genuine dark card. A patch whose MEAN is a dark neutral is body-like (logged
+# real cards: 40,42,41 / 33,35,35 / 46,47,47). The same rule is applied to the
+# gap patches, so a continuous band reads as a gap and is still rejected.
+function Test-CardMean {
+  param([int]$R, [int]$G, [int]$B)
+  $hi = [Math]::Max($R, [Math]::Max($G, $B))
+  $lo = [Math]::Min($R, [Math]::Min($G, $B))
+  return (($lo -ge 25) -and ($hi -le 70) -and (($hi - $lo) -le 8))
+}
+
+function Get-CardSlotEvidence {
+  param([System.Drawing.Bitmap]$Bitmap, [double]$CenterX)
+  $w = $Bitmap.Width
+  $h = $Bitmap.Height
+  $cx = [int][Math]::Round($CenterX * $w)
+  $bodyY = [int][Math]::Round(0.46 * $h)
+  $rimY = [int][Math]::Round(0.303 * $h)
+  $innerY = [int][Math]::Round(0.312 * $h)
+  $body = 0
+  $indigoHits = 0
+  $darkHits = 0
+  $rim = 0
+  $gap = 0
+  # Mean body RGB is logged so a real run can confirm the gold window without trusting the predicate.
+  $sumR = 0; $sumG = 0; $sumB = 0; $bodySamples = 0
+  # Per-sample colours, kept so a Headliner sticker (a bright ink mark on a
+  # minority of the patch) can be trimmed before the patch is judged.
+  $bodyPixels = @()
+  foreach ($dx in @(-0.02, 0.0, 0.02)) {
+    foreach ($dy in @(-0.02, 0.0, 0.02)) {
+      $x = [int][Math]::Round($cx + $dx * $w)
+      $y = [int][Math]::Round($bodyY + $dy * $h)
+      if ($x -lt 0 -or $x -ge $w -or $y -lt 0 -or $y -ge $h) { continue }
+      $c = $Bitmap.GetPixel($x, $y)
+      $sumR += [int]$c.R; $sumG += [int]$c.G; $sumB += [int]$c.B; $bodySamples += 1
+      $bodyPixels += [pscustomobject]@{ R = [int]$c.R; G = [int]$c.G; B = [int]$c.B; L = (0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B) }
+      if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
+      if (Test-CardIndigo -R $c.R -G $c.G -B $c.B) { $indigoHits += 1 }
+      if ((0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B) -le 95) { $darkHits += 1 }
+    }
+  }
+  # The 3x3 patch spans card art and title ink, so per-pixel windows reject a
+  # genuine dark card whose mean (logged: 40,42,41 / 33,35,35 / 46,47,47) is
+  # clearly neutral. The patch MEAN is the authority for that body reading; the
+  # gap samples below stay strict, so a continuous dark band still fails.
+  # Sticker trim: a HEARTSTEEL band sticker or Debonair gold text is a bright
+  # mark over a minority of the patch, which drags the MEAN warm and bright and
+  # turned a real card into "no card". Drop at most 3 of the 9 samples, and only
+  # those that are bright (luma > 95, the same line darkHits uses); a majority of
+  # bright samples is not a sticker, so nothing is trimmed and the card must
+  # prove itself as before. The gap samples are never trimmed: the gap rule is
+  # the boundary proof and stays strict.
+  $trimR = $sumR; $trimG = $sumG; $trimB = $sumB; $trimN = $bodySamples
+  $brightCount = @($bodyPixels | Where-Object { $_.L -gt 95 }).Count
+  if ($bodySamples -ge 7 -and $brightCount -gt 0 -and $brightCount -le 3) {
+    foreach ($p in @($bodyPixels | Where-Object { $_.L -gt 95 })) {
+      $trimR -= $p.R; $trimG -= $p.G; $trimB -= $p.B; $trimN -= 1
+    }
+  }
+  if ($bodySamples -gt 0) {
+    $meanR = $sumR / $bodySamples
+    $meanG = $sumG / $bodySamples
+    $meanB = $sumB / $bodySamples
+    if (Test-CardMean -R ([int][Math]::Round($meanR)) -G ([int][Math]::Round($meanG)) -B ([int][Math]::Round($meanB))) {
+      $body = [Math]::Max($body, $CARD_BODY_MIN)
+    }
+  }
+  # The trimmed reading only ever counts under a glowing top border (rim block
+  # below), so trimming cannot make plain background with bright flecks a card.
+  $trimNeutral = $false
+  if ($trimN -gt 0 -and $trimN -lt $bodySamples) {
+    $trimNeutral = Test-CardMean -R ([int][Math]::Round($trimR / $trimN)) -G ([int][Math]::Round($trimG / $trimN)) -B ([int][Math]::Round($trimB / $trimN))
+  }
+  # A teal patch with no non-teal boundary is one band, not separate cards.
+  # One column per side, at the layout's half-pitch: widening it would sample the
+  # neighbouring card on a tight row (the shipped teal fixtures pin this).
+  $gapR = 0; $gapG = 0; $gapB = 0; $gapSamples = 0
+  foreach ($side in @(-1, 1)) {
+    $gx = [int][Math]::Round($cx + $side * $CARD_GAP_OFFSET * $w)
+    if ($gx -lt 0 -or $gx -ge $w) { continue }
+    foreach ($dy in @(-0.02, 0.0, 0.02)) {
+      $y = [int][Math]::Round($bodyY + $dy * $h)
+      if ($y -lt 0 -or $y -ge $h) { continue }
+      $c = $Bitmap.GetPixel($gx, $y)
+      $gapR += [int]$c.R; $gapG += [int]$c.G; $gapB += [int]$c.B; $gapSamples += 1
+      if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $gap += 1 }
+    }
+  }
+  # Mean rule for the gap patches too: a band that is card-like on average is
+  # one continuous surface, never a gap between cards.
+  if ($gapSamples -gt 0 -and (Test-CardMean -R ([int][Math]::Round($gapR / $gapSamples)) -G ([int][Math]::Round($gapG / $gapSamples)) -B ([int][Math]::Round($gapB / $gapSamples)))) {
+    $gap = [Math]::Max($gap, $CARD_BODY_MIN)
+  }
+  for ($i = -4; $i -le 4; $i++) {
+    $x = [int][Math]::Round($cx + $i * 0.005 * $w)
+    if ($x -lt 0 -or $x -ge $w) { continue }
+    $hit = $false
+    if ($rimY -ge 0 -and $rimY -lt $h -and $innerY -ge 0 -and $innerY -lt $h) {
+      $outer = $Bitmap.GetPixel($x, $rimY)
+      $inner = $Bitmap.GetPixel($x, $innerY)
+      $lumaOuter = 0.2126 * $outer.R + 0.7152 * $outer.G + 0.0722 * $outer.B
+      $lumaInner = 0.2126 * $inner.R + 0.7152 * $inner.G + 0.0722 * $inner.B
+      if ([Math]::Abs($lumaOuter - $lumaInner) -ge 25) { $hit = $true }
+    }
+    # The shipped band assumed one card size. Current cards are taller, so the
+    # top border sits anywhere in the upper third: scan it and accept only a
+    # bright edge directly over a dark interior, which no plain background has.
+    if (-not $hit) {
+      for ($k = 0; $k -le 40; $k++) {
+        $yOut = [int][Math]::Round((0.20 + $k * 0.004) * $h)
+        $yIn = [int][Math]::Round((0.20 + $k * 0.004 + 0.010) * $h)
+        if ($yOut -lt 0 -or $yIn -ge $h) { continue }
+        $o = $Bitmap.GetPixel($x, $yOut)
+        $n = $Bitmap.GetPixel($x, $yIn)
+        $lOut = 0.2126 * $o.R + 0.7152 * $o.G + 0.0722 * $o.B
+        $lIn = 0.2126 * $n.R + 0.7152 * $n.G + 0.0722 * $n.B
+        if (($lOut - $lIn) -ge 25 -and $lIn -le 90) { $hit = $true; break }
+      }
+    }
+    if ($hit) { $rim += 1 }
+  }
+  # Colour is the wrong key for "is this a card". The selection tier is random
+  # every screen (Silver / Gold / Prismatic art), a Command Line screen mixes
+  # tiers, and Headliners stamp stickers over the art. So the card is proven by
+  # STRUCTURE instead: a dark interior under a glowing top border. The indigo
+  # window keeps this patch's prismatic body exact; anything else dark must also
+  # be clearly darker than the gaps between the cards, which no plain background
+  # satisfies.
+  if ($rim -gt 0) {
+    $bodyLuma = 255
+    $gapLuma = 0
+    # The contrast rule uses the UNTRIMMED body mean. Feeding it the trimmed
+    # patch let a bright, saturated non-card patch (a web page's purple hero,
+    # real screenshot 2026-11-18) read darker than its gaps and flip
+    # CARDS_VISIBLE on. The trim only feeds the neutral-art test ($trimNeutral).
+    if ($bodySamples -gt 0) {
+      $bodyLuma = 0.2126 * ($sumR / $bodySamples) + 0.7152 * ($sumG / $bodySamples) + 0.0722 * ($sumB / $bodySamples)
+    }
+    if ($gapSamples -gt 0) {
+      $gapLuma = 0.2126 * ($gapR / $gapSamples) + 0.7152 * ($gapG / $gapSamples) + 0.0722 * ($gapB / $gapSamples)
+    }
+    if ($trimNeutral -or $indigoHits -ge 5 -or ($darkHits -ge 5 -and ($gapLuma - $bodyLuma) -ge 12)) {
+      $body = [Math]::Max($body, $CARD_BODY_MIN)
+    }
+  }
+  return [pscustomobject]@{
+    x = [Math]::Round($CenterX, 4)
+    body = $body
+    rim = $rim
+    gap = $gap
+    bodyR = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumR / $bodySamples) } else { 0 })
+    bodyG = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumG / $bodySamples) } else { 0 })
+    bodyB = $(if ($bodySamples -gt 0) { [int][Math]::Round($sumB / $bodySamples) } else { 0 })
+  }
+}
+
+function Get-CardSlotEvidenceSet {
+  param([System.Drawing.Bitmap]$Bitmap)
+  $slots = @()
+  # Both layouts: three centred cards and the four-card headliner deal. The
+  # pipeline keeps whichever slots line up with the boxes OCR actually found.
+  foreach ($fx in @(0.33, 0.50, 0.67, 0.245, 0.415, 0.585, 0.755)) {
+    $slots += Get-CardSlotEvidence -Bitmap $Bitmap -CenterX $fx
+  }
+  return $slots
+}
+
+# A crop rect given in screen coordinates, translated into the local pixels of
+# the bitmap captured at $CaptureLeft/$CaptureTop and clipped to that bitmap.
+# The crop arguments name the area to keep; the capture origin is where the
+# bitmap starts, so the local offset is the difference, never the raw value.
+# Pure: no bitmap is touched, so the verifier runs this straight from the AST.
+# verify_ocr_geometry_actual.ts exercises it with positive and negative origins.
+function ConvertTo-CropRect {
+  param(
+    [int]$CropLeft,
+    [int]$CropTop,
+    [int]$CropWidth,
+    [int]$CropHeight,
+    [int]$CaptureLeft,
+    [int]$CaptureTop,
+    [int]$BitmapWidth,
+    [int]$BitmapHeight
+  )
+  $cx = [Math]::Max(0, $CropLeft - $CaptureLeft)
+  $cy = [Math]::Max(0, $CropTop - $CaptureTop)
+  $cw = [Math]::Min($CropWidth, $BitmapWidth - $cx)
+  $ch = [Math]::Min($CropHeight, $BitmapHeight - $cy)
+  return [pscustomobject]@{
+    X = $cx
+    Y = $cy
+    Width = $cw
+    Height = $ch
+  }
+}
+
+function Capture-Region {
   param(
     [int]$Left,
     [int]$Top,
     [int]$Width,
     [int]$Height,
-    [string]$OutPath
+    [string]$OutPath,
+    # The full game-window (or primary-screen) frame the overlay panel is
+    # anchored to, in the same screen coordinates as $Left/$Top. The captured
+    # bitmap is often only the offer band, so the panel mask is computed in this
+    # frame and then translated into the bitmap. Omitted: the capture rect is
+    # the frame (the primary-screen fallback captures the whole display).
+    [int]$FrameLeft = 0,
+    [int]$FrameTop = 0,
+    [int]$FrameWidth = 0,
+    [int]$FrameHeight = 0,
+    # Optional post-mask crop, in the SAME screen coordinates as $Left/$Top.
+    [int]$CropLeft = -1,
+    [int]$CropTop = -1,
+    [int]$CropWidth = 0,
+    [int]$CropHeight = 0
   )
   Add-Type -AssemblyName System.Drawing
   $rw = [Math]::Max(64, $Width)
@@ -26,8 +458,120 @@ function Capture-RectRegion {
   $g = [System.Drawing.Graphics]::FromImage($bmp)
   $g.CopyFromScreen($Left, $Top, 0, 0, (New-Object System.Drawing.Size $rw, $rh))
   $g.Dispose()
-  $bmp.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  # Mask our own mayhem panel before OCR. The rect is computed from the frame
+  # and translated into this bitmap's pixels, so a game window on another
+  # monitor can never be masked using the cursor display's geometry.
+  if ($FrameWidth -gt 0 -and $FrameHeight -gt 0) {
+    $fx = $FrameLeft; $fy = $FrameTop; $fw = $FrameWidth; $fh = $FrameHeight
+  } else {
+    $fx = $Left; $fy = $Top; $fw = $rw; $fh = $rh
+  }
+  $panel = Get-PanelMaskRect -FrameLeft $fx -FrameTop $fy -FrameWidth $fw -FrameHeight $fh
+  $panelSpec = "$($panel.X),$($panel.Y),$($panel.Width),$($panel.Height)"
+  Set-MaskRectangles -Bitmap $bmp -CaptureLeft $Left -CaptureTop $Top -Spec $panelSpec
+  $black = Test-BlackFrame -Bitmap $bmp
+  $out = $bmp
+  if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
+    # Crop AFTER capturing and masking the whole frame: the mask rects already
+    # live in $Left/$Top screen space, then the offer band is cut out.
+    $crop = ConvertTo-CropRect -CropLeft $CropLeft -CropTop $CropTop `
+      -CropWidth $CropWidth -CropHeight $CropHeight `
+      -CaptureLeft $Left -CaptureTop $Top `
+      -BitmapWidth $bmp.Width -BitmapHeight $bmp.Height
+    if ($crop.Width -gt 0 -and $crop.Height -gt 0) {
+      $rect = New-Object System.Drawing.Rectangle $crop.X, $crop.Y, $crop.Width, $crop.Height
+      $out = $bmp.Clone($rect, $bmp.PixelFormat)
+    }
+  }
+  $out.Save($OutPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  if (-not [object]::ReferenceEquals($out, $bmp)) { $out.Dispose() }
   $bmp.Dispose()
+  return $black
+}
+
+# Every fractional pixel value is truncated toward zero, never rounded to
+# nearest. PowerShell's [int] cast rounds (1920 * 0.84 = 1612.8 -> 1613, and
+# 1920 * 0.08 = 153.6 -> 154), while the verified mirror
+# src/logic/mayhem/captureRegion.ts truncates, so a cast shifted the production
+# crop a pixel off the geometry the app and its tests reason about.
+# verify_ocr_geometry_actual.ts runs this function straight out of this file.
+function ConvertTo-TruncatedPixels {
+  param([double]$Value)
+  return [int][Math]::Truncate($Value)
+}
+
+# The overlay's mayhem panel footprint, measured against the game window (or
+# primary screen) the overlay is anchored to: 380x220 CSS px scaled by
+# --overlay-scale (0.75 + hudScale/200), right rail at 0.982 W, top at 0.26 H.
+# The caller captures a sub-rect (the offer band), so Set-MaskRectangles
+# translates this screen-space rect into the bitmap. Computing it here, from
+# the frame this script already found, keeps the mask on the same monitor and
+# window as the pixels — a DIP display rect chosen in Electron for the cursor's
+# monitor could point at a different screen entirely.
+# verify_mayhem_capture_gating.ts pins the constants and the call site.
+function Get-PanelMaskRect {
+  param(
+    [int]$FrameLeft,
+    [int]$FrameTop,
+    [int]$FrameWidth,
+    [int]$FrameHeight
+  )
+  $width = [Math]::Max(1, (ConvertTo-TruncatedPixels (380.0 * $PanelScale)))
+  $height = [Math]::Max(1, (ConvertTo-TruncatedPixels (220.0 * $PanelScale)))
+  $right = $FrameLeft + (ConvertTo-TruncatedPixels ($FrameWidth * 0.982))
+  $top = $FrameTop + (ConvertTo-TruncatedPixels ($FrameHeight * 0.26))
+  return [pscustomobject]@{
+    X = $right - $width
+    Y = $top
+    Width = $width
+    Height = $height
+  }
+}
+
+# The offer band of a bounds rect. The game-window capture, the primary-screen
+# fallback and the reported frame size all go through here: one policy, so they
+# cannot disagree about where the band is.
+function Get-OfferGeometry {
+  param(
+    [int]$BoundsX,
+    [int]$BoundsY,
+    [int]$BoundsWidth,
+    [int]$BoundsHeight
+  )
+  $width = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsWidth * $WidthFrac)))
+  $height = [Math]::Max(64, (ConvertTo-TruncatedPixels ($BoundsHeight * $HeightFrac)))
+  $left = $BoundsX + (ConvertTo-TruncatedPixels ($BoundsWidth * $LeftFrac))
+  $top = $BoundsY + (ConvertTo-TruncatedPixels ($BoundsHeight * $TopFrac))
+  return [pscustomobject]@{
+    Left = $left
+    Top = $top
+    Width = $width
+    Height = $height
+  }
+}
+
+# Cursor position normalized to the captured offer band. The augment selection
+# screen is closed by left-clicking one of the cards, so the cursor at the
+# first frame without cards names the card that was taken. Reported in the same
+# 0..1 space as the card columns (the OCR bitmap), never in screen pixels.
+# verify_mayhem_pick_selection.ts pins the marker and the card mapping.
+function Get-CursorInBand {
+  param(
+    [int]$Left,
+    [int]$Top,
+    [int]$Width,
+    [int]$Height
+  )
+  if ($Width -le 0 -or $Height -le 0) { return $null }
+  $pt = New-Object OTMayhemWin32+POINT
+  if (-not [OTMayhemWin32]::GetCursorPos([ref]$pt)) { return $null }
+  $x = ($pt.X - $Left) / $Width
+  $y = ($pt.Y - $Top) / $Height
+  if ($x -lt 0 -or $x -gt 1 -or $y -lt 0 -or $y -gt 1) { return $null }
+  return [pscustomobject]@{
+    x = [Math]::Round($x, 4)
+    y = [Math]::Round($y, 4)
+  }
 }
 
 function Capture-FractionRegion {
@@ -38,57 +582,87 @@ function Capture-FractionRegion {
     [int]$BoundsHeight,
     [string]$OutPath
   )
-  $rw = [Math]::Max(64, [int]($BoundsWidth * $WidthFrac))
-  $rh = [Math]::Max(64, [int]($BoundsHeight * $HeightFrac))
-  $rx = $BoundsLeft + [int]($BoundsWidth * $LeftFrac)
-  $ry = $BoundsTop + [int]($BoundsHeight * $TopFrac)
-  Capture-RectRegion -Left $rx -Top $ry -Width $rw -Height $rh -OutPath $OutPath
+  $geo = Get-OfferGeometry -BoundsX $BoundsLeft -BoundsY $BoundsTop -BoundsWidth $BoundsWidth -BoundsHeight $BoundsHeight
+  return (Capture-Region -Left $geo.Left -Top $geo.Top -Width $geo.Width -Height $geo.Height -OutPath $OutPath `
+    -FrameLeft $BoundsLeft -FrameTop $BoundsTop -FrameWidth $BoundsWidth -FrameHeight $BoundsHeight)
 }
 
-function Capture-CenterRegion {
+function Capture-PrimaryScreen {
   param([string]$OutPath)
   Add-Type -AssemblyName System.Windows.Forms
-  $pt = [System.Windows.Forms.Cursor]::Position
-  $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
-  if (-not $scr) { $scr = [System.Windows.Forms.Screen]::PrimaryScreen }
-  $b = $scr.Bounds
-  Capture-FractionRegion -BoundsLeft $b.X -BoundsTop $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height -OutPath $OutPath
+  # Fallback (no game window matched): capture the PRIMARY screen's complete
+  # bounds — never the monitor under the cursor — and mask in that space. Then
+  # cut the same offer-band crop a matched game window would use, relative to
+  # the primary bounds: with no window to measure, the game is assumed to fill
+  # the primary screen, so the offers are centred there.
+  $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $geo = Get-OfferGeometry -BoundsX $b.X -BoundsY $b.Y -BoundsWidth $b.Width -BoundsHeight $b.Height
+  $rw = $geo.Width
+  $rh = $geo.Height
+  $rx = $geo.Left
+  $ry = $geo.Top
+  return (Capture-Region -Left $b.X -Top $b.Y -Width $b.Width -Height $b.Height -OutPath $OutPath `
+    -CropLeft $rx -CropTop $ry -CropWidth $rw -CropHeight $rh)
 }
 
-function Capture-LeagueClientRegion {
-  param([string]$OutPath)
-  Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class OTWin32 {
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-  public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-}
-"@
-  $proc = Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'League of Legends' } |
-    Select-Object -First 1
-  if (-not $proc) { return $false }
-  $rect = New-Object OTWin32+RECT
-  if (-not [OTWin32]::GetWindowRect($proc.MainWindowHandle, [ref]$rect)) { return $false }
-  $w = $rect.Right - $rect.Left
-  $h = $rect.Bottom - $rect.Top
-  if ($w -lt 200 -or $h -lt 200) { return $false }
-  Capture-FractionRegion -BoundsLeft $rect.Left -BoundsTop $rect.Top -BoundsWidth $w -BoundsHeight $h -OutPath $OutPath
-  return $true
-}
+$blackFrame = $false
+$isFallback = $false
+$target = $null
+# OCR boxes are normalized to the captured bitmap. Capture mode OCRs the offer
+# band crop, so carry that crop as fractions of the full frame; -ImagePath OCRs
+# the whole file and keeps the identity rect.
+$ocrFrame = @(0.0, 0.0, 1.0, 1.0)
 
 if ($CaptureScreen) {
+  $ocrFrame = @($LeftFrac, $TopFrac, $WidthFrac, $HeightFrac)
   if (-not $ImagePath) {
-    $ImagePath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "onetrick-mayhem-cap.png")
+    $ImagePath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), 'onetrick-mayhem-cap.png')
   }
   $captured = $false
   if ($UseGameWindow) {
-    $captured = Capture-LeagueClientRegion -OutPath $ImagePath
+    $target = Find-GameWindow
+    if ($target) {
+      $blackFrame = Capture-FractionRegion -BoundsLeft $target.Left -BoundsTop $target.Top `
+        -BoundsWidth $target.Width -BoundsHeight $target.Height -OutPath $ImagePath
+      $captured = $true
+    } else {
+      # No game window matched: capture the primary screen's full bounds (as the
+      # early builds did), then cut the offer band from it, and mark the frame as
+      # a fallback, never as no-target.
+      $isFallback = $true
+      Write-Marker 'FALLBACK'
+    }
   }
   if (-not $captured) {
-    Capture-CenterRegion -OutPath $ImagePath
+    $blackFrame = Capture-PrimaryScreen -OutPath $ImagePath
   }
+  if ($target) {
+    $foreground = ([OTMayhemWin32]::GetForegroundWindow() -eq $target.Handle)
+    $owner = Test-OwnerForeground -GameHandle $target.Handle
+    $frame = Get-OfferGeometry -BoundsX $target.Left -BoundsY $target.Top -BoundsWidth $target.Width -BoundsHeight $target.Height
+    $frameWidth = $frame.Width
+    $frameHeight = $frame.Height
+    # Only a real game-window capture proves what the cursor clicked: a
+    # primary-screen fallback may show another window's cursor.
+    $cursor = Get-CursorInBand -Left $frame.Left -Top $frame.Top -Width $frame.Width -Height $frame.Height
+    if ($cursor) {
+      Write-Output ('__OT_CURSOR__' + ($cursor | ConvertTo-Json -Compress))
+    }
+    # JSON, not key=value pairs: the game process name is "League of Legends"
+    # (it contains spaces) and the old space-separated marker truncated it.
+    $targetInfo = [ordered]@{
+      pid = [int]$target.ProcessId
+      exe = [string]$target.Exe
+      class = [string]$target.Class
+      rect = "$($target.Left),$($target.Top),$($target.Width),$($target.Height)"
+      frame = "${frameWidth}x${frameHeight}"
+      black = [bool]$blackFrame
+      fg = [bool]$foreground
+      owner = [bool]$owner
+    }
+    Write-Output ("__OT_TARGET__" + ($targetInfo | ConvertTo-Json -Compress))
+  }
+  if ($blackFrame) { Write-Marker 'BLACK_FRAME' }
   if (-not (Test-Path -LiteralPath $ImagePath)) { exit 3 }
 }
 
@@ -96,11 +670,13 @@ if (-not $ImagePath -or -not (Test-Path -LiteralPath $ImagePath)) {
   Write-Error 'ImagePath missing or not found'
   exit 4
 }
+$ImagePath = (Resolve-Path -LiteralPath $ImagePath).Path
 
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType = WindowsRuntime]
+$null = [Windows.Globalization.Language, Windows.Globalization, ContentType = WindowsRuntime]
 
 function Await-WinRt {
   param($AsyncOp, [Type]$ResultType)
@@ -112,13 +688,94 @@ function Await-WinRt {
   return $netTask.GetAwaiter().GetResult()
 }
 
+# Prefer English: League's augment cards are English even on other clients, and
+# the matcher's fuzzy normalization is tuned to English letter shapes.
+$engine = $null
+$languageUsed = ''
+try {
+  $english = New-Object Windows.Globalization.Language 'en-US'
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($english)
+  if ($engine) { $languageUsed = 'en-US' }
+} catch {
+  $engine = $null
+}
+if (-not $engine) {
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  if ($engine) { $languageUsed = $engine.RecognizerLanguage.LanguageTag }
+}
+if (-not $engine) { exit 2 }
+if (-not $languageUsed) { $languageUsed = 'profile' }
+Write-Output "__OT_OCR_LANG ${languageUsed}__"
+
 $file = Await-WinRt ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImagePath)) ([Windows.Storage.StorageFile])
 $stream = Await-WinRt ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
 $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
 $bitmap = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-if (-not $engine) { exit 2 }
+# Pixel gate runs on the saved bitmap before OCR. Black/fallback/no-target
+# frames carry no card evidence, so they emit no marker at all.
+if (-not $blackFrame -and -not $isFallback) {
+  $cardsVisible = 0
+  $cardSlots = @()
+  try {
+    Add-Type -AssemblyName System.Drawing
+    $sampleBmp = [System.Drawing.Bitmap]::FromFile($ImagePath)
+    try {
+      $cardSlots = @(Get-CardSlotEvidenceSet -Bitmap $sampleBmp)
+      $hits = @($cardSlots | Where-Object { $_.body -ge $CARD_BODY_MIN -or $_.rim -ge $CARD_RIM_MIN })
+      if ($hits.Count -ge 2) { $cardsVisible = 1 }
+    } finally {
+      $sampleBmp.Dispose()
+    }
+  } catch {
+    $cardsVisible = 0
+    $cardSlots = @()
+  }
+  Write-Marker 'CARDS_VISIBLE' ([string]$cardsVisible)
+  if ($cardSlots.Count -gt 0) {
+    Write-Output ('__OT_CARD_SLOTS__' + (ConvertTo-Json -InputObject $cardSlots -Compress -Depth 5))
+  }
+}
 $result = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+$ocrLines = @()
 foreach ($line in $result.Lines) {
-  if ($line.Text) { Write-Output $line.Text }
+  if ($line.Text) {
+    Write-Output $line.Text
+    # shortcut: Windows PowerShell 5.1 does not project OcrLine.BoundingRect, so the line box is the union of its word boxes; upgrade when the host exposes it.
+    $minX = 0; $minY = 0; $maxR = 0; $maxB = 0; $hasWord = $false
+    foreach ($word in $line.Words) {
+      $wr = $word.BoundingRect
+      $rx = [double]$wr.X; $ry = [double]$wr.Y
+      $rr = $rx + [double]$wr.Width; $rb = $ry + [double]$wr.Height
+      if (-not $hasWord) {
+        $minX = $rx; $minY = $ry; $maxR = $rr; $maxB = $rb; $hasWord = $true
+        continue
+      }
+      if ($rx -lt $minX) { $minX = $rx }
+      if ($ry -lt $minY) { $minY = $ry }
+      if ($rr -gt $maxR) { $maxR = $rr }
+      if ($rb -gt $maxB) { $maxB = $rb }
+    }
+    $bw = [Math]::Max(1, [double]$bitmap.PixelWidth)
+    $bh = [Math]::Max(1, [double]$bitmap.PixelHeight)
+    $ocrLines += [ordered]@{
+      text = [string]$line.Text
+      rect = [ordered]@{
+        x = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, $minX / $bw)), 4)
+        y = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, $minY / $bh)), 4)
+        w = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, ($maxR - $minX) / $bw)), 4)
+        h = [Math]::Round([Math]::Max(0.0, [Math]::Min(1.0, ($maxB - $minY) / $bh)), 4)
+      }
+    }
+  }
+}
+$linesPayload = [ordered]@{
+  frame = $ocrFrame
+  lines = $ocrLines
+}
+Write-Output ('__OT_LINES__' + (ConvertTo-Json -InputObject $linesPayload -Compress -Depth 5))
+# Windows OCR succeeded but recognized no text. Only a genuine game-window
+# capture may claim an empty frame: a black, fallback or failed read is not an
+# empty scan the pick counter can trust.
+if ($ocrLines.Count -eq 0 -and -not $blackFrame -and -not $isFallback) {
+  Write-Marker 'EMPTY_FRAME'
 }

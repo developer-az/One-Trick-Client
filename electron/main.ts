@@ -9,6 +9,7 @@ import {
     Menu,
     Tray,
     nativeImage,
+    dialog,
     type NativeImage,
 } from 'electron';
 import fs from 'fs';
@@ -36,8 +37,9 @@ import {
     refreshLiveCadence,
     triggerManualMayhemOcrFromHotkey,
     dismissMayhemAugmentPanelFromHotkey,
-    isMayhemMatchActive,
+    isAramFamilyMatchActive,
 } from './game-monitor';
+import { routeHotkey, type HotkeyRoute } from '../src/logic/mayhem/hotkey';
 import { ensureKeyhookBinary } from './ensure-keyhook';
 import { getPlayRecap } from './play-recap';
 import { ensureClipperProbed, getClipperStatus, listSavedClips, saveManualClip, syncAutoClip } from './clipper';
@@ -63,14 +65,18 @@ import {
     setHudModules,
     getHudLayout,
     setHudLayout,
+    getHudSkin,
+    setHudSkin,
     syncScalesFromLeague,
     getCalibration,
     adjustCalibration,
     resetCalibration,
     getGameResolution,
     broadcastOverlayMeta,
+    broadcastMayhemBundleUpdate,
     overlaySlotFor,
     setOverlayHold,
+    noteOverlayHeartbeat,
     refreshOverlayVisibility,
     refreshOverlayCaptureProtection,
     holdToShowActive,
@@ -90,9 +96,40 @@ import { startFlashKeyHook, stopFlashKeyHook, getKeyHookStatus } from './global-
 import { loadCatalogCache, refreshCatalogCache } from './catalog-cache';
 import { overlayEnvironment } from './environment';
 import { buildIconCandidates, distDir, publicDir } from './paths';
+import { overlayLog } from './overlay-log';
+import { isWinAlive, safeCall, installCrashNet } from './safe-window';
+import { readAppVersion, readTestBuildLabel, secondInstanceMessage, windowTitleFor } from './build-info-logic';
+import { getLiveBuild, type LiveBuildRole } from './live-builds';
+import { clearRiotKey, getRiotStatus, setRiotKey } from './riot-api';
 
 process.env.DIST = distDir();
 process.env.VITE_PUBLIC = publicDir();
+
+// Last-chance uncaughtException/unhandledRejection handlers: the known
+// post-match "Object has been destroyed" race is logged and absorbed, any
+// other error is logged loudly — nothing exits the process silently.
+// Installed before anything else can throw.
+installCrashNet((message) => {
+    try {
+        overlayLog('uncaught-exception', { message });
+    } catch {
+        console.error(message);
+    }
+});
+
+// Read our own package.json once at startup so the build can identify itself.
+let testBuildLabel: string | null = null;
+let appVersion: string | null = null;
+try {
+    const packageJson = JSON.parse(
+        fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')
+    ) as unknown;
+    testBuildLabel = readTestBuildLabel(packageJson);
+    appVersion = readAppVersion(packageJson);
+} catch {
+    testBuildLabel = null;
+    appVersion = null;
+}
 
 let win: BrowserWindow | null;
 let tray: Tray | null = null;
@@ -112,7 +149,18 @@ if (!gpuAccelerationAtLaunch()) {
 /** Single instance: a second launch focuses the first instead of doubling every hook and timer. */
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) {
+    if (testBuildLabel) {
+        const message = secondInstanceMessage(testBuildLabel);
+        dialog.showErrorBox(message.title, message.body);
+    }
     app.quit();
+} else {
+    overlayLog('app-start', {
+        version: app.getVersion(),
+        label: testBuildLabel,
+        packaged: app.isPackaged,
+        exe: process.execPath,
+    });
 }
 app.on('second-instance', () => {
     showDashboard();
@@ -127,6 +175,11 @@ function showDashboard(): void {
 
 function sendToDashboard(channel: string, payload: unknown): void {
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+/** Never crash the process because a window died mid-teardown. */
+function reportWindowError(error: unknown): void {
+    console.warn('[main] window call failed', error);
 }
 
 function createTray(): void {
@@ -205,6 +258,13 @@ function createWindow() {
         }
     });
 
+    const title = windowTitleFor(testBuildLabel, appVersion ?? app.getVersion());
+    win.setTitle(title);
+    win.on('page-title-updated', (event) => {
+        event.preventDefault();
+        win?.setTitle(title);
+    });
+
     win.on('close', (event) => {
         if (!quittingApp) {
             event.preventDefault();
@@ -266,8 +326,18 @@ function flashToggleRoles(): { primary: TrackedRole; secondary: TrackedRole } {
     return { primary: 'Bot', secondary: 'Support' };
 }
 
+function hotkeyRoute(key: 'PageUp' | 'PageDown', inGame: boolean, aramFamily: boolean): HotkeyRoute | null {
+    return routeHotkey(key, { inGame, aramFamily });
+}
+
+function logHotkey(key: 'PageUp' | 'PageDown', routed: HotkeyRoute | null): void {
+    overlayLog('hotkey', { key, routed: routed ?? 'none' });
+}
+
 function onFlashPrimary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageUp', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageUp', route);
+    if (route === 'mayhem-dismiss') {
         dismissMayhemAugmentPanelFromHotkey();
         return;
     }
@@ -277,7 +347,9 @@ function onFlashPrimary(): void {
 }
 
 function onFlashSecondary(): void {
-    if (isMayhemMatchActive()) {
+    const route = hotkeyRoute('PageDown', isCurrentlyInGame(), isAramFamilyMatchActive());
+    logHotkey('PageDown', route);
+    if (route === 'mayhem-scan') {
         void triggerManualMayhemOcrFromHotkey();
         return;
     }
@@ -358,20 +430,35 @@ function registerFlashHotkeys(): void {
     }, 500);
 }
 
+function formatLatencyForDebug(latency: ReturnType<typeof getMonitorStats>['latency']): string {
+    const names = ['http.eventdata', 'poll', 'hud.build', 'ocr.mayhem'];
+    const parts = names
+        .map((name) => {
+            const stat = latency[name];
+            return stat ? `${name}=${stat.p50}/${stat.p95}` : null;
+        })
+        .filter((part): part is string => !!part);
+    return parts.length ? ` lat ${parts.join(' ')}` : '';
+}
+
 function registerOverlayHotkeys() {
     // Avoid Ctrl+Shift+I — Electron/Chromium reserves it for DevTools
     // Ctrl+Shift combos still use globalShortcut (rarely conflict with League).
     const hideOk = globalShortcut.register('CommandOrControl+Shift+H', () => {
         const visible = toggleOverlayVisibility();
         refreshLiveCadence();
-        win?.webContents.send('overlay-visibility-changed', { visible });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+        }
     });
 
     const clickOk = globalShortcut.register('CommandOrControl+Shift+U', () => {
         // Unlock = compact movable panel; Lock = fullscreen click-through.
         // (HUD align is a separate mode — do not cover the whole screen here.)
         const clickThrough = toggleClickThrough();
-        win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+        if (isWinAlive(win)) {
+            safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+        }
         broadcastOverlayMeta();
     });
 
@@ -458,7 +545,37 @@ app.whenReady().then(() => {
         loadCatalogCache();
     });
 
+    // Follow the live patch on startup: refresh cached Mayhem augment data when
+    // the patch moved (or the cache is a day old). Offline keeps the bundle.
+    void import('./mayhem-data')
+        .then(async ({ refreshMayhemBundleIfStale }) => {
+            const result = await refreshMayhemBundleIfStale();
+            if (result.refreshed && result.bundle) broadcastMayhemBundleUpdate(result.bundle);
+        })
+        .catch(() => {
+            // no network / no cache: the bundled data still loads on demand
+        });
+
     // IPC Handlers
+    ipcMain.handle('app-get-version', () => appVersion ?? app.getVersion());
+    ipcMain.handle('riot-status', async () => {
+        const lcu = lcuSocket.summary();
+        let region: string | null = null;
+        if (lcu.state === 'connected') {
+            try {
+                region = ((await makeLCURequest('GET', '/riotclient/region-locale', undefined, 3000)) as { region?: string } | null)?.region ?? null;
+            } catch {
+                /* keep the remembered region */
+            }
+        }
+        return getRiotStatus({ puuid: lcu.puuid ?? null, gameName: lcu.gameName ?? null, tagLine: lcu.tagLine ?? null, region });
+    });
+    ipcMain.handle('riot-set-key', (_e, key: unknown) => setRiotKey(String(key ?? '')));
+    ipcMain.handle('riot-clear-key', () => clearRiotKey());
+    ipcMain.handle('live-build-get',(_e, champion: unknown, role: unknown, mode: unknown) =>
+        getLiveBuild(String(champion), String(role) as LiveBuildRole, mode === 'aram' ? 'aram' : 'ranked')
+    );
+
     // User-initiated connect: allowed to use the slow process probe once.
     ipcMain.handle('lcu-connect', async () => {
         if (lcuSocket.state === 'connected') return { success: true };
@@ -474,6 +591,16 @@ app.whenReady().then(() => {
 
     ipcMain.handle('lcu-status', () => lcuSocket.summary());
     ipcMain.handle('champ-select-get', () => ({ session: lcuSocket.champSelect }));
+    ipcMain.handle('scouting-get', async () => {
+        if (isCurrentlyInGame()) return { success: true, players: [] as import('./scouting').ScoutingPlayer[] };
+        try {
+            const { fetchScoutingForSession } = await import('./scouting');
+            const players = await fetchScoutingForSession(lcuSocket.champSelect);
+            return { success: true, players };
+        } catch (e) {
+            return { success: false, players: [], error: String(e) };
+        }
+    });
 
     ipcMain.handle('app-settings-get', () => getAppSettings());
     ipcMain.handle('app-settings-set', (_event, patch: unknown) => {
@@ -500,11 +627,29 @@ app.whenReady().then(() => {
         setOverlaySlotContent(event.sender.id, !!hasContent);
     });
 
+    ipcMain.on('overlay-heartbeat', (event, beat: { frames?: unknown; pageVisible?: unknown } | null) => {
+        noteOverlayHeartbeat(event.sender.id, {
+            frames: beat?.frames === true,
+            pageVisible: beat?.pageVisible === true,
+        });
+    });
+
+    // A lost GPU or utility process can leave a shown window undrawn. Record it
+    // next to the overlay lifecycle so a vanished HUD can be matched to it.
+    app.on('child-process-gone', (_event, details) => {
+        overlayLog('child-process-gone', {
+            type: details.type,
+            reason: details.reason,
+            exitCode: details.exitCode,
+            name: details.name ?? null,
+        });
+    });
+
     if (process.env.ONETRICK_DEBUG) {
         setInterval(() => {
             const o = getOverlayWindowStats();
             const m = getMonitorStats();
-            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}`);
+            console.info(`[debug] overlayWindows=${o.windows} visible=${o.visible} inGame=${m.inGame} livePollMs=${m.livePollMs} gpu=${app.getGPUFeatureStatus().gpu_compositing}${formatLatencyForDebug(m.latency)}`);
         }, 5000);
     }
 
@@ -532,6 +677,7 @@ app.whenReady().then(() => {
             livePollMs: monitor.livePollMs,
             liveReads: monitor.liveReads,
             lastEndReason: monitor.lastEndReason,
+            latency: monitor.latency,
             environment: await overlayEnvironment(),
         };
     });
@@ -737,7 +883,9 @@ app.whenReady().then(() => {
         try {
             const visible = toggleOverlayVisibility();
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible }), reportWindowError);
+            }
             return { success: true, visible };
         } catch (error) {
             console.error('[overlay] Failed to toggle visibility:', error);
@@ -752,7 +900,9 @@ app.whenReady().then(() => {
                 showOverlay();
             }
             refreshLiveCadence();
-            win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-visibility-changed', { visible: !isOverlayUserHidden() }), reportWindowError);
+            }
             return { success: true, visible: !isOverlayUserHidden() };
         } catch (error) {
             console.error('[overlay] Failed to set visibility:', error);
@@ -763,7 +913,9 @@ app.whenReady().then(() => {
     ipcMain.handle('overlay-toggle-clickthrough', async () => {
         try {
             const clickThrough = toggleClickThrough();
-            win?.webContents.send('overlay-clickthrough-changed', { clickThrough });
+            if (isWinAlive(win)) {
+                safeCall(() => win?.webContents.send('overlay-clickthrough-changed', { clickThrough }), reportWindowError);
+            }
             return { success: true, clickThrough };
         } catch (error) {
             console.error('[overlay] Failed to change interaction mode:', error);
@@ -812,6 +964,10 @@ app.whenReady().then(() => {
         return { success: true, hudLayout: setHudLayout(layout) };
     });
 
+    ipcMain.handle('overlay-set-hud-skin', async (_event, skin: unknown) => {
+        return { success: true, hudSkin: setHudSkin(skin) };
+    });
+
     ipcMain.handle('catalog-get', () => {
         return { success: true, catalog: loadCatalogCache() };
     });
@@ -822,9 +978,14 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('mayhem-get', async () => {
-        const { loadMayhemBundle } = await import('./mayhem-data');
-        const bundle = loadMayhemBundle();
-        return { success: !!bundle, bundle };
+        try {
+            const { loadMayhemBundle } = await import('./mayhem-data');
+            const bundle = loadMayhemBundle();
+            return { success: !!bundle, bundle };
+        } catch (error) {
+            console.warn('[mayhem] bundle read failed:', error);
+            return { success: false };
+        }
     });
 
     ipcMain.handle('mayhem-set-owned', async (_event, ids: unknown) => {
@@ -880,6 +1041,13 @@ app.whenReady().then(() => {
         const { refreshMayhemBundle } = await import('./mayhem-data');
         try {
             const { bundle, fromNetwork } = await refreshMayhemBundle();
+            if (fromNetwork && bundle) {
+                try {
+                    broadcastMayhemBundleUpdate(bundle);
+                } catch (error) {
+                    console.warn('[mayhem] overlay bundle push failed:', error);
+                }
+            }
             return { success: true, bundle, fromNetwork };
         } catch (error: unknown) {
             const err = error as { message?: string };
@@ -920,28 +1088,33 @@ app.whenReady().then(() => {
             overlayTextScale: getOverlayTextScale(),
             hudModules: getHudModules(),
             hudLayout: getHudLayout(),
+            hudSkin: getHudSkin(),
             calibration: getCalibration(),
             gameWidth: res.gameWidth,
             gameHeight: res.gameHeight,
+            version: appVersion ?? app.getVersion(),
         };
     });
 
     // Window Controls
     ipcMain.handle('window-minimize', () => {
-        if (win) win.minimize();
+        if (isWinAlive(win)) safeCall(() => win?.minimize(), reportWindowError);
     });
 
     ipcMain.handle('window-maximize', () => {
-        if (win) {
-            if (win.isMaximized()) {
-                win.unmaximize();
-            } else {
-                win.maximize();
+        if (!isWinAlive(win)) return;
+        safeCall(() => {
+            if (win) {
+                if (win.isMaximized()) {
+                    win.unmaximize();
+                } else {
+                    win.maximize();
+                }
             }
-        }
+        }, reportWindowError);
     });
 
     ipcMain.handle('window-close', () => {
-        if (win) win.close();
+        if (isWinAlive(win)) safeCall(() => win?.close(), reportWindowError);
     });
 });

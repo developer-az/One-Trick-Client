@@ -1,4 +1,5 @@
 import React from 'react';
+import { isUnknownMayhemAugmentId } from '../logic/mayhem/match';
 import type { RankedMayhemChoice } from '../logic/mayhem/types';
 
 /*
@@ -25,27 +26,90 @@ function shortenReason(text: string): string {
   return `${space > 18 ? cut.slice(0, space) : cut}…`;
 }
 
+/** Idle prompt — shown only when no press left a status; a finished scan has its own outcome text. */
+const MAYHEM_IDLE_CANNOT_VERIFY =
+  'Cannot verify the augment screen — press PageDown to retry (borderless window required in fullscreen)';
+
+/**
+ * A PageDown press is live (or just settled with no roll): its hint is the only
+ * content on screen, so the empty slot must still wake up instead of looking dead.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function isMayhemManualScanHint(hint?: string): boolean {
+  if (!hint) return false;
+  return (
+    hint.startsWith('Scanning…') ||
+    hint.startsWith('Could not verify') ||
+    hint.includes('retrying…')
+  );
+}
+
+/** Panel/slot activation, shared with the verify so the zero-offer press is testable. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldActivateMayhemSlot(input: {
+  mayhemFamily: boolean;
+  moduleOn: boolean;
+  dismissedRecently: boolean;
+  unverified: boolean;
+  augmentWindow: boolean;
+  offerCount: number;
+  ocrHint?: string;
+}): boolean {
+  if (!input.mayhemFamily || !input.moduleOn || input.dismissedRecently) return false;
+  return (
+    input.unverified ||
+    isMayhemManualScanHint(input.ocrHint) ||
+    (input.augmentWindow && input.offerCount > 0)
+  );
+}
+
 export const OverlayMayhemPanel: React.FC<{
   championName: string;
   ranked: RankedMayhemChoice[];
+  /** Augments already taken this match, newest last. */
+  owned?: Array<{ id: string; name: string }>;
   detecting?: boolean;
   mode?: 'roll' | 'suggest' | 'reading';
   pickHint?: string;
   waitingForDeath?: boolean;
-}> = ({ championName, ranked, detecting, mode, pickHint, waitingForDeath }) => {
+  verification?: MayhemVerification;
+  ocrHint?: string;
+}> = ({ championName, ranked, owned, detecting, mode, pickHint, waitingForDeath, verification, ocrHint }) => {
+  // Never show stale advice or claim a pick. The hint is either a live Scanning
+  // status or a finished scan's explicit outcome; only an idle monitor falls
+  // back to the long Cannot-verify prompt.
+  if (verification === 'unverified') {
+    return (
+      <div className="hud-overlay-panel ov-panel--short px-2 py-1.5">
+        <div className="hud-chrome-meta !text-[11px]">{ocrHint || MAYHEM_IDLE_CANNOT_VERIFY}</div>
+      </div>
+    );
+  }
+
   const resolvedMode =
     mode ?? (detecting ? (ranked.length ? 'roll' : 'reading') : ranked.length ? 'roll' : 'suggest');
+
+  // A live PageDown with zero offers has no ranked rows to show; keep the short
+  // Scanning chrome visible instead of letting the empty slot go blank.
+  if (verification === 'verified' && !ranked.length && isMayhemManualScanHint(ocrHint)) {
+    return (
+      <div className="hud-overlay-panel ov-panel--short px-2 py-1.5">
+        <div className="hud-chrome-meta !text-[11px]">{ocrHint}</div>
+      </div>
+    );
+  }
 
   if (!ranked.length && resolvedMode !== 'reading' && !waitingForDeath && !pickHint) return null;
 
   const best = ranked.reduce<RankedMayhemChoice | null>(
-    (acc, row) => (!acc || row.score > acc.score ? row : acc),
+    (acc, row) =>
+      isUnknownMayhemAugmentId(row.augmentId) ? acc : !acc || row.score > acc.score ? row : acc,
     null
   );
 
   if (resolvedMode === 'reading') {
     return (
-      <div className="hud-overlay-panel px-2 py-1.5">
+      <div className="hud-overlay-panel ov-panel--short px-2 py-1.5">
         <div className="hud-chrome-meta !text-[11px]">Reading augment cards…</div>
       </div>
     );
@@ -77,8 +141,19 @@ export const OverlayMayhemPanel: React.FC<{
           <ol className="space-y-1">
             {ranked.map((row) => {
               const isBest = row.rank === best?.rank;
-              const verdictTone =
-                row.verdict === 'pick' ? 'var(--ov-teal)' : row.verdict === 'alt' ? 'var(--ov-amber)' : 'var(--ov-red)';
+              const unknown = isUnknownMayhemAugmentId(row.augmentId);
+              const verdictTone = unknown
+                ? 'var(--ov-text-2)'
+                : row.verdict === 'pick'
+                  ? 'var(--ov-teal)'
+                  : row.verdict === 'alt'
+                    ? 'var(--ov-amber)'
+                    : 'var(--ov-red)';
+              const nameTone = isBest
+                ? 'var(--ov-text)'
+                : unknown
+                  ? 'var(--ov-text-2)'
+                  : RARITY_COLOR[row.rarity];
               return (
                 <li
                   key={row.augmentId}
@@ -92,20 +167,23 @@ export const OverlayMayhemPanel: React.FC<{
                     {row.rank}
                   </span>
                   <span className="min-w-0">
-                    <span
-                      className="font-medium"
-                      style={{ color: isBest ? 'var(--ov-text)' : RARITY_COLOR[row.rarity] }}
-                    >
+                    <span className="font-medium" style={{ color: nameTone }}>
                       {row.name}
                     </span>
                     <span
                       className="ml-1 text-[9px] font-bold uppercase tracking-wider"
                       style={{ color: verdictTone }}
                     >
-                      {row.verdict === 'pick' ? 'take' : row.verdict === 'alt' ? 'alt' : 'skip'}
+                      {unknown
+                        ? 'not in database'
+                        : row.verdict === 'pick'
+                          ? 'take'
+                          : row.verdict === 'alt'
+                            ? 'alt'
+                            : 'skip'}
                     </span>
                     <span className="block" style={{ color: 'var(--ov-text-2)' }}>
-                      {shortenReason(row.headline)}
+                      {shortenReason(unknown ? 'New augment — read the card text' : row.headline)}
                     </span>
                   </span>
                 </li>
@@ -117,6 +195,15 @@ export const OverlayMayhemPanel: React.FC<{
             PageDown scans · PageUp closes
           </p>
         )}
+
+        {owned && owned.length > 0 ? (
+          <div
+            className="hud-chrome-meta !text-[10px] mt-1 truncate"
+            title={owned.map((aug) => aug.name).join(', ')}
+          >
+            Have {owned.length}/4 · {owned.map((aug) => aug.name).join(', ')}
+          </div>
+        ) : null}
 
         {waitingForDeath ? (
           <div className="hud-chrome-meta !text-[10px] mt-1">Opens again at the next augment</div>

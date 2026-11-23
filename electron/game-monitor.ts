@@ -1,18 +1,23 @@
 import { makeLCURequest } from './lcu-connector';
 import { lcuSocket } from './lcu-socket';
-import { findLocalPlayer, type LiveClientAllGameData } from './live-client';
+import { findLocalPlayer, type LiveClientAllGameData, type LiveClientPlayer } from './live-client';
 import {
     getStateServiceStatus,
     readLiveBoard,
     readLiveClock,
     resetStateService,
+    clearStateBoard,
     setStateServiceEngaged,
+    setStateServiceHudHidden,
     startStateService,
     stopStateService,
     getGameState,
     getObjectiveTimers,
     getRecentGameEvents,
+    getLatencySummary,
+    recordLatency,
 } from './state-service';
+import type { LatencySummary } from '../src/logic/latencyStats';
 import { tickCoachCues, resetCoachCooldowns } from './coach-cues';
 import { setClipperActive, queueClip, syncAutoClip } from './clipper';
 
@@ -23,6 +28,7 @@ import {
     describeEndMatchReason,
     isInGamePhase,
 } from './match-lifecycle';
+import { isMatchLoading } from '../src/logic/matchLoading';
 import {
     showOverlay,
     hideOverlay,
@@ -31,12 +37,18 @@ import {
     setOverlayUserHidden,
     createOverlayWindow,
     destroyOverlay,
+    onOverlayWindowCreated,
+    setOverlayPageReadyHandler,
     getOverlayWindow,
     syncScalesFromLeague,
     keepOverlayOnTop,
     healOverlayWindows,
     setOverlayMatchActive,
+    broadcastMayhemBundleUpdate,
 } from './overlay-window';
+import { overlayLog, formatOverlayLogLine } from './overlay-log';
+import { readLeagueHudScales } from './league-settings';
+import { overlayEnvironment } from './environment';
 import {
     ingestChampSelectTeam,
     ingestLiveEvents,
@@ -48,41 +60,97 @@ import {
     setSummonerFocus,
 } from './summoner-tracker';
 import { clipboard } from 'electron';
-import { getAppSettings } from './app-settings';
+import { getAppSettings, type AppSettings } from './app-settings';
+import { getMatchHistorySummaries } from './match-history';
+import {
+    createOverlayDestroyGate,
+    createPrematchStatsCache,
+    loadingSlotFromChampSelect,
+    loadingSlotFromGameflowSession,
+    queueMetadataFromGameflowSession,
+    resolveLoadingChampion,
+    shouldRefreshLoadingStats,
+    type LocalSummonerIdentity,
+} from './prematch-loading';
+import {
+    computeLoadingStats,
+    type LoadingMatchLike,
+    type LoadingStats,
+} from '../src/overlay/loadingStats';
+import type { LoadingSlot } from '../src/overlay/loadingScreenGeometry';
 import { tickPlayMoments, type PlayMomentSnapshot } from '../src/logic/playMoments';
 import { pickClipMoment } from '../src/logic/clipper-plan';
 import type { PlayOverlayState } from '../src/logic/playMoments';
 import { appendPlayRecap, clearPlayRecap } from './play-recap';
 import { resetJungleThreatClock } from '../src/logic/jungleLogic';
-import { isAramOrMayhem, isMayhemGame } from '../src/logic/mayhem/mode';
+import {
+    HOWLING_ABYSS_MAP_ID,
+    detectMayhemMode,
+    inferMayhemQueueFromMode,
+    isAramOrMayhem,
+    isMayhemMode,
+    type MayhemMode,
+    type MayhemModeSignals,
+} from '../src/logic/mayhem/mode';
 import { planMayhemOcr } from '../src/logic/mayhem/augmentSchedule';
 import {
     computeMayhemPickPhase,
-    nextMayhemPickLevel,
     resolveMayhemPicksTaken,
     type MayhemPickPhase,
 } from '../src/logic/mayhem/pickPhase';
-import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
-import { loadMayhemBundle } from './mayhem-data';
 import {
-    detectMayhemOfferIds,
+    MAYHEM_REROLL_PICK_WINDOW_MS,
+    readLiveAugmentIds,
+    revertMayhemRerollPick,
+} from '../src/logic/mayhem/pickCount';
+import {
+    createMayhemMonitorState,
+    createMayhemPollChain,
+    mayhemAutoOcrGate,
+    mayhemDiscoveryLive,
+    mayhemMonitorMode,
+    isMayhemDiscoverySignals,
+    noteMayhemDiscoveryTrigger,
+    noteMayhemManualScan,
+    mayhemUnverifiedAfterRead,
+    runMayhemMonitorScan,
+    type MayhemMonitorResult,
+    type MayhemMonitorState,
+} from '../src/logic/mayhem/monitor';
+import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
+import { isUnknownMayhemAugmentId } from '../src/logic/mayhem/match';
+import { pickedMayhemAugment, type MayhemCardCursor } from '../src/logic/mayhem/selection';
+import { decideMayhemPageUp } from '../src/logic/mayhem/hotkey';
+import { loadMayhemBundle, refreshMayhemBundleIfStale } from './mayhem-data';
+import {
+    clearPendingMayhemManual,
+    detectMayhemOffers,
+    isMayhemOcrInFlight,
     isMayhemOcrRerollPending,
+    mayhemOcrBlackFrameSeen,
+    noteMayhemManualPressInFlight,
     resetMayhemOcrCache,
+    resetMayhemOcrMatchFlags,
     setMayhemOcrRetainOffers,
+    takePendingMayhemManual,
+    type MayhemScreenReader,
+    type MayhemOcrRead,
 } from './mayhem-ocr';
 import {
     getMayhemPicksTaken,
     getOwnedMayhemAugmentIds,
     mergedMayhemOfferIds,
     resetMayhemMatchState,
+    setMayhemPicksTaken,
     setMayhemRollIds,
+    setOwnedMayhemAugmentIds,
 } from './mayhem-state';
 
 /**
  * Match lifecycle, driven by League Client events (see lcu-socket.ts).
  *
  * Nothing here polls the League client. Game state comes from the State Service
- * (`state-service.ts`), which samples the Live Client at 400 ms and owns the
+ * (`state-service.ts`), which samples the Live Client at 600 ms and owns the
  * event cursor, objective timers and snapshot buffer. This module runs a slower
  * timer purely to decide what the HUD should draw, and to end the match when
  * the Live Client goes quiet.
@@ -110,6 +178,12 @@ let lastClipboardWrite = 0;
 let lastKeepOnTopAt = 0;
 /** Last healthy live payload — never clobber the HUD with a null Live Client blip. */
 let lastGoodPayload: ReturnType<typeof buildOverlayPayload> | null = null;
+/** Settings snapshot for the current liveTick; undefined outside a tick. */
+let tickSettings: AppSettings | null = null;
+
+function settingsForTick(): AppSettings {
+    return tickSettings ?? getAppSettings();
+}
 
 export interface CachedEnemy {
     championId: number;
@@ -120,9 +194,83 @@ export interface CachedEnemy {
 let monitorStarted = false;
 let liveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastChampSelectEnemies: CachedEnemy[] = [];
+/**
+ * The champion you locked in champ select (numeric LCU key + name). The
+ * loading card's form and the champion accent both need it, and champ select
+ * already delivers the session — no extra polling.
+ */
+let lastChampSelectSelf: { championId: number; championName?: string } | null = null;
+/** Champion resolved from the gameflow session when no champ-select event ran (reconnect). */
+let loadingChampion: { championId: number; championName?: string } | null = null;
+/** Recent form on `lastChampSelectSelf.championId`, read from the champ-select cache. */
+let prematchStats: LoadingStats | null = null;
+/** Bumped on every load so a late resolution cannot attach to the wrong game. */
+let prematchStatsToken = 0;
+/** Local identity, for matching the gameflow session without another request. */
+let localSummonerIdentity: LocalSummonerIdentity | null = null;
+let identityWaiters: Array<(value: LocalSummonerIdentity | null) => void> = [];
+/** True once this champ select has started its one history prefetch. */
+let champSelectHistoryPrefetched = false;
+let lastPrefetchPhase: string | null = null;
+/** Bumped per champ select so an older prefetch can never fill the cache. */
+let champSelectSession = 0;
+/** The load the current loading overlay belongs to; 0 outside a load. */
+let loadingSessionToken = 0;
+/**
+ * Your loading-screen slot: side + index among your team. The champ-select
+ * fallback fills the order at entry; the gameflow session refines it with the
+ * side (the only thing that can, so it is what the overlay places from).
+ */
+let loadingSlot: LoadingSlot | null = null;
+/** Champ-select fallback (myTeam order by cellId), consumed at load entry. */
+let champSelectSlot: LoadingSlot | null = null;
+/** Queue + map for this game, captured at load entry and kept all match (Step H). */
+let matchQueueId: number | null = null;
+let matchMapId: number | null = null;
+/** Bumped on each phase change/match start so a late queue read lands in the right game. */
+let matchStartToken = 0;
+/**
+ * hexsight-style queue read: retry each tick in Lobby/ChampSelect/InGame until a
+ * real queue (and, in game, the session's game id) is seen. A failed read keeps
+ * the previous queue instead of turning the match into an unknown one.
+ */
+let matchQueueReadDone = false;
+let matchQueueGameId: number | null = null;
+let matchQueueIdTries = 0;
+let queueRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let queueReadInFlight = false;
+const QUEUE_RETRY_MS = 1000;
+const QUEUE_GAME_ID_MAX_TRIES = 30;
+/** Load token whose one reconnect summaries prefetch already ran (0 = none). */
+let reconnectSummaryPrefetched = 0;
+/**
+ * Summaries fetched during champ select so the loading path can fold them
+ * without issuing a single LCU request. Empty cache ≠ zero games: only a loaded
+ * cache may claim "First game on this champion".
+ */
+const prematchHistoryCache = createPrematchStatsCache({
+    // The session id travels with the request: a new champ select must never
+    // join the previous one's in-flight page (match-history keeps one slot per
+    // session and starts a fresh request instead).
+    fetchHistory: () => getMatchHistorySummaries({ count: 60, session: champSelectSession }),
+});
+/** Finished-match overlay destroy, delayed so a phase blip cannot kill it. */
+const overlayDestroyGate = createOverlayDestroyGate({
+    setTimeout: (fn, ms) => setTimeout(fn, ms) as unknown,
+    clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    isInGame: () => inGame,
+    destroy: () => destroyOverlay(),
+});
 let inGame = false;
-let destroyOverlayTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * League is loading a game: GameStart, or InProgress before the Live Client
+ * answers. The overlay shows the loading pet from here; beginMatch (or a phase
+ * back in a menu) ends it.
+ */
+let prematchLoading = false;
 let lastOverlayFingerprint = '';
+let lastSentOverlayPayload: unknown = null;
+let overlayWindowCreatedUnsubscribe: (() => void) | null = null;
 let currentPollMs = POLL_INGAME_MS;
 let liveReadsTotal = 0;
 /** Last time allgamedata or gamestats proved the game process is up. */
@@ -148,39 +296,573 @@ export function isCurrentlyInGame(): boolean {
 }
 
 export function isMayhemMatchActive(): boolean {
-    return (
-        inGame &&
-        !!lastGoodPayload &&
-        isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)
+    return inGame && !!lastGoodPayload && isMayhemMode(currentMayhemMode());
+}
+
+/**
+ * Live augment ingestion runs for every Mayhem mode, including `mayhem-likely`
+ * (the unknown-queue Howling Abyss game the Live Client reports as plain ARAM).
+ * Classic ARAM never reads `activePlayer.augments`.
+ */
+export function shouldSyncMayhemPickPhase(mode: MayhemMode): boolean {
+    return isMayhemMode(mode);
+}
+
+/** Howling Abyss / ARAM-ish live game (Mayhem, mayhem-likely or classic ARAM). */
+export function isAramFamilyMatchActive(): boolean {
+    if (!inGame || !lastGoodPayload) return false;
+    const signals = currentMayhemSignals();
+    return isAramOrMayhem(signals.gameMode, signals.mapName, {
+        queueId: signals.queueId,
+        mapId: signals.mapId,
+        augmentOffersDetected: false,
+    });
+}
+
+/** The overlay is showing the pre-match loading screen right now. */
+export function isPrematchLoading(): boolean {
+    return prematchLoading;
+}
+
+/**
+ * Which phase means "a game is loading but no live board exists yet".
+ * GameStart is the loading screen; InProgress appears before the Live Client
+ * answers when the client reconnects straight into a game. Once beginMatch has
+ * run, a real match owns the overlay, so `inGame` always wins.
+ */
+export function isPrematchLoadingPhase(phase: string | null, inGameNow: boolean): boolean {
+    if (inGameNow) return false;
+    return phase === 'GameStart' || phase === 'InProgress';
+}
+
+/** The one payload the loading screen needs: pet + phase, no board. */
+export function prematchLoadingPayload(
+    phase: string | null,
+    pet: AppSettings['pet'],
+    champion?: { championId: number; championName?: string } | null,
+    stats?: LoadingStats | null,
+    slot?: LoadingSlot | null,
+    queue?: { queueId?: number | null; mapId?: number | null }
+): Record<string, unknown> {
+    return {
+        inGame: true,
+        loading: true,
+        gameflowPhase: phase,
+        gameTime: 0,
+        trustedGameTime: 0,
+        pet,
+        championId: champion?.championId ?? null,
+        championName: champion?.championName ?? null,
+        // Always present (null when unknown): the page replaces its state
+        // wholesale, so an omitted field would blank a card that already drew.
+        loadingStats: stats ?? null,
+        loadingSlot: slot ?? null,
+        queueId: queue?.queueId ?? null,
+        mapId: queue?.mapId ?? null,
+        timestamp: Date.now(),
+    };
+}
+
+/** Whether a freshly created (or just mounted) overlay page should be re-sent the last payload. */
+export function shouldReplayOverlayState(state: {
+    inGame: boolean;
+    prematchLoading: boolean;
+    userHidden: boolean;
+    hasPayload: boolean;
+}): boolean {
+    if (state.userHidden || !state.hasPayload) return false;
+    return state.inGame || state.prematchLoading;
+}
+
+/**
+ * The client's own summoner event (already fetched once per LCU connect) gives
+ * the identity that matches us inside `/lol-gameflow/v1/session`. Caching it
+ * here is what keeps the reconnect champion read at a single request.
+ */
+function rememberLocalSummoner(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
+    const summoner = value as { summonerId?: number; puuid?: string };
+    if (typeof summoner.summonerId !== 'number' && !summoner.puuid) return;
+    localSummonerIdentity = {
+        summonerId: typeof summoner.summonerId === 'number' ? summoner.summonerId : null,
+        puuid: typeof summoner.puuid === 'string' ? summoner.puuid : null,
+    };
+    const waiters = identityWaiters;
+    identityWaiters = [];
+    for (const resolve of waiters) resolve(localSummonerIdentity);
+}
+
+/** Bounded wait for the summoner event that follows an LCU (re)connect. */
+function waitForLocalSummoner(timeoutMs: number): Promise<LocalSummonerIdentity | null> {
+    if (localSummonerIdentity) return Promise.resolve(localSummonerIdentity);
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = (value: LocalSummonerIdentity | null): void => {
+            if (settled) return;
+            settled = true;
+            const index = identityWaiters.indexOf(done);
+            if (index >= 0) identityWaiters.splice(index, 1);
+            resolve(value);
+        };
+        identityWaiters.push(done);
+        const timer = setTimeout(() => done(null), timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+    });
+}
+
+/**
+ * A new ChampSelect owns a fresh history snapshot. Bumping the session both
+ * resets the cache and invalidates a prefetch from the previous champ select,
+ * so a hot requeue never shows last game's games (or an old page's results).
+ */
+function beginChampSelectSession(): void {
+    champSelectSession += 1;
+    champSelectHistoryPrefetched = false;
+    prematchHistoryCache.reset();
+    // A new pick is a genuine new session: drop the previous game's queue here,
+    // not at GameStart where it would strand a KIWI match on a failed load read.
+    matchQueueId = null;
+    matchMapId = null;
+}
+
+/**
+ * Mark that this champ select already asked for its history. If that prefetch
+ * is still in flight when GameStart arrives, fold it when it lands — for this
+ * load and this champion only — and refresh the loading payload. Nothing here
+ * starts an LCU request from the loading path.
+ */
+function prefetchHistoryForChampSelect(): void {
+    if (champSelectHistoryPrefetched || inGame || prematchLoading) return;
+    champSelectHistoryPrefetched = true;
+    const session = champSelectSession;
+    void prematchHistoryCache.prefetch().then(() => {
+        if (session !== champSelectSession) return;
+        const championId = loadingChampion?.championId ?? null;
+        const refresh = shouldRefreshLoadingStats({
+            loading: prematchLoading,
+            loadToken: loadingSessionToken,
+            activeToken: prematchStatsToken,
+            championId,
+            loadingChampionId: loadingChampion?.championId ?? null,
+        });
+        if (!refresh || championId == null) return;
+        const stats = prematchStatsFromCache(championId);
+        if (!stats) return;
+        prematchStats = stats;
+        sendPrematchLoadingPayload();
+        overlayLog('prematch-loading stats', { source: 'champ-select-cache', championId });
+    });
+}
+
+/** Cache-only fold: no LCU request, and null stays "unknown" (pet only). */
+function prematchStatsFromCache(championId: number | null | undefined): LoadingStats | null {
+    const mayhemLikely = matchQueueId == null && matchMapId === HOWLING_ABYSS_MAP_ID;
+    return prematchHistoryCache.statsFor(championId, matchQueueId, mayhemLikely);
+}
+
+/** The session read just taught us the queue: re-fold the card for it. */
+function refreshPrematchStatsForQueue(): void {
+    if (!prematchLoading) return;
+    prematchStats = prematchStatsFromCache(loadingChampion?.championId ?? null);
+}
+
+/** Send the loading payload for the champion currently known (if any). */
+function sendPrematchLoadingPayload(): void {
+    sendFullOverlayUpdate(
+        prematchLoadingPayload(
+            lcuSocket.phase,
+            settingsForTick().pet,
+            loadingChampion,
+            prematchStats,
+            loadingSlot,
+            { queueId: matchQueueId, mapId: matchMapId }
+        )
     );
 }
 
-/** PageUp in Mayhem: hide augment HUD until next shop window or Page Down scan. */
+/**
+ * Store the loading slot and log it in one readable line:
+ * `loading-slot side=… index=… size=… source=…`.
+ */
+function applyLoadingSlot(next: LoadingSlot | null): void {
+    if (!next) return;
+    const same =
+        !!loadingSlot &&
+        loadingSlot.side === next.side &&
+        loadingSlot.index === next.index &&
+        loadingSlot.teamSize === next.teamSize &&
+        loadingSlot.source === next.source;
+    if (same) return;
+    loadingSlot = next;
+    overlayLog('loading-slot', {
+        side: next.side ?? 'unknown',
+        index: next.index,
+        size: next.teamSize,
+        source: next.source,
+    });
+}
+
+/** Queue id + map id from the same session read; kept for the whole match. */
+function applyQueueMetadata(session: unknown): void {
+    const meta = queueMetadataFromGameflowSession(session);
+    if (meta.queueId != null) matchQueueId = meta.queueId;
+    if (meta.mapId != null) matchMapId = meta.mapId;
+}
+
+/**
+ * Reconnect straight into InProgress: no champ-select event ever ran, so the
+ * pick is unknown. One gameflow-session read is allowed for this case only;
+ * every other loading tick reads the cache. The same response carries the
+ * loading slot and the queue/map ids, so a reconnect still spends just one GET.
+ */
+async function resolvePrematchChampionFromSession(): Promise<void> {
+    if (!prematchLoading || loadingChampion) return;
+    const token = prematchStatsToken;
+    // The client fetches its own summoner once per connect; wait for that
+    // event instead of spending a second request on identity.
+    const identity = await waitForLocalSummoner(1500);
+    if (!identity) return;
+    let session: unknown = null;
+    const champion = await resolveLoadingChampion({
+        getIdentity: () => identity,
+        fetchSession: async () => {
+            session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+            return session;
+        },
+    });
+    if (token !== prematchStatsToken || !prematchLoading || !session) return;
+    applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
+    applyQueueMetadata(session);
+    refreshPrematchStatsForQueue();
+    if (!champion || loadingChampion) {
+        // The slot/queue ids alone are worth a refinement payload.
+        sendPrematchLoadingPayload();
+        return;
+    }
+    loadingChampion = champion;
+    prematchStats = prematchStatsFromCache(champion.championId);
+    overlayLog('prematch-loading champion', {
+        source: 'gameflow-session',
+        championId: champion.championId,
+        stats: prematchStats ? 'cache' : 'none',
+    });
+    sendPrematchLoadingPayload();
+    // No champ-select prefetch ever ran for a reconnect: the card would stay
+    // "Reading…" for the whole load. One summaries-only request, this load only.
+    void prefetchHistoryForReconnect(token, champion.championId);
+}
+
+/**
+ * Champ-select path: the pick is already known, so this load's one session read
+ * is spent on the slot (side + index) and the queue ids. Deliberately async —
+ * the pet and card are already on screen and get refined when it lands.
+ */
+async function resolveLoadingSlotFromSession(): Promise<void> {
+    if (!prematchLoading) return;
+    const token = prematchStatsToken;
+    const identity = await waitForLocalSummoner(1500);
+    if (!identity) return;
+    let session: unknown = null;
+    try {
+        session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+    } catch {
+        return;
+    }
+    if (token !== prematchStatsToken || !prematchLoading || !session) return;
+    applyLoadingSlot(loadingSlotFromGameflowSession(session, identity));
+    applyQueueMetadata(session);
+    refreshPrematchStatsForQueue();
+    sendPrematchLoadingPayload();
+}
+
+/**
+ * A reconnect's single summaries prefetch (count 60, no details). It does not
+ * touch the champ-select cache — no champ select happened — and is folded only
+ * for the load and champion it was started for.
+ */
+async function prefetchHistoryForReconnect(token: number, championId: number): Promise<void> {
+    if (reconnectSummaryPrefetched === token) return;
+    reconnectSummaryPrefetched = token;
+    let matches: LoadingMatchLike[] | null = null;
+    try {
+        // The load token is this prefetch's session key: two consecutive
+        // reconnects must never join each other's in-flight page (the second
+        // would accept the first's result and fold it into the wrong load).
+        matches = await getMatchHistorySummaries({ count: 60, session: token });
+    } catch {
+        return;
+    }
+    if (!matches || token !== prematchStatsToken || !prematchLoading) return;
+    const refresh = shouldRefreshLoadingStats({
+        loading: prematchLoading,
+        loadToken: loadingSessionToken,
+        activeToken: prematchStatsToken,
+        championId,
+        loadingChampionId: loadingChampion?.championId ?? null,
+    });
+    if (!refresh) return;
+    prematchStats = computeLoadingStats(
+        matches,
+        championId,
+        matchQueueId,
+        matchQueueId == null && matchMapId === HOWLING_ABYSS_MAP_ID
+    );
+    sendPrematchLoadingPayload();
+    overlayLog('prematch-loading stats', { source: 'reconnect-prefetch', championId });
+}
+
+/**
+ * A late champ-select swap while the load is drawing must recolor/re-stat the
+ * payload instead of leaving the previous pick on screen.
+ */
+function applyChampSelectChampionToLoading(): void {
+    if (!prematchLoading || !lastChampSelectSelf) return;
+    const next = lastChampSelectSelf;
+    if (
+        loadingChampion &&
+        loadingChampion.championId === next.championId &&
+        (loadingChampion.championName || '') === (next.championName || '')
+    ) {
+        return;
+    }
+    loadingChampion = { championId: next.championId, championName: next.championName };
+    prematchStats = prematchStatsFromCache(next.championId);
+    sendPrematchLoadingPayload();
+}
+
+export type MayhemHotkeyKey = 'PageUp' | 'PageDown';
+
+export interface MayhemHotkeyRouteDecision {
+    key: MayhemHotkeyKey;
+    /** The hotkey reached its panel/OCR action. */
+    routed: boolean;
+    /** The Mayhem action the key took: PageUp toggles, PageDown only restores. */
+    action?: 'dismiss' | 'restore';
+    /** Why it routed, or what stopped it before the action. */
+    reason: string;
+}
+
+/**
+ * One overlay.log line per hotkey route decision. A paste of overlay.log can
+ * then separate "the hotkey was not routed" from "OCR ran and read nothing",
+ * and `action=dismiss` from `action=restore` on the toggling PageUp.
+ * Returns the formatted line so a harness can assert the exact record.
+ */
+export function logMayhemHotkeyRoute(decision: MayhemHotkeyRouteDecision): string {
+    const detail: Record<string, unknown> = {
+        key: decision.key,
+        routed: decision.routed,
+    };
+    if (decision.action) detail.action = decision.action;
+    detail.reason = decision.reason;
+    overlayLog('hotkey', detail);
+    return formatOverlayLogLine(Date.now(), 'hotkey', detail);
+}
+
+/** Why PageUp did or did not dismiss; `panel-shown` means the hotkey routed. */
+export function mayhemDismissRouteReason(input: {
+    inGame: boolean;
+    hasPayload: boolean;
+    aramFamily: boolean;
+    panelShown: boolean;
+}): string {
+    if (!input.inGame) return 'not-in-game';
+    if (!input.hasPayload) return 'no-payload';
+    if (!input.aramFamily) return 'not-aram-family';
+    if (!input.panelShown) return 'panel-hidden';
+    return 'panel-shown';
+}
+
+/**
+ * PageUp in Mayhem: toggle the augment HUD. A visible, non-dismissed panel is
+ * still hidden for 120 s (auto OCR pauses with it, as before); a dismissed or
+ * hidden panel is restored through the same forced fresh scan PageDown runs.
+ */
 export function dismissMayhemAugmentPanelFromHotkey(): void {
-    if (!isMayhemMatchActive()) return;
-    mayhemUserDismissedUntilMs = Date.now() + 120_000;
-    mayhemAugmentDismissedAt = Date.now();
+    // Any ARAM-family game with a panel on screen owns PageUp: a manual
+    // PageDown scan can show offers in classic ARAM too. Clearing the panel
+    // never enables automatic Mayhem or latches the classic queue.
+    const route = {
+        inGame,
+        hasPayload: !!lastGoodPayload,
+        aramFamily: isAramFamilyMatchActive(),
+        panelShown: mayhemAugmentHudShouldShow(),
+    };
+    // `panel-shown`/`panel-hidden` are the two answers that mean "this key owns
+    // the panel"; anything else is outside the ARAM-family game.
+    const gateReason = mayhemDismissRouteReason(route);
+    if (gateReason !== 'panel-shown' && gateReason !== 'panel-hidden') {
+        logMayhemHotkeyRoute({ key: 'PageUp', routed: false, reason: gateReason });
+        return;
+    }
+    const now = Date.now();
+    const decision = decideMayhemPageUp({
+        panelVisible: route.panelShown,
+        dismissed: now < mayhemUserDismissedUntilMs,
+        scanInFlight: mayhemHotkeyRestoreInFlight > 0,
+    });
+    if (decision.action === 'restore') {
+        logMayhemHotkeyRoute({
+            key: 'PageUp',
+            routed: true,
+            action: 'restore',
+            reason: decision.reason,
+        });
+        void restoreMayhemAugmentPanelFromHotkey('PageUp');
+        return;
+    }
+    logMayhemHotkeyRoute({
+        key: 'PageUp',
+        routed: true,
+        action: 'dismiss',
+        reason: decision.reason,
+    });
+    mayhemUserDismissedUntilMs = now + 120_000;
+    mayhemAugmentDismissedAt = now;
     mayhemManualScanUntilMs = 0;
     purgeMayhemOffersFromScreen();
     pushMayhemOverlayPatch();
     notifyMayhemOverlayStateChanged();
 }
 
+/** PageUp has something to dismiss: a live ARAM-family game with a shown panel. */
+export function canDismissMayhemPanel(input: {
+    inGame: boolean;
+    hasPayload: boolean;
+    aramFamily: boolean;
+    panelShown: boolean;
+}): boolean {
+    return input.inGame && input.hasPayload && input.aramFamily && input.panelShown;
+}
+
 /** PageDown in Mayhem: force one screen capture + Windows OCR for augment cards. */
 export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
-    if (!inGame || !lastGoodPayload) return;
-    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
+    await restoreMayhemAugmentPanelFromHotkey('PageDown');
+}
+
+/**
+ * The one restore path, shared by PageDown (always) and PageUp (when the panel
+ * is dismissed or hidden). Clearing the dismissal happens before the capture
+ * await, the epoch is bumped on both sides of it, and a non-fresh read is never
+ * written over the roll — so PageDown and the PageUp toggle cannot drift apart.
+ */
+async function restoreMayhemAugmentPanelFromHotkey(key: MayhemHotkeyKey): Promise<void> {
+    if (!inGame) {
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'not-in-game' });
+        return;
+    }
+    if (!lastGoodPayload) {
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'no-payload' });
+        return;
+    }
+    const signals = currentMayhemSignals();
+    // Manual scan is allowed in any ARAM-family game, including an unknown
+    // queue. Only an unknown queue may be classified from it; classic ARAM 450
+    // must stay ARAM even when cards are on screen.
+    const aramFamily = isAramOrMayhem(signals.gameMode, signals.mapName, {
+        queueId: signals.queueId,
+        mapId: signals.mapId,
+        augmentOffersDetected: false,
+    });
+    const mode = currentMayhemMode();
+    // What this gate guarantees: whenever `currentMayhemMode()` classifies the
+    // match Mayhem or `mayhem-likely` (unknown-queue Howling Abyss), a roll of
+    // cards the bundle does not know still displays its titled rows — on patch
+    // day every card can be newer than the bundle, and the mode used to latch
+    // only from a frame that displayed rows, so the panel stayed blank all
+    // match. A match classified `aram` (a classic queue id, e.g. 450) is not
+    // widened: it shows nothing until the bundle knows at least one offered id.
+    // The display-only junk risk is bounded the same way in both cases:
+    // placeholders never evict a 1–2 row known roll, never latch discovery,
+    // never move the pick counter and never arm the fast poll.
+    const modeMayhem = isMayhemMode(mode);
+    if (!modeMayhem && !aramFamily) {
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'not-aram-family' });
+        return;
+    }
+    // Clear the dismissal before the capture await: a restore that is refused
+    // as non-fresh must still let the next scan show the roll.
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
+    // Every press gets an immediate, visible status change before any await.
+    mayhemManualRestoreActive = true;
+    pushMayhemManualFeedback('Scanning…');
     const bundle = loadMayhemBundle();
-    if (!bundle?.augments?.length) return;
+    if (!bundle?.augments?.length) {
+        logMayhemHotkeyRoute({ key, routed: false, reason: 'no-bundle' });
+        mayhemManualRestoreActive = false;
+        pushMayhemManualFeedback('retrying…');
+        return;
+    }
+    // The player asked for this roll: invalidate any auto scan that started
+    // before the keypress, so its tick cannot commit over the manual roll below.
+    mayhemMonitorEpoch += 1;
     resetMayhemOcrCache();
-    const ids = await detectMayhemOfferIds(
-        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
-        0,
-        { minMatches: 1 }
-    );
+    let read: Awaited<ReturnType<typeof detectMayhemOffers>>;
+    mayhemHotkeyRestoreInFlight += 1;
+    try {
+        read = await detectMayhemOffers(
+            bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+            0,
+            { minMatches: 1, mayhemMatch: modeMayhem, forcedManual: true, readScreen: mayhemVerifyReader }
+        );
+    } finally {
+        mayhemHotkeyRestoreInFlight -= 1;
+    }
+    mayhemManualRestoreActive = false;
+    // This pass just released the OCR slot: run any press that was queued while
+    // it was held (possibly by a different key press during this scan).
+    flushPendingMayhemManual();
+    const ids = read.ids;
+    logMayhemHotkeyRoute({
+        key,
+        routed: true,
+        reason: !read.fresh
+            ? read.refusal === 'in-flight'
+                ? 'scan-in-flight'
+                : read.refusal === 'unsupported'
+                  ? 'ocr-unsupported'
+                  : 'ocr-throttled'
+            : !read.valid
+              ? 'ocr-invalid'
+              : `offers:${ids.length}`,
+    });
+    // A non-fresh read means NO OCR ran on this call (an automatic scan's
+    // capture was already in flight, or a second hotkey press raced the first),
+    // never that the roll is empty. The reset above left the cached ids empty,
+    // so writing them here would purge the panel the player is looking at — the
+    // recovery key must not destroy it.
+    if (!read.fresh) {
+        // The press still counts: queue one forced scan to run as soon as the
+        // capture that holds the slot settles, and show the retry status now.
+        if (read.refusal === 'in-flight') {
+            noteMayhemManualPressInFlight();
+            pushMayhemManualFeedback('scan-in-flight, retrying…');
+        } else {
+            pushMayhemManualFeedback('retrying…');
+        }
+        return;
+    }
+    // A preview (one card awaiting a second read) and an unverified frame are
+    // NOT authoritative. Neither may replace a verified roll, latch discovery,
+    // start a pick session, count a pick, arm the fast poll or evict a roll.
+    if (read.decision !== 'accept') {
+        mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, read, mayhemOfferIds.length > 0);
+        pushMayhemManualFeedback(read.decision === 'preview' ? 'preview · retrying…' : 'retrying…');
+        return;
+    }
+    mayhemUnverified = false;
+    // Again after the await: an auto tick that started while the manual capture
+    // ran holds a pre-manual clone and must be refused too, before this write.
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = ids;
+    mayhemMonitorState.displayIds = [...ids];
+    mayhemMonitorState.fuzzyScore = read.fuzzyScore;
+    // A manual scan is a fresh authoritative frame: drop any pending auto
+    // candidate so it cannot overwrite the manual roll.
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
+    noteMayhemManualScan(mayhemMonitorState, signals, read);
     if (ids.length >= 1) {
         mayhemManualScanUntilMs = Date.now() + 60_000;
         setMayhemRollIds(ids);
@@ -189,8 +871,7 @@ export async function triggerManualMayhemOcrFromHotkey(): Promise<void> {
         mayhemManualScanUntilMs = 0;
     }
     applyMayhemOfferVisibilityAfterOcr();
-    pushMayhemOverlayPatch();
-    notifyMayhemOverlayStateChanged();
+    pushMayhemManualFeedback(`offers:${ids.length}`);
 }
 
 /** Diagnostics for the performance panel. */
@@ -199,12 +880,14 @@ export function getMonitorStats(): {
     livePollMs: number | null;
     liveReads: number;
     lastEndReason: string | null;
+    latency: Record<string, LatencySummary>;
 } {
     return {
         inGame,
         livePollMs: liveTimer ? currentPollMs : null,
         liveReads: liveReadsTotal,
         lastEndReason: lastMatchEndReason,
+        latency: getLatencySummary(),
     };
 }
 
@@ -217,9 +900,60 @@ export function setMatchStartHotkeyHandler(handler: (() => void) | null): void {
     onMatchStartHotkeys = handler;
 }
 
+/**
+ * Remember the champion you locked in. `localPlayerCellId` links the session to
+ * your row; with no pick yet the slot is 0 and the previous value is dropped so
+ * a stale champion cannot color the next load.
+ */
+function rememberChampSelectSelf(
+    myTeam:
+        | Array<{
+              cellId?: number;
+              championId?: number;
+              championName?: string;
+              summonerId?: number;
+              puuid?: string;
+          }>
+        | undefined,
+    localPlayerCellId: number | undefined
+): void {
+    if (!Array.isArray(myTeam)) return;
+    const locked = myTeam.filter(
+        (member) => !!member && typeof member.championId === 'number' && member.championId > 0
+    );
+    if (locked.length === 0) {
+        lastChampSelectSelf = null;
+        champSelectSlot = null;
+        return;
+    }
+    const self =
+        typeof localPlayerCellId === 'number' && localPlayerCellId >= 0
+            ? locked.find((member) => member.cellId === localPlayerCellId)
+            : locked.length === 1
+              ? locked[0]
+              : undefined;
+    if (!self?.championId) return;
+    lastChampSelectSelf = { championId: self.championId, championName: self.championName };
+    // Your slot inside your own team, ordered by cellId exactly as the client
+    // numbers it. The side only exists in the gameflow session, so this is a
+    // fallback the overlay never places from on its own.
+    champSelectSlot = loadingSlotFromChampSelect(myTeam, localPlayerCellId);
+    // Champ select already carries the identity the reconnect path needs, so
+    // the gameflow-session read never has to fetch it separately.
+    if (typeof self.summonerId === 'number' || self.puuid) rememberLocalSummoner(self);
+}
+
 function ingestChampSelectSession(session: unknown): void {
     if (!session || typeof session !== 'object') return;
-    const theirTeam = (session as {
+    const typed = session as {
+        localPlayerCellId?: number;
+        myTeam?: Array<{
+            cellId?: number;
+            championId?: number;
+            championName?: string;
+            summonerId?: number;
+            puuid?: string;
+        }>;
         theirTeam?: Array<{
             championId?: number;
             championName?: string;
@@ -229,7 +963,14 @@ function ingestChampSelectSession(session: unknown): void {
             spell1Id?: number;
             spell2Id?: number;
         }>;
-    }).theirTeam;
+    };
+    rememberChampSelectSelf(typed.myTeam, typed.localPlayerCellId);
+    // One summaries-only prefetch per champ select; the loading path only reads it.
+    if (lastChampSelectSelf) {
+        prefetchHistoryForChampSelect();
+        applyChampSelectChampionToLoading();
+    }
+    const theirTeam = typed.theirTeam;
     if (!Array.isArray(theirTeam)) return;
 
     const enemies: CachedEnemy[] = [];
@@ -253,7 +994,7 @@ function ingestChampSelectSession(session: unknown): void {
         const fp = `pre:${summonerFingerprint()}`;
         if (fp !== lastOverlayFingerprint) {
             lastOverlayFingerprint = fp;
-            sendOverlayUpdate({
+            sendFullOverlayUpdate({
                 inGame: false,
                 enemyBotSummoners: summons,
                 cachedChampSelectEnemies: lastChampSelectEnemies,
@@ -291,8 +1032,97 @@ function profileHintFromLive(championName: string | undefined, position?: string
     return `generic:${championId}:${role}`;
 }
 
+/** Display-ready `enemies` row as it appears on the HUD payload. */
+type PayloadEnemy = {
+    championName: string | undefined;
+    level: number | undefined;
+    position: string | undefined;
+    isDead: boolean | undefined;
+    items: string[];
+    /** Item gold (full shop prices, consumables excluded) for the gold lead. */
+    itemGold: number;
+    scores: LiveClientPlayer['scores'];
+    summonerSpells: LiveClientPlayer['summonerSpells'];
+    respawnTimer: number;
+};
+
+/**
+ * Item gold as the scoreboard overlays compute it: the full shop price of every
+ * held item, consumables and free trinkets excluded. The Live Client reports the
+ * price on each item row, so no catalog lookup or memory read is needed.
+ */
+function playerItemGold(player: LiveClientPlayer | null | undefined): number {
+    if (!player?.items?.length) return 0;
+    let total = 0;
+    for (const item of player.items) {
+        if (!item || item.consumable === true) continue;
+        if (!item.itemID || item.itemID <= 0) continue;
+        const price = typeof item.price === 'number' && Number.isFinite(item.price) ? item.price : 0;
+        if (price <= 0) continue;
+        const count =
+            typeof item.count === 'number' && Number.isFinite(item.count) && item.count > 0
+                ? Math.floor(item.count)
+                : 1;
+        total += price * count;
+    }
+    return total;
+}
+
+/** Cheap signature of one enemy player — covers every field the HUD enemy row reads. */
+function enemyPlayerSignature(p: LiveClientPlayer): string {
+    const respawn =
+        typeof p.respawnTimer === 'number' && Number.isFinite(p.respawnTimer) && p.respawnTimer > 0
+            ? Math.ceil(p.respawnTimer)
+            : 0;
+    const scores = p.scores
+        ? `${p.scores.kills ?? 0}:${p.scores.deaths ?? 0}:${p.scores.assists ?? 0}:${p.scores.creepScore ?? 0}:${p.scores.wardScore ?? 0}`
+        : '0:0:0:0:0';
+    const spells = p.summonerSpells
+        ? `${p.summonerSpells.summonerSpellOne?.displayName ?? ''}|${p.summonerSpells.summonerSpellTwo?.displayName ?? ''}`
+        : '';
+    return [
+        p.championName || '',
+        p.level ?? 0,
+        p.position || '',
+        p.isDead ? 1 : 0,
+        (p.items || []).map((i) => `${i.itemID ?? ''}:${i.displayName ?? ''}:${i.count ?? 1}`).join(','),
+        scores,
+        spells,
+        respawn,
+    ].join('~');
+}
+
+/**
+ * Reuse the previous `enemies` array when the enemy players did not change.
+ * The mapping is pure, so the cached array is exactly what a fresh map would
+ * produce — title (and memory churn) is what changes, not behavior.
+ */
+function mapEnemies(enemyPlayers: LiveClientPlayer[]): PayloadEnemy[] {
+    const signature = enemyPlayers.map(enemyPlayerSignature).join('|');
+    if (lastMappedEnemies && lastEnemySignature === signature) return lastMappedEnemies;
+    const enemies = enemyPlayers.map((p) => ({
+        championName: p.championName,
+        level: p.level,
+        position: p.position,
+        isDead: p.isDead,
+        items: p.items?.map((i) => i.displayName) || [],
+        itemGold: playerItemGold(p),
+        scores: p.scores,
+        summonerSpells: p.summonerSpells,
+        respawnTimer:
+            typeof p.respawnTimer === 'number' && Number.isFinite(p.respawnTimer) && p.respawnTimer > 0
+                ? Math.ceil(p.respawnTimer)
+                : 0,
+    }));
+    lastEnemySignature = signature;
+    lastMappedEnemies = enemies;
+    return enemies;
+}
+
 function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: string | null) {
     const localPlayer = live ? findLocalPlayer(live) : null;
+    const liveGold = live?.activePlayer?.currentGold;
+    const currentGold = typeof liveGold === 'number' && Number.isFinite(liveGold) ? liveGold : null;
     const localName = (localPlayer?.championName || '').toLowerCase().replace(/[^a-z]/g, '');
     const isPyke = localPlayer ? localName === 'pyke' : true;
     const isYone = localPlayer ? localName === 'yone' : false;
@@ -309,19 +1139,10 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
 
     const enemyPlayers =
         live?.allPlayers?.filter((p) => localPlayer && p.team !== localPlayer.team) || [];
-
-    const enemies = enemyPlayers.map((p) => ({
-        championName: p.championName,
-        level: p.level,
-        position: p.position,
-        isDead: p.isDead,
-        items: p.items?.map((i) => i.displayName) || [],
-        scores: p.scores,
-        summonerSpells: p.summonerSpells,
-    }));
-
-    const aramMatch = isAramOrMayhem(live?.gameData?.gameMode, live?.gameData?.mapName);
-    if (isMayhemGame(live?.gameData?.gameMode, live?.gameData?.mapName) && live) {
+    const enemies = mapEnemies(enemyPlayers);
+    const mayhemMode = mayhemModeForLive(live);
+    const aramMatch = mayhemMode !== 'other';
+    if (shouldSyncMayhemPickPhase(mayhemMode) && live) {
         syncMayhemPickPhase(live);
     }
     // Lane-based enemy sum tracking is SR-only (ADC/mid bot lane model).
@@ -371,13 +1192,41 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
             level: p.level,
             position: p.position,
             isDead: p.isDead,
+            itemGold: playerItemGold(p),
         })) || [];
 
+    const gameTime = live?.gameData?.gameTime ?? 0;
+    const loading = isMatchLoading({
+        phase: gameflowPhase,
+        gameTime,
+        trustedGameTime,
+        matchEngaged: true,
+    });
+    // Champ-select pick for this game. The numeric key drives the accent and
+    // the match list; only trust it when the name still matches the live
+    // champion (a stale pick must never recolor an unknown board).
+    const champSelectChampionId = ((): number | null => {
+        if (!lastChampSelectSelf) return null;
+        const compact = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const live = compact(localPlayer?.championName || '');
+        const picked = compact(lastChampSelectSelf.championName || '');
+        if (live && picked && live !== picked) return null;
+        return lastChampSelectSelf.championId;
+    })();
     const payload = {
-        inGame: true,
+        inGame: !loading,
+        loading,
         gameflowPhase,
+        championId: champSelectChampionId,
         gameMode: live?.gameData?.gameMode || null,
-        gameTime: live?.gameData?.gameTime ?? 0,
+        gameTime,
+        trustedGameTime,
+        // Captured at load entry from the gameflow session, kept all match for
+        // the steps that branch on the exact queue (Step H).
+        queueId: matchQueueId,
+        mapId: matchMapId,
+        objectiveTimers: getObjectiveTimers() ?? undefined,
+        pet: settingsForTick().pet,
         mapName: live?.gameData?.mapName || null,
         localPlayer: localPlayer
             ? {
@@ -385,9 +1234,10 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
                   level: localPlayer.level,
                   isDead: localPlayer.isDead,
                   items: localPlayer.items || [],
+                  itemGold: playerItemGold(localPlayer),
                   scores: localPlayer.scores,
                   position: localPlayer.position,
-                  currentGold: live?.activePlayer?.currentGold ?? 0,
+                  currentGold,
                   summonerSpells: localPlayer.summonerSpells,
               }
             : null,
@@ -406,9 +1256,12 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
         })(),
         mayhemOwnedIds: getOwnedMayhemAugmentIds(),
         mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemVerification: mayhemVerificationValue(),
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
+        mayhemOcrHint: mayhemOcrHintValue(),
+        mayhemOcrFeedbackNonce,
         timestamp: Date.now(),
     };
 
@@ -419,29 +1272,40 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
 function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): string {
     const lp = payload.localPlayer;
     const itemKey = (lp?.items || []).map((i) => `${i.itemID}:${i.count}`).join(',');
-    const goldBucket = Math.floor((lp?.currentGold ?? 0) / 50);
+    // 150g + 30s buckets: coarser than the displayed values, so a handful of
+    // ticks with only gold/time drift do not force an IPC + React reconcile.
+    const goldBucket = Math.floor((lp?.currentGold ?? 0) / 150);
     const wardScore = Math.floor(lp?.scores?.wardScore ?? 0);
     // Include CS + items so jungle pathing / threat heuristics actually update.
-    const itemBucket = Math.floor((payload.gameTime || 0) / 12);
+    const itemBucket = Math.floor((payload.gameTime || 0) / 30);
     const enemyKey = (payload.enemies || [])
         .map((e) => {
             const cs = e.scores?.creepScore ?? 0;
             const itemCount = (e.items || []).filter((id) => id && id !== '0').length;
-            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}`;
+            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${e.itemGold ?? 0}:${itemBucket}:${Math.ceil((e.respawnTimer ?? 0) / 10)}`;
         })
         .join('|');
+    // Ally item gold drives the team gold lead; it changes when they shop.
+    const allyGoldKey = (payload.allies || []).map((a) => a.itemGold ?? 0).join(',');
     // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
     // Per-second buckets forced an IPC + full React reconcile every poll.
     const timeBucket = Math.floor((payload.gameTime || 0) / 10);
     return [
         payload.gameflowPhase || '',
         payload.gameMode || '',
+        // A late queue patch changes the mode/routing decision; force a resend
+        // so the overlay sees the queue even when no live stat moved.
+        payload.queueId ?? '',
+        payload.mapId ?? '',
+        payload.mapName || '',
         timeBucket,
         lp?.level ?? 0,
         lp?.isDead ? 1 : 0,
         itemKey,
         goldBucket,
         wardScore,
+        lp?.itemGold ?? 0,
+        allyGoldKey,
         enemyKey,
         payload.isPyke ? 1 : 0,
         payload.profileHint || '',
@@ -450,16 +1314,85 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         (payload.mayhemOfferIds || []).join(','),
         (payload.mayhemOwnedIds || []).join(','),
         payload.mayhemAugmentWindow ? 1 : 0,
+        payload.mayhemVerification || 'verified',
         payload.mayhemPickHint || '',
         payload.mayhemWaitingForDeath ? 1 : 0,
         payload.mayhemAugmentDismissedAt ?? 0,
+        payload.mayhemOcrHint || '',
+        payload.mayhemOcrFeedbackNonce ?? 0,
     ].join('~');
 }
 
 let mayhemOfferIds: string[] = [];
-let mayhemPollTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * The most recent in-game scan could not verify an augment screen from card
+ * geometry. Drives the renderer's persistent "press PageDown to retry" panel;
+ * never set for a preview, which must not disturb a verified roll.
+ */
+let mayhemUnverified = false;
+function mayhemVerificationValue(): 'verified' | 'unverified' {
+    return mayhemUnverified ? 'unverified' : 'verified';
+}
+/** Bumped on every manual press so its hint always changes the overlay fingerprint. */
+let mayhemOcrFeedbackNonce = 0;
+/** Transient manual-scan status shown instead of the idle "Cannot verify" text. */
+let mayhemOcrFeedbackHint: string | undefined;
+/** A settled press with no accept: an explicit prompt, never a claim of running work. */
+const MAYHEM_OCR_UNVERIFIED_OUTCOME = 'Could not verify — press PageDown to retry';
+/** A manual restore is between its Scanning push and its OCR settle. */
+let mayhemManualRestoreActive = false;
+/** Verify seam: an injected reader drives the real hotkey/poll scans without a capture. */
+let mayhemVerifyReader: MayhemScreenReader | undefined;
+/**
+ * The roll that vanished when the pick counter fired. A reroll re-deals the
+ * shop within seconds; a disjoint roll inside the window means that "pick" was
+ * the shop refreshing, so it is taken back (see revertMayhemRerollPick).
+ */
+let mayhemPickVoidRollIds: string[] = [];
+let mayhemPickVoidAtMs = 0;
+/**
+ * The first frame where the cards were gone: the click that closed the screen
+ * happened just before it, so this cursor names the chosen card. The roll is
+ * copied here because the display ids are purged as soon as the pick counts.
+ */
+let mayhemVanish: { cursor: MayhemCardCursor | null; rollIds: string[] } | null = null;
+/** The augment attributed to the last counted pick, so a reroll can take it back. */
+let mayhemPickedAugmentId: string | null = null;
+/** One bounded shape log per match: does the Live Client expose augments at all? */
+let mayhemLiveAugmentShapeLogged = false;
+/**
+ * Memoized payload `enemies` list: built once per enemy-list signature so a
+ * tick whose enemies did not change reuses the previous array instead of
+ * rebuilding it (and the objects inside it) every poll.
+ */
+let lastEnemySignature = '';
+let lastMappedEnemies: PayloadEnemy[] | null = null;
+/** Last time tickPlayMoments / tickCoachCues / clip planning actually ran. */
+let lastPlayMomentsAt = 0;
+/** Cue ids+labels the HUD last received from a warm (non-fingerprint) push. */
+let lastSentMomentCueContent = '';
+/** Moment-engine runs ride payload sends; this floor also keeps a quiet match warm. */
+const PLAY_MOMENTS_MIN_INTERVAL_MS = 2000;
+
+/**
+ * The match's OCR poll chain. The next poll is armed before a scan is awaited
+ * (see createMayhemPollChain), so a hung capture/OCR can never stop the chain.
+ */
+const mayhemPoll = createMayhemPollChain({
+    runTick: () => tickMayhemOcr(),
+    nextDelayMs: () => nextMayhemPollDelayMs(),
+    isLive: () => inGame,
+    onTickError: (error) => overlayLog('ocr-poll-error', { message: String(error) }),
+});
+/** The one Mayhem poll session of this match (later discovery bursts reuse it). */
+let mayhemPollStartedThisMatch = false;
 let mayhemBurstUntilMs = 0;
 let mayhemLastLevel = 0;
+/**
+ * Highest augment level (3/7/11/15) that already spent the auto-OCR re-arm
+ * after the pick-level gate closed. Null before the first closed gate.
+ */
+let mayhemAutoOcrRearmLevel: number | null = null;
 let mayhemPickPhase: MayhemPickPhase = {
     pickWindowOpen: false,
     waitingForDeath: false,
@@ -476,9 +1409,147 @@ let mayhemPicksAtWindowOpen = 0;
 let mayhemPickSessionActive = false;
 /** Page Down with a single OCR hit — allow HUD until timeout or off-screen OCR. */
 let mayhemManualScanUntilMs = 0;
-/** Page Up dismiss — pause auto OCR until next pick window or Page Down. */
+/** Page Up dismiss — pause auto OCR until next pick window or a restore (Page Down / Page Up). */
 let mayhemUserDismissedUntilMs = 0;
 let mayhemAugmentDismissedAt = 0;
+/** Restore scans (PageUp/PageDown) still awaiting capture/OCR. */
+let mayhemHotkeyRestoreInFlight = 0;
+/** Live Client owned augment ids for this match (ground truth when it exposes them). */
+let mayhemLiveAugmentIds: string[] = [];
+/** Consecutive fresh OCR scans that read at least one offer (single-card HUD gate). */
+let mayhemOfferScanStreak = 0;
+let mayhemOfferFuzzyScore = 0;
+/**
+ * Decision state for this match: pick counter, scan streaks, retained display
+ * ids and the bounded-discovery latch. The pure engine in
+ * src/logic/mayhem/monitor.ts drives it; the fields below are mirrors the rest
+ * of this module reads.
+ */
+let mayhemMonitorState: MayhemMonitorState = createMayhemMonitorState();
+/**
+ * Bumped whenever the engine's display mirror is cleared out of band (a pick, a
+ * dismissal, a match reset) or replaced by an authoritative manual PageDown
+ * scan. A scan clones its state before the slow OCR await; a clone from before
+ * a purge still holds the roll the player just picked (or a manual scan wrote
+ * over), so a finished tick only writes back while this count is unchanged.
+ */
+let mayhemMonitorEpoch = 0;
+
+export interface MayhemScanTicket {
+    /** The engine object the scan started on (identity guards a replaced state). */
+    state: MayhemMonitorState;
+    /** Purge/clear count when the scan started. */
+    epoch: number;
+}
+
+/** Epoch of the display mirror: a purge/clear or a manual scan advances it. */
+export function getMayhemMonitorEpoch(): number {
+    return mayhemMonitorEpoch;
+}
+
+/** Snapshot the engine right before the (slow) capture/OCR await. */
+export function beginMayhemScanTicket(state: MayhemMonitorState): MayhemScanTicket {
+    // The epoch is read here, not by the caller: a ticket whose epoch cannot
+    // disagree with the module by construction cannot be built wrong.
+    return { state, epoch: mayhemMonitorEpoch };
+}
+
+/**
+ * Fold a finished scan into the live engine only when nothing purged or
+ * replaced it while the scan was in flight. A stale result would re-show a roll
+ * the player already picked (its cloned displayIds predate the purge).
+ */
+export function commitMayhemMonitorScan(
+    ticket: MayhemScanTicket,
+    live: { state: MayhemMonitorState; epoch: number },
+    result: MayhemMonitorResult
+): { applied: boolean; state: MayhemMonitorState; displayIds: string[] } {
+    if (ticket.state !== live.state || ticket.epoch !== live.epoch) {
+        return { applied: false, state: live.state, displayIds: [...live.state.displayIds] };
+    }
+    return { applied: true, state: result.state, displayIds: [...result.state.displayIds] };
+}
+
+/** Last `mode-detect` line written this match (dedupe: one line per signal set). */
+let lastModeDetectKey = '';
+
+function mayhemOffersDetected(): boolean {
+    // Latched discovery wins even after a blank scan cleared the display ids:
+    // an unknown-queue game that showed augments stays Mayhem for the match.
+    return (
+        mayhemMonitorState.discovery.latched ||
+        mergedMayhemOfferIds(mayhemOfferIds).length >= 2
+    );
+}
+
+/** One `mode-detect` line per distinct signal set, to overlay.log. */
+function logModeResult(signals: MayhemModeSignals, mode: MayhemMode): MayhemMode {
+    const key = [
+        signals.gameMode ?? '',
+        signals.mapName ?? '',
+        signals.queueId ?? '',
+        signals.mapId ?? '',
+        signals.augmentOffersDetected ? 1 : 0,
+        mode,
+    ].join('|');
+    if (key !== lastModeDetectKey) {
+        lastModeDetectKey = key;
+        overlayLog('mode-detect', {
+            gameMode: signals.gameMode ?? 'unknown',
+            mapName: signals.mapName ?? 'unknown',
+            queueId: signals.queueId ?? 'unknown',
+            mapId: signals.mapId ?? 'unknown',
+            result: mode,
+        });
+    }
+    return mode;
+}
+
+/** One `mode-detect` line per distinct signal set, to overlay.log. */
+function logModeDetect(signals: MayhemModeSignals): MayhemMode {
+    return logModeResult(signals, detectMayhemMode(signals));
+}
+
+function mayhemModeForLive(live: LiveClientAllGameData | null): MayhemMode {
+    return logModeDetect({
+        gameMode: live?.gameData?.gameMode ?? null,
+        mapName: live?.gameData?.mapName ?? null,
+        queueId: matchQueueId,
+        mapId: matchMapId,
+        augmentOffersDetected: mayhemOffersDetected(),
+    });
+}
+
+function currentMayhemSignals(): MayhemModeSignals {
+    return {
+        gameMode: lastGoodPayload?.gameMode ?? null,
+        mapName: lastGoodPayload?.mapName ?? null,
+        queueId: matchQueueId ?? lastGoodPayload?.queueId ?? null,
+        mapId: matchMapId ?? lastGoodPayload?.mapId ?? null,
+        augmentOffersDetected: mayhemOffersDetected(),
+    };
+}
+
+/**
+ * The mode game-monitor routes on.
+ *
+ * mode.ts keeps its own precedence - a classic queue id (450/100) is `aram`
+ * even when augments were seen - and that must not change. But once this
+ * match's discovery latch is set the game IS Mayhem, so the routing answer is
+ * `mayhem` for the rest of the game; otherwise a queue-450 Mayhem game falls
+ * back to `aram` after a pick purges the offers and the poll stops for good.
+ */
+export function mayhemModeForRouting(
+    state: MayhemMonitorState,
+    signals: MayhemModeSignals
+): MayhemMode {
+    return mayhemMonitorMode(state, signals);
+}
+
+function currentMayhemMode(): MayhemMode {
+    const signals = currentMayhemSignals();
+    return logModeResult(signals, mayhemModeForRouting(mayhemMonitorState, signals));
+}
 
 function mayhemManualScanActive(): boolean {
     return Date.now() < mayhemManualScanUntilMs;
@@ -486,12 +1557,96 @@ function mayhemManualScanActive(): boolean {
 
 function mayhemAugmentHudShouldShow(): boolean {
     const merged = mergedMayhemOfferIds(mayhemOfferIds);
-    return isMayhemAugmentHudVisible(merged, mayhemManualScanActive());
+    return isMayhemAugmentHudVisible(merged, mayhemManualScanActive(), {
+        consecutiveScans: mayhemOfferScanStreak,
+        fuzzyScore: mayhemOfferFuzzyScore,
+    });
+}
+
+/**
+ * Fold Live Client owned augments into the persisted list when the game
+ * exposes them. Arena does; Mayhem may not, which is why the click path above
+ * exists as well. Either source is authoritative for the total.
+ */
+function syncMayhemOwnedFromLive(ids: string[]): void {
+    if (!ids.length) return;
+    const owned = getOwnedMayhemAugmentIds();
+    const merged = [...owned];
+    for (const id of ids) {
+        if (id && !merged.includes(id)) merged.push(id);
+    }
+    if (merged.length === owned.length) return;
+    setOwnedMayhemAugmentIds(merged.slice(0, 5));
+    setMayhemPicksTaken(Math.max(getMayhemPicksTaken(), merged.length));
+    overlayLog('mayhem-live-owned', { count: merged.length });
+}
+
+/**
+ * The offer screen closed. Name the card under the cursor that selected it and
+ * remember it as owned; when the cursor is not on a card the pick is still
+ * counted, but no augment is invented.
+ */
+function recordMayhemPickedAugment(rollIds: string[], cursor: MayhemCardCursor | null): void {
+    const picked = pickedMayhemAugment(rollIds, cursor);
+    overlayLog('mayhem-augment-pick', {
+        roll: rollIds.join(','),
+        cursor: cursor ? `${cursor.x},${cursor.y}` : 'none',
+        slot: picked?.index ?? null,
+        id: picked?.id ?? null,
+        source: picked ? 'cursor' : 'unknown',
+    });
+    if (!picked || isUnknownMayhemAugmentId(picked.id)) {
+        mayhemPickedAugmentId = null;
+        return;
+    }
+    mayhemPickedAugmentId = picked.id;
+    const owned = getOwnedMayhemAugmentIds();
+    if (!owned.includes(picked.id)) {
+        setOwnedMayhemAugmentIds([...owned, picked.id]);
+        setMayhemPicksTaken(
+            Math.max(getMayhemPicksTaken(), owned.length + 1, mayhemMonitorState.counter.picksTaken)
+        );
+    }
+}
+
+/** One bounded shape log per match, so a missing augment feed is diagnosable. */
+function logMayhemLiveAugmentShape(
+    live: LiveClientAllGameData,
+    local: LiveClientPlayer | null
+): void {
+    if (mayhemLiveAugmentShapeLogged) return;
+    if (!isMayhemMode(mayhemModeForLive(live))) return;
+    mayhemLiveAugmentShapeLogged = true;
+    const events = live.events?.Events ?? [];
+    const active = live.activePlayer as unknown as Record<string, unknown>;
+    const player = local as unknown as Record<string, unknown> | null;
+    overlayLog('mayhem-live-shape', {
+        activeKeys: Object.keys(active || {}).sort().join(','),
+        playerKeys: player ? Object.keys(player).sort().join(',') : '',
+        hasActiveAugments: Array.isArray(active?.augments),
+        hasPlayerAugments: player ? Array.isArray(player.augments) : false,
+        eventNames: [...new Set(events.map((e) => e.EventName || '').filter(Boolean))]
+            .slice(0, 24)
+            .join(','),
+    });
 }
 
 function clearMayhemLiveOffers(): void {
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
+    mayhemUnverified = false;
+    mayhemVanish = null;
+    mayhemPickedAugmentId = null;
     setMayhemRollIds([]);
+    // Drop the engine's display mirror too: a throttled (non-fresh) scan must
+    // not resurrect the roll the HUD just cleared.
+    mayhemMonitorState.displayIds = [];
+    mayhemMonitorState.scanStreak = 0;
+    mayhemMonitorState.fuzzyScore = 0;
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
     resetMayhemOcrCache();
 }
 
@@ -507,9 +1662,18 @@ function endMayhemPickSession(): void {
 }
 
 function purgeMayhemOffersFromScreen(): void {
+    mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
+    mayhemVanish = null;
     setMayhemRollIds([]);
     mayhemManualScanUntilMs = 0;
+    mayhemMonitorState.displayIds = [];
+    mayhemMonitorState.scanStreak = 0;
+    mayhemMonitorState.fuzzyScore = 0;
+    mayhemMonitorState.candidateIds = [];
+    mayhemMonitorState.candidateScans = 0;
+    mayhemOfferScanStreak = 0;
+    mayhemOfferFuzzyScore = 0;
     if (mayhemPickSessionActive) {
         endMayhemPickSession();
     } else {
@@ -528,12 +1692,14 @@ function applyMayhemOfferVisibilityAfterOcr(): void {
 
 function shouldRunMayhemAutoOcr(level: number): boolean {
     if (Date.now() < mayhemUserDismissedUntilMs) return false;
-    const ownedCount = mayhemPicksResolved(level);
-    const nextPick = nextMayhemPickLevel(ownedCount);
-    if (nextPick == null) return false;
-    if (level >= nextPick) return true;
-    if (mayhemAugmentHudShouldShow()) return true;
-    return false;
+    const gate = mayhemAutoOcrGate({
+        level,
+        ownedCount: mayhemPicksResolved(level),
+        hudVisible: mayhemAugmentHudShouldShow(),
+        rearmedAtLevel: mayhemAutoOcrRearmLevel,
+    });
+    mayhemAutoOcrRearmLevel = gate.rearmedAtLevel;
+    return gate.wanted;
 }
 
 function mayhemPicksResolved(level: number): number {
@@ -542,7 +1708,7 @@ function mayhemPicksResolved(level: number): number {
 
 function syncMayhemPickPhase(live: LiveClientAllGameData): void {
     const localPlayer = findLocalPlayer(live);
-    const level = localPlayer?.level ?? live.activePlayer?.level ?? 1;
+    const level = localPlayer?.level ?? live.activePlayer?.level ?? 0;
     const isDead = !!localPlayer?.isDead;
     const ownedCount = mayhemPicksResolved(level);
     const prevOpen = mayhemPickPhase.pickWindowOpen;
@@ -571,8 +1737,16 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
         mayhemAugmentDismissedAt = 0;
     }
     mayhemWasDead = isDead;
+    // Live Client owned augments are authoritative when the game exposes them.
+    // Arena carries them on the active player; check the player row too, since
+    // a Mayhem build may expose them there instead.
+    mayhemLiveAugmentIds = readLiveAugmentIds(live.activePlayer);
+    const playerAugments = readLiveAugmentIds(localPlayer);
+    if (playerAugments.length) mayhemLiveAugmentIds = playerAugments;
+    logMayhemLiveAugmentShape(live, localPlayer ?? null);
+    syncMayhemOwnedFromLive(mayhemLiveAugmentIds);
     const events = live.events?.Events;
-    if (events?.length && isMayhemGame(live.gameData?.gameMode, live.gameData?.mapName)) {
+    if (events?.length && isMayhemMode(mayhemModeForLive(live))) {
         const start = events.length + 8 < mayhemEventScanFrom ? 0 : Math.max(0, mayhemEventScanFrom - 4);
         let maxId = mayhemLastEventScanId;
         for (let i = start; i < events.length; i++) {
@@ -593,7 +1767,7 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
 function syncMayhemPickPhaseFromPayload(): void {
     if (!lastGoodPayload) return;
     const lp = lastGoodPayload.localPlayer;
-    const level = lp?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const level = lp?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     const isDead = !!lp?.isDead;
 
     const ownedCount = mayhemPicksResolved(level);
@@ -626,27 +1800,23 @@ function syncMayhemPickPhaseFromPayload(): void {
 }
 
 function stopMayhemPoll(): void {
-    if (mayhemPollTimer) {
-        clearTimeout(mayhemPollTimer);
-        mayhemPollTimer = null;
-    }
+    mayhemPoll.stop();
 }
 
 function scheduleMayhemPoll(delayMs: number): void {
-    stopMayhemPoll();
-    mayhemPollTimer = setTimeout(() => {
-        void tickMayhemOcr().finally(() => {
-            if (inGame) scheduleMayhemPoll(nextMayhemPollDelayMs());
-        });
-    }, delayMs);
+    mayhemPoll.start(delayMs);
 }
 
 function nextMayhemPollDelayMs(): number {
-    if (!lastGoodPayload || !isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return 15_000;
+    if (!lastGoodPayload) return 15_000;
+    if (!isMayhemMode(currentMayhemMode())) {
+        // Discovery is deliberately slow: one bounded scan per 10 s.
+        return mayhemDiscoveryLive(mayhemMonitorState.discovery, Date.now()) ? 10_000 : 15_000;
+    }
     syncMayhemPickPhaseFromPayload();
     if (mayhemPickPhase.pickWindowOpen) return 900;
     if (mayhemPickPhase.waitingForDeath) return 4000;
-    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     const plan = planMayhemOcr({
         level,
         previousLevel: mayhemLastLevel,
@@ -660,18 +1830,43 @@ function nextMayhemPollDelayMs(): number {
 }
 
 function startMayhemPoll(): void {
+    const firstPoll = !mayhemPollStartedThisMatch;
+    mayhemPollStartedThisMatch = true;
     mayhemLastLevel = 0;
     mayhemBurstUntilMs = 0;
     mayhemWasDead = false;
     mayhemLastEventScanId = 0;
     mayhemEventScanFrom = 0;
     mayhemPicksAtWindowOpen = 0;
-    mayhemPickSessionActive = false;
-    mayhemManualScanUntilMs = 0;
-    mayhemUserDismissedUntilMs = 0;
-    mayhemAugmentDismissedAt = 0;
-    setMayhemOcrRetainOffers(false);
-    resetMayhemMatchState();
+    if (firstPoll) {
+        // A new match resets the monitor engine, but a discovery burst (or a
+        // manual PageDown result) that the live tick just produced keeps its
+        // clock, offers and streak; only the per-match counter restarts.
+        const previous = mayhemMonitorState;
+        mayhemMonitorState = createMayhemMonitorState();
+        mayhemMonitorState.discovery = { ...previous.discovery };
+        mayhemMonitorState.displayIds = [...previous.displayIds];
+        mayhemMonitorState.scanStreak = previous.scanStreak;
+        mayhemMonitorState.fuzzyScore = previous.fuzzyScore;
+        mayhemMonitorState.candidateIds = [...previous.candidateIds];
+        mayhemMonitorState.candidateScans = previous.candidateScans;
+        mayhemPickSessionActive = false;
+        mayhemManualScanUntilMs = 0;
+        mayhemUserDismissedUntilMs = 0;
+        mayhemAugmentDismissedAt = 0;
+        mayhemLiveAugmentIds = [];
+        mayhemPickVoidRollIds = [];
+        mayhemPickVoidAtMs = 0;
+        mayhemAutoOcrRearmLevel = null;
+        resetMayhemOcrMatchFlags();
+        setMayhemOcrRetainOffers(false);
+        resetMayhemMatchState();
+    }
+    // A later discovery burst (level 7/11/15 or a death) reuses the poll
+    // session: the engine's counter, streak and single-offer candidate survive.
+    mayhemOfferScanStreak = mayhemMonitorState.scanStreak;
+    mayhemOfferFuzzyScore = mayhemMonitorState.fuzzyScore;
+    mayhemOfferIds = [...mayhemMonitorState.displayIds];
     mayhemPickPhase = {
         pickWindowOpen: false,
         waitingForDeath: false,
@@ -683,6 +1878,64 @@ function startMayhemPoll(): void {
     scheduleMayhemPoll(1200);
 }
 
+/** The manual-scan status (with its per-press nonce) or the black-frame warning. */
+function mayhemOcrHintValue(): string | undefined {
+    if (!mayhemOcrFeedbackHint) {
+        return mayhemOcrBlackFrameSeen() ? 'Use borderless for augment detection' : undefined;
+    }
+    // "Scanning…"/"retrying…" is only true while a capture is in flight (a
+    // queued press keeps one in flight too). Once it settles the press has
+    // ended, so report its outcome instead of implying retry work is running.
+    const transient =
+        mayhemOcrFeedbackHint === 'Scanning…' || mayhemOcrFeedbackHint.includes('retrying…');
+    const working = isMayhemOcrInFlight() || mayhemManualRestoreActive;
+    const hint = transient && !working ? MAYHEM_OCR_UNVERIFIED_OUTCOME : mayhemOcrFeedbackHint;
+    return `${hint} · #${mayhemOcrFeedbackNonce}`;
+}
+
+/** Force a fresh overlay patch with a visible manual-scan status. */
+function pushMayhemManualFeedback(hint: string): void {
+    mayhemOcrFeedbackNonce += 1;
+    mayhemOcrFeedbackHint = hint;
+    pushMayhemOverlayPatch();
+}
+
+/**
+ * Verify-only harness: prime a live Mayhem match and inject the screen reader
+ * every production detectMayhemOffers call uses. Pass null to restore idle.
+ */
+export function setMayhemHotkeyVerifyHarness(harness: {
+    readScreen: MayhemScreenReader;
+    gameMode?: string;
+    mapName?: string;
+} | null): void {
+    mayhemVerifyReader = harness?.readScreen;
+    if (!harness) return;
+    inGame = true;
+    const payload = buildOverlayPayload(null, null);
+    lastGoodPayload = {
+        ...payload,
+        gameMode: harness.gameMode ?? 'KIWI',
+        mapName: harness.mapName ?? 'Map11',
+    };
+}
+
+/** Run the manual scan a press queued while another capture held the OCR slot. */
+export function flushPendingMayhemManual(
+    runManual: () => void = () => {
+        void triggerManualMayhemOcrFromHotkey();
+    }
+): void {
+    if (!takePendingMayhemManual()) return;
+    if (isMayhemOcrInFlight()) {
+        // The scan that just settled was not the one holding the slot; wait for
+        // the real in-flight pass to finish before retrying.
+        noteMayhemManualPressInFlight();
+        return;
+    }
+    runManual();
+}
+
 function pushMayhemOverlayPatch(): void {
     if (!lastGoodPayload) return;
     const merged = mergedMayhemOfferIds(mayhemOfferIds);
@@ -691,16 +1944,20 @@ function pushMayhemOverlayPatch(): void {
         mayhemOfferIds: merged.length ? merged : undefined,
         mayhemOwnedIds: getOwnedMayhemAugmentIds(),
         mayhemAugmentWindow: mayhemAugmentHudShouldShow(),
+        mayhemVerification: mayhemVerificationValue(),
         mayhemPickHint: mayhemPickPhase.hint,
         mayhemWaitingForDeath: mayhemPickPhase.waitingForDeath,
         mayhemAugmentDismissedAt: mayhemAugmentDismissedAt || undefined,
+        mayhemOcrHint: mayhemOcrHintValue(),
+        mayhemOcrFeedbackNonce,
         timestamp: Date.now(),
     };
     const fp = overlayFingerprint(payload);
     if (fp === lastOverlayFingerprint) return;
     lastGoodPayload = payload;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(payload);
+    // The verify harness counts patches through the nonce; it has no BrowserWindow.
+    if (!mayhemVerifyReader) sendFullOverlayUpdate(payload);
 }
 
 /** Dashboard owned/roll edits — push merged offers without waiting for the next live poll. */
@@ -709,44 +1966,210 @@ export function notifyMayhemOverlayStateChanged(): void {
 }
 
 async function tickMayhemOcr(): Promise<void> {
-    if (!inGame || !lastGoodPayload) return;
-    if (!isMayhemGame(lastGoodPayload.gameMode, lastGoodPayload.mapName)) return;
-    syncMayhemPickPhaseFromPayload();
-    pushMayhemOverlayPatch();
+    // A real in-game Live Client payload is mandatory before any screen read;
+    // `mayhem-likely` alone never opens the camera. Level only throttles cadence.
+    const hasLivePayload = inGame && !!lastGoodPayload;
+    if (!hasLivePayload) return;
+    const signals = currentMayhemSignals();
+    const mode = currentMayhemMode();
+    const active = isMayhemMode(mode);
+    // `active` is `isMayhemMode(mode)`, so `mayhem-likely` (unknown-queue
+    // Howling Abyss) is a Mayhem match for placeholder purposes (see the
+    // hotkey gate): a post-patch roll with no known title must still display.
+    // A match classified `aram` is not widened here: it shows nothing until the
+    // bundle knows at least one offered id. Either way only known ids can latch
+    // discovery or count a pick, so the display risk stays bounded.
+    const now = Date.now();
+    // Any ARAM-family match (Howling Abyss / ARAM gameMode) may run the
+    // bounded discovery path: real Mayhem can report a classic queue id, so
+    // the queue must not veto capture. Classic ARAM simply never reads offers.
+    const discovery =
+        !active &&
+        isMayhemDiscoverySignals(signals) &&
+        mayhemDiscoveryLive(mayhemMonitorState.discovery, now);
+    if (!active && !discovery) return;
 
-    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 1;
+    if (active) {
+        syncMayhemPickPhaseFromPayload();
+        pushMayhemOverlayPatch();
+    }
+
+    const level = lastGoodPayload.localPlayer?.level ?? lastGoodPayload.activePlayerLevel ?? 0;
     mayhemLastLevel = level;
 
     const bundle = loadMayhemBundle();
-    if (!bundle?.augments?.length) return;
-
-    if (!shouldRunMayhemAutoOcr(level)) {
-        if (!mayhemAugmentHudShouldShow()) purgeMayhemOffersFromScreen();
-        pushMayhemOverlayPatch();
+    if (!bundle?.augments?.length) {
+        overlayLog('mayhem-no-bundle', { level, mode, discovery });
+        // No OCR data yet: keep the poll armed and leave the discovery latch
+        // untouched. The bundle can arrive on a later tick; no scan ran here.
         return;
     }
 
-    const onScreen = mayhemAugmentHudShouldShow();
-    setMayhemOcrRetainOffers(onScreen);
-    const rerollPending = isMayhemOcrRerollPending();
-    const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
-    const minGap = onScreen
-        ? rerollPending
-            ? 550
-            : needThirdCard
-              ? 450
-              : mayhemOfferIds.length >= 3
-                ? 1100
-                : 750
-        : 1400;
-    const ids = await detectMayhemOfferIds(
-        bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
-        minGap,
-        { minMatches: 2 }
+    // Computed once: the gate advances the per-level re-arm state, so a second
+    // call in this tick would see a different answer.
+    const autoOcrWanted = active ? shouldRunMayhemAutoOcr(level) : true;
+
+    let minGap = 0;
+    if (active) {
+        if (!autoOcrWanted) {
+            // The pick-level gate only throttles scanning: it must never purge a
+            // roll a scan actually produced. Purging here is what made the panel
+            // vanish for the rest of the match when `nextPick` ran ahead of the
+            // player's level (one over-counted pick). Only an explicit dismissal
+            // or a fresh empty scan may clear a displayed roll.
+            pushMayhemOverlayPatch();
+            return;
+        }
+        const onScreen = mayhemAugmentHudShouldShow();
+        setMayhemOcrRetainOffers(onScreen);
+        const rerollPending = isMayhemOcrRerollPending();
+        const needThirdCard = mayhemOfferIds.length > 0 && mayhemOfferIds.length < 3;
+        minGap = onScreen
+            ? rerollPending
+                ? 550
+                : needThirdCard
+                  ? 450
+                  : mayhemOfferIds.length >= 3
+                    ? 1100
+                    : 750
+            : 1400;
+    } else {
+        setMayhemOcrRetainOffers(false);
+    }
+
+    const scanTicket = beginMayhemScanTicket(mayhemMonitorState);
+    const scan: { read: MayhemOcrRead | null } = { read: null };
+    const result = await runMayhemMonitorScan(
+        mayhemMonitorState,
+        {
+            now,
+            level,
+            isDead: !!lastGoodPayload?.localPlayer?.isDead,
+            signals,
+            liveAugmentIds: mayhemLiveAugmentIds,
+            autoOcrAllowed: active ? autoOcrWanted : true,
+            manualScanActive: mayhemManualScanActive(),
+        },
+        async (minMatches) => {
+            const read = await detectMayhemOffers(
+                bundle.augments as import('../src/logic/mayhem/types').MayhemAugment[],
+                minGap,
+                { minMatches, mayhemMatch: active, readScreen: mayhemVerifyReader }
+            );
+            scan.read = read;
+            return read;
+        }
     );
-    mayhemOfferIds = ids;
-    if (ids.length) setMayhemRollIds(ids);
-    applyMayhemOfferVisibilityAfterOcr();
+    // This scan just released the OCR slot: a PageDown press that arrived while
+    // it ran must not be dropped — run it now as a forced manual scan.
+    flushPendingMayhemManual();
+    // Only a scan that no purge/reset overtook may write back: its cloned state
+    // predates the purge and would re-show the roll the player already picked.
+    const commit = commitMayhemMonitorScan(
+        scanTicket,
+        { state: mayhemMonitorState, epoch: mayhemMonitorEpoch },
+        result
+    );
+    if (!commit.applied) {
+        overlayLog('mayhem-scan-stale', {
+            level,
+            startedEpoch: scanTicket.epoch,
+            currentEpoch: mayhemMonitorEpoch,
+        });
+        pushMayhemOverlayPatch();
+        return;
+    }
+    mayhemMonitorState = commit.state;
+    // Display ids may keep the last roll while the HUD is open; the counter
+    // already used this frame's ids only (frameIds) inside the engine.
+    mayhemOfferIds = commit.displayIds;
+    const read = scan.read;
+    // The first frame where the cards are gone: the click that closed the
+    // selection screen happened just before it, so this cursor names the card.
+    if (read && mayhemOfferIds.length > 0) {
+        const cardsGoneNow =
+            read.fresh &&
+            !read.blackFrame &&
+            read.frameDisplayCount === 0 &&
+            read.ids.length === 0 &&
+            read.cardsVisible !== true;
+        if (cardsGoneNow && !mayhemVanish) {
+            mayhemVanish = { cursor: read.cursor ?? null, rollIds: mayhemOfferIds.slice() };
+            overlayLog('mayhem-cards-gone', {
+                cursor: read.cursor ? `${read.cursor.x},${read.cursor.y}` : 'none',
+                roll: mayhemOfferIds.join(','),
+            });
+        } else if (!cardsGoneNow) {
+            mayhemVanish = null;
+        }
+    }
+    // Only an accepted frame clears the unverified warning; a boxed frame that
+    // could not be verified turns it on when there is no roll to keep showing.
+    if (read) mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, read, mayhemOfferIds.length > 0);
+
+    // A reroll re-deals the roll the empty gap just retired: within the reroll
+    // window a disjoint roll means that gap was the shop refreshing, not a
+    // pick. The counter cannot see ahead; undo its count here, once.
+    if (mayhemPickVoidRollIds.length && Date.now() - mayhemPickVoidAtMs > MAYHEM_REROLL_PICK_WINDOW_MS) {
+        mayhemPickVoidRollIds = [];
+    }
+    if (mayhemPickVoidRollIds.length && mayhemOfferIds.length) {
+        const reroll = revertMayhemRerollPick(
+            mayhemMonitorState.counter,
+            mayhemPickVoidRollIds,
+            mayhemOfferIds,
+            Date.now() - mayhemPickVoidAtMs
+        );
+        if (reroll.reverted) {
+            mayhemMonitorState.counter = reroll.state;
+            setMayhemPicksTaken(reroll.state.picksTaken);
+            mayhemPickPhase = { ...mayhemPickPhase, picksTaken: reroll.state.picksTaken };
+            // The "pick" was the shop re-dealing: take back the augment this
+            // app attributed to it as well, or the owned list drifts upward.
+            if (mayhemPickedAugmentId) {
+                setOwnedMayhemAugmentIds(
+                    getOwnedMayhemAugmentIds().filter((id) => id !== mayhemPickedAugmentId)
+                );
+                mayhemPickedAugmentId = null;
+            }
+            mayhemPickVoidRollIds = [];
+        } else if (mayhemOfferIds.some((id) => mayhemPickVoidRollIds.includes(id))) {
+            // The same roll is back: a misread, not a new pick level.
+            mayhemPickVoidRollIds = [];
+        }
+    }
+
+    mayhemOfferScanStreak = result.state.scanStreak;
+    mayhemOfferFuzzyScore = result.state.fuzzyScore;
+    if (mayhemOfferIds.length) setMayhemRollIds(mayhemOfferIds);
+    if (result.counted > 0) {
+        setMayhemPicksTaken(result.state.counter.picksTaken);
+        mayhemPickPhase = { ...mayhemPickPhase, picksTaken: result.state.counter.picksTaken };
+        // The vanish snapshot holds the roll that closed the screen; attribute
+        // the click to its card before the display ids are purged.
+        const retiredRoll = mayhemVanish?.rollIds.length
+            ? mayhemVanish.rollIds.slice()
+            : mayhemOfferIds.slice();
+        const pickCursor = mayhemVanish?.cursor ?? read?.cursor ?? null;
+        if (retiredRoll.length) recordMayhemPickedAugment(retiredRoll, pickCursor);
+        // Remember which roll the empty gap retired so a reroll can take the
+        // spurious count (and the attributed augment) back.
+        mayhemPickVoidRollIds = retiredRoll;
+        mayhemPickVoidAtMs = Date.now();
+        mayhemVanish = null;
+        purgeMayhemOffersFromScreen();
+    } else if (result.scanned) {
+        // A single offer stays as a candidate (`keep`) until a second scan
+        // makes it visible or a confirmed empty frame purges it. Invalid
+        // frames never purge, so a failed capture cannot reset the streak.
+        // A purge action is authoritative: a retained roll must not keep the
+        // panel up after the engine saw the cards disappear.
+        if (result.hudAction === 'purge') {
+            purgeMayhemOffersFromScreen();
+        } else if (result.hudAction === 'show' || mayhemAugmentHudShouldShow()) {
+            if (!mayhemPickSessionActive) beginMayhemPickSession();
+        }
+    }
     pushMayhemOverlayPatch();
 }
 
@@ -760,24 +2183,61 @@ export function getMayhemLiveOfferIds(): string[] {
 }
 
 function resetMatchCaches(): void {
+    clearPendingMayhemManual();
+    mayhemManualRestoreActive = false;
+    mayhemOcrFeedbackNonce = 0;
+    mayhemOcrFeedbackHint = undefined;
+    mayhemPickVoidRollIds = [];
+    mayhemPickVoidAtMs = 0;
+    mayhemVanish = null;
+    mayhemPickedAugmentId = null;
+    mayhemLiveAugmentShapeLogged = false;
     lastChampSelectEnemies = [];
+    lastChampSelectSelf = null;
+    loadingChampion = null;
+    loadingSlot = null;
+    champSelectSlot = null;
+    matchQueueId = null;
+    matchMapId = null;
+    stopQueueRead();
+    resetQueueRead();
+    prematchStats = null;
+    prematchStatsToken += 1;
+    loadingSessionToken = 0;
+    champSelectHistoryPrefetched = false;
+    // Drop the history snapshot too: the next champ select loads a fresh one.
+    champSelectSession += 1;
+    prematchHistoryCache.reset();
     lastOverlayFingerprint = '';
+    lastSentOverlayPayload = null;
     lastGoodPayload = null;
     lastKeepOnTopAt = 0;
     lastLiveProofAt = 0;
     trustedGameTime = 0;
     playMomentSnapshot = null;
     lastPlayOverlayState = null;
+    lastEnemySignature = '';
+    lastMappedEnemies = null;
+    lastPlayMomentsAt = 0;
+    lastSentMomentCueContent = '';
     mayhemOfferIds = [];
+    mayhemUnverified = false;
     mayhemPicksAtWindowOpen = 0;
     mayhemPickSessionActive = false;
     mayhemManualScanUntilMs = 0;
     mayhemUserDismissedUntilMs = 0;
     mayhemAugmentDismissedAt = 0;
+    mayhemMonitorState = createMayhemMonitorState();
+    mayhemPollStartedThisMatch = false;
+    mayhemLiveAugmentIds = [];
+    mayhemOfferScanStreak = mayhemMonitorState.scanStreak;
+    mayhemOfferFuzzyScore = mayhemMonitorState.fuzzyScore;
+    lastModeDetectKey = '';
     setMayhemOcrRetainOffers(false);
     resetMayhemMatchState();
     mayhemBurstUntilMs = 0;
     mayhemLastLevel = 0;
+    mayhemAutoOcrRearmLevel = null;
     mayhemWasDead = false;
     mayhemLastEventScanId = 0;
     mayhemEventScanFrom = 0;
@@ -788,6 +2248,19 @@ function resetMatchCaches(): void {
     resetCoachCooldowns();
     clipsQueued = 0;
     lastClipQueuedAt = 0;
+}
+
+/**
+ * Cue content fingerprint for the warm-push gate — every field the HUD renders
+ * (id, label, detail, urgency), plus the empty state: when no cues remain,
+ * withPlayMoments() returns the plain payload, so this yields '' and the send
+ * decision below treats cue retirement as a real change.
+ */
+function momentCueContent(payload: unknown): string {
+    const cues =
+        (payload as { momentCues?: Array<{ id: string; label: string; detail: string; urgency: string }> })
+            .momentCues || [];
+    return cues.map((cue) => `${cue.id}:${cue.label}:${cue.detail}:${cue.urgency}`).join('|');
 }
 
 function selfHpFromStats(stats: { currentHealth?: number; maxHealth?: number } | null | undefined): number | null {
@@ -816,7 +2289,7 @@ function withPlayMoments(payload: ReturnType<typeof buildOverlayPayload>): Retur
     // moment-cue channel. Cooldowns reset on match start.
     const coachCue = tickCoachCues(getGameState(), getObjectiveTimers(), {
         gameTime: payload.gameTime || 0,
-        level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 1,
+        level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 0,
         isDead: payload.localPlayer?.isDead ?? false,
         respawnSec: 0,
         currentGold: payload.localPlayer?.currentGold ?? null,
@@ -919,17 +2392,143 @@ function holdLastBoard(overlayHidden: boolean, gameTime?: number): void {
     const fp = overlayFingerprint(advanced);
     if (fp === lastOverlayFingerprint) return;
     lastOverlayFingerprint = fp;
-    sendOverlayUpdate(advanced);
+    sendFullOverlayUpdate(advanced);
+}
+
+function sendFullOverlayUpdate(payload: unknown): void {
+    lastSentOverlayPayload = payload;
+    sendOverlayUpdate(payload);
+}
+
+/**
+ * A new overlay page (window-created) or one that just reported it is mounted
+ * (page-ready) has no state of its own: re-send the last payload. Before this
+ * existed the pre-match loading payload was sent into a page that did not
+ * listen yet and was never replayed, so the pet never appeared.
+ */
+function replayOverlayState(via: string): void {
+    if (
+        !shouldReplayOverlayState({
+            inGame,
+            prematchLoading,
+            userHidden: isOverlayUserHidden(),
+            hasPayload: !!lastSentOverlayPayload,
+        })
+    ) {
+        return;
+    }
+    if (prematchLoading) {
+        overlayLog('prematch-loading replay-loading', { via, phase: lcuSocket.phase ?? 'none' });
+    }
+    lastOverlayFingerprint = '';
+    sendOverlayUpdate(lastSentOverlayPayload);
+}
+
+function handleOverlayWindowCreated(): void {
+    replayOverlayState('window-created');
+}
+
+/** The page's first heartbeat proves React mounted and its listener is bound. */
+function handleOverlayPageReady(): void {
+    replayOverlayState('page-ready');
+}
+
+/**
+ * Enter the pre-match loading state once per load: cancel the finished match's
+ * delayed window destroy (a quick requeue must not destroy the pet window),
+ * clear a hide carried over from the last match, raise the overlay and send the
+ * loading payload through sendFullOverlayUpdate so lastSentOverlayPayload can
+ * replay it. Stats come from the champ-select cache only — this path issues no
+ * LCU request. A reconnect with no known pick resolves it from the gameflow
+ * session (one request, that case only).
+ */
+function enterPrematchLoading(phase: string | null): void {
+    // A requeue inside the 12 s window owns the overlay again.
+    overlayDestroyGate.cancel();
+    if (prematchLoading) return;
+    prematchLoading = true;
+    prematchStats = null;
+    prematchStatsToken += 1;
+    loadingSessionToken = prematchStatsToken;
+    loadingChampion = lastChampSelectSelf
+        ? { championId: lastChampSelectSelf.championId, championName: lastChampSelectSelf.championName }
+        : null;
+    prematchStats = prematchStatsFromCache(loadingChampion?.championId ?? null);
+    // The champ-select order is known at entry; only the gameflow session can
+    // add your side, and it lands asynchronously below (never delaying this
+    // first payload).
+    loadingSlot = null;
+    applyLoadingSlot(champSelectSlot);
+    // The queue learned in Lobby/ChampSelect survives loading: the queue reader
+    // is idle in GameStart, so clearing here would lose it on a failed load read.
+    const previousHide = isOverlayUserHidden();
+    overlayLog('prematch-loading enter', {
+        phase: phase ?? 'none',
+        userHidden: previousHide,
+        champion: loadingChampion ? 'champ-select' : 'unknown',
+        stats: prematchStats ? 'cache' : 'none',
+    });
+    if (previousHide) setOverlayUserHidden(false);
+    const settings = settingsForTick();
+    if (!settings.overlayEnabled) return;
+    // Clearing a hide above shows the overlay, and createOverlayWindow re-reads
+    // game.cfg itself, so the scales are right whichever call creates the window.
+    syncScalesFromLeague();
+    createOverlayWindow();
+    showOverlay();
+    sendFullOverlayUpdate(prematchLoadingPayload(phase, settings.pet, loadingChampion, prematchStats, loadingSlot, { queueId: matchQueueId, mapId: matchMapId }));
+    // One session GET per load, whichever path needs it: a reconnect resolves
+    // the pick with it, a champ-select load only learns the side from it.
+    if (!loadingChampion) void resolvePrematchChampionFromSession();
+    else void resolveLoadingSlotFromSession();
+}
+
+/**
+ * Leave it. A real match takes over silently (its first board payload follows
+ * the same tick). A dodge/cancel has nothing to show, so the overlay is hidden
+ * and the loading flag is cleared for the page.
+ */
+function exitPrematchLoading(reason: string, hide: boolean): void {
+    if (!prematchLoading) return;
+    prematchLoading = false;
+    // Invalidate an in-flight resolution: it belongs to the load we just left.
+    prematchStats = null;
+    loadingChampion = null;
+    loadingSlot = null;
+    prematchStatsToken += 1;
+    loadingSessionToken = 0;
+    overlayLog('prematch-loading exit', { reason });
+    if (!hide) return;
+    // A dodge/cancel leaves no pick for the next game: drop the stale one so a
+    // later reconnect cannot use it. A match takeover keeps it (the live board
+    // still reads the pick for the accent and match list).
+    lastChampSelectSelf = null;
+    hideOverlay();
+    // Nothing will draw into the hidden window: give it the same delayed
+    // teardown as a finished match. A new load or match start cancels it.
+    overlayDestroyGate.schedule();
+    sendFullOverlayUpdate({
+        inGame: false,
+        loading: false,
+        enemies: [],
+        allies: [],
+        cachedChampSelectEnemies: [],
+        localPlayer: null,
+        timestamp: Date.now(),
+    });
 }
 
 function ensureOverlayShown(): void {
-    if (isOverlayUserHidden() || !getAppSettings().overlayEnabled) return;
+    if (isOverlayUserHidden() || !settingsForTick().overlayEnabled) return;
     if (!getOverlayWindow()) {
         createOverlayWindow();
         showOverlay();
     }
     healOverlayWindows();
     maybeKeepOverlayOnTop();
+    // The single overlay window is never raised on a loop, rebuilt or repaired
+    // from here (Step 2 remake): keepOverlayOnTop only re-asserts a lost
+    // topmost flag, and the health line in overlay.log is the diagnostic.
 }
 
 function maybeKeepOverlayOnTop(): void {
@@ -939,15 +2538,53 @@ function maybeKeepOverlayOnTop(): void {
     keepOverlayOnTop();
 }
 
-function beginMatch(): void {
+function beginMatch(live?: LiveClientAllGameData | null): void {
     console.info('[match] started');
     inGame = true;
+    resetQueueRead();
+    // A live board arrived: the load screen is over, no hide (this is a match).
+    exitPrematchLoading('match-start', false);
+    let windowMode: string | null = null;
+    try {
+        windowMode = readLeagueHudScales()?.windowMode ?? null;
+    } catch {
+        windowMode = null;
+    }
+    const gameMode = live?.gameData?.gameMode ?? lastGoodPayload?.gameMode ?? null;
+    const mapName = live?.gameData?.mapName ?? lastGoodPayload?.mapName ?? null;
+    overlayLog('match-start', {
+        mode: detectMayhemMode({ gameMode, mapName, queueId: matchQueueId, mapId: matchMapId }),
+        queueId: matchQueueId ?? 'unknown',
+        mapId: matchMapId ?? 'unknown',
+        gameMode: gameMode ?? 'unknown',
+        mapName: mapName ?? 'unknown',
+        windowMode,
+    });
+    // The Windows settings that decide whether any overlay can show over League.
+    void overlayEnvironment()
+        .then((env) => overlayLog('environment', {
+            windowMode: env.windowMode,
+            mpoOff: env.mpoOff,
+            windowedGameOptimizations: env.windowedGameOptimizations,
+            recorders: env.recorders.join('+') || 'none',
+        }))
+        .catch(() => undefined);
     lastMatchEndReason = null;
     playMomentSnapshot = null;
+    lastSentOverlayPayload = null;
     // New match: drop the State Service's event cursor with it. Live Client
     // EventIDs restart at 0 every game, so a stale cursor would swallow the
     // first events of this one.
     resetStateService('match start');
+    // Follow the live patch: a new patch adds augments the offline bundle does
+    // not contain. Offline is fine — cached/bundled data keeps working.
+    void refreshMayhemBundleIfStale()
+        .then((result) => {
+            if (result.refreshed && result.bundle) broadcastMayhemBundleUpdate(result.bundle);
+        })
+        .catch(() => {
+            // no network: keep the cached/bundled bundle
+        });
     clearPlayRecap();
     resetJungleThreatClock();
     resetCoachCooldowns();
@@ -955,17 +2592,20 @@ function beginMatch(): void {
     // Ring buffer starts recording as the match opens.
     void setClipperActive(true);
     lastLiveProofAt = Date.now();
-    if (destroyOverlayTimer) {
-        clearTimeout(destroyOverlayTimer);
-        destroyOverlayTimer = null;
-    }
-    // New match — never stay hidden from a previous manual hide
-    setOverlayUserHidden(false);
-    if (getAppSettings().overlayEnabled) {
+    overlayDestroyGate.cancel();
+    // New match — never stay hidden from a previous manual hide. An already
+    // shown window is left untouched (setOverlayUserHidden(false) does not
+    // re-show/re-apply bounds on its own).
+    if (isOverlayUserHidden()) setOverlayUserHidden(false);
+    if (settingsForTick().overlayEnabled) {
         syncScalesFromLeague();
-        createOverlayWindow();
-        showOverlay();
+        // The load screen already created and showed this window. Re-creating
+        // or re-showing it at match start flickers the handoff, so reuse it.
+        ensureOverlayShown();
     }
+    // The Live Client often reports no queue yet. Retry the session read each
+    // tick until the game id appears, then re-classify (never during load).
+    scheduleQueueRead(0);
     try {
         onMatchStartHotkeys?.();
     } catch {
@@ -974,9 +2614,119 @@ function beginMatch(): void {
     onGameStateChange?.(true);
 }
 
-function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
-    if (isMayhemGame(gameMode, mapName)) {
-        if (!mayhemPollTimer) startMayhemPoll();
+/** Phases in which the client can name a queue for the upcoming/current game. */
+function wantsQueueRead(phase: string | null): boolean {
+    return phase === 'Lobby' || phase === 'ChampSelect' || isInGamePhase(phase);
+}
+
+/** Forget an in-flight queue read and start a fresh one (phase change / new match). */
+function resetQueueRead(): void {
+    matchStartToken += 1;
+    matchQueueReadDone = false;
+    matchQueueGameId = null;
+    matchQueueIdTries = 0;
+}
+
+function stopQueueRead(): void {
+    if (queueRetryTimer) clearTimeout(queueRetryTimer);
+    queueRetryTimer = null;
+}
+
+function scheduleQueueRead(delayMs = QUEUE_RETRY_MS): void {
+    if (queueRetryTimer || !monitorStarted || matchQueueReadDone) return;
+    const token = matchStartToken;
+    queueRetryTimer = setTimeout(() => {
+        queueRetryTimer = null;
+        void readMatchQueueOnce(token).finally(() => {
+            if (!matchQueueReadDone && wantsQueueRead(lcuSocket.phase)) scheduleQueueRead();
+        });
+    }, delayMs);
+}
+
+/**
+ * One tick of the queue read. A real queue from the session replaces the last
+ * one; a failed pass keeps it. In game the game id is chased for a few passes
+ * because the session names a queue before it names the game, and the game API
+ * mode (KIWI) fills the queue when the client keeps it null.
+ */
+async function readMatchQueueOnce(token: number): Promise<void> {
+    if (queueReadInFlight || matchQueueReadDone || !wantsQueueRead(lcuSocket.phase)) return;
+    queueReadInFlight = true;
+    let session: unknown = null;
+    try {
+        session = await makeLCURequest('GET', '/lol-gameflow/v1/session', undefined, 4000);
+    } catch {
+        // Keep the previous queue; the next tick retries.
+    } finally {
+        queueReadInFlight = false;
+    }
+    const phase = lcuSocket.phase;
+    if (token !== matchStartToken || !wantsQueueRead(phase)) return;
+    const previousQueue = matchQueueId;
+    const previousMap = matchMapId;
+    let metaQueueId: number | null = null;
+    let sessionGameMode: string | null | undefined = null;
+    if (session) {
+        const meta = queueMetadataFromGameflowSession(session);
+        metaQueueId = meta.queueId ?? null;
+        if (meta.queueId != null) matchQueueId = meta.queueId;
+        if (meta.mapId != null) matchMapId = meta.mapId;
+        const data = (session as { gameData?: { gameId?: number; gameMode?: string } }).gameData;
+        sessionGameMode = data?.gameMode;
+        if (typeof data?.gameId === 'number' && data.gameId > 0) matchQueueGameId = data.gameId;
+    }
+    const inGame = isInGamePhase(phase);
+    // A failed session GET must not leave a KIWI match unarmed: infer from the
+    // Live Client mode whenever the client named no queue. A real queue wins.
+    if (matchQueueId == null) {
+        const inferred = inferMayhemQueueFromMode(lastGoodPayload?.gameMode ?? sessionGameMode);
+        if (inferred != null) matchQueueId = inferred;
+    }
+    if (inGame) matchQueueIdTries += 1;
+    matchQueueReadDone =
+        !wantsQueueRead(phase) ||
+        (metaQueueId != null &&
+            (!inGame || matchQueueGameId != null || matchQueueIdTries >= QUEUE_GAME_ID_MAX_TRIES));
+    if (matchQueueId === previousQueue && matchMapId === previousMap) return;
+    if (lastGoodPayload) {
+        lastGoodPayload = { ...lastGoodPayload, queueId: matchQueueId, mapId: matchMapId };
+    }
+    syncMayhemPollForMode({
+        ...currentMayhemSignals(),
+        level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 0,
+        isDead: !!lastGoodPayload?.localPlayer?.isDead,
+    });
+    pushMayhemOverlayPatch();
+}
+
+function syncMayhemPollForMode(signals: {
+    gameMode?: string | null;
+    mapName?: string | null;
+    queueId?: number | null;
+    mapId?: number | null;
+    level?: number;
+    isDead?: boolean;
+}): void {
+    const signalSet = { ...signals, augmentOffersDetected: mayhemOffersDetected() };
+    // Latched discovery is Mayhem even when the queue says 450: mode.ts alone
+    // would say `aram`, which used to stop the poll after a pick purged the
+    // offers and leave nothing able to re-classify the match.
+    const mode = logModeResult(signalSet, mayhemModeForRouting(mayhemMonitorState, signalSet));
+    if (isMayhemMode(mode)) {
+        if (!mayhemPoll.isRunning()) startMayhemPoll();
+        return;
+    }
+    if (isMayhemDiscoverySignals(signals)) {
+        // Keep the poll alive for ANY ARAM-family match, not only while a burst
+        // is live: the level 7/11/15 windows (or a death edge) must still be
+        // able to open a burst after an earlier one read nothing.
+        noteMayhemDiscoveryTrigger(mayhemMonitorState, {
+            now: Date.now(),
+            level: signals.level ?? 0,
+            isDead: signals.isDead === true,
+            signals,
+        }, { anyAramQueue: true });
+        if (!mayhemPoll.isRunning()) startMayhemPoll();
         return;
     }
     stopMayhemPoll();
@@ -985,19 +2735,22 @@ function syncMayhemPollForMode(gameMode?: string, mapName?: string): void {
 function endGameSession(): void {
     if (!inGame) return;
     console.info('[match] ended', lastMatchEndReason || '(manual)');
+    overlayLog('match-end', { reason: lastMatchEndReason || 'manual' });
     inGame = false;
+    // The board cached from the finished game would let a late live tick (or a
+    // poll still in flight) restart the whole match lifecycle via beginMatch
+    // after the overlay was taken down. Void it: readLiveBoard() is null again.
+    clearStateBoard();
     setOverlayMatchActive(false);
     resetMatchCaches();
     // Ring buffer pauses with the match; captured segments stay available.
     void setClipperActive(false);
-    hideOverlay();
+    // No hide: content stops here, but window presence owns visibility while a
+    // game is live, so the window must not drop out from under the match-end.
     // Delay destroy so a brief phase blip mid-game cannot permanently kill the window.
-    if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
-    destroyOverlayTimer = setTimeout(() => {
-        destroyOverlayTimer = null;
-        if (!inGame) destroyOverlay();
-    }, 12000);
-    sendOverlayUpdate({
+    // A new load/match cancels this gate before the 12 s elapse.
+    overlayDestroyGate.schedule();
+    sendFullOverlayUpdate({
         inGame: false,
         enemies: [],
         allies: [],
@@ -1024,6 +2777,9 @@ function liveCadence(): number | null {
 
 function scheduleLive(): void {
     if (!monitorStarted) return;
+    // Keep the State Service's slower hidden-HUD sample rate in lockstep with
+    // the overlay's visibility and the user's overlay setting.
+    setStateServiceHudHidden(isOverlayUserHidden() || !settingsForTick().overlayEnabled);
     const cadence = liveCadence();
     if (cadence === null) {
         if (liveTimer) clearTimeout(liveTimer);
@@ -1048,9 +2804,12 @@ let tickInFlight = false;
 async function liveTick(): Promise<void> {
     if (tickInFlight) return;
     tickInFlight = true;
+    // Read settings once per tick: every helper below shares this snapshot.
+    tickSettings = getAppSettings();
+    const hudBuildStart = performance.now();
     try {
         const phase = lcuSocket.phase;
-        // Board comes from the State Service's 400 ms sample loop — no network
+        // Board comes from the State Service's 600 ms sample loop — no network
         // call on this path. This tick only decides what the HUD should draw.
         const live = readLiveBoard();
         liveReadsTotal += 1;
@@ -1060,7 +2819,7 @@ async function liveTick(): Promise<void> {
         if (live) {
             const gameTime = live.gameData?.gameTime ?? 0;
             const wasInGame = inGame;
-            if (!wasInGame) beginMatch();
+            if (!wasInGame) beginMatch(live);
             // Decide before noteLiveClock updates the trusted clock, so an
             // advancing game cannot look frozen on the same tick.
             considerMatchEnd(gameTime);
@@ -1074,7 +2833,14 @@ async function liveTick(): Promise<void> {
             if ((payload.gameTime || 0) < trustedGameTime) {
                 payload.gameTime = trustedGameTime;
             }
-            syncMayhemPollForMode(payload.gameMode, payload.mapName);
+            syncMayhemPollForMode({
+                gameMode: payload.gameMode,
+                mapName: payload.mapName,
+                queueId: payload.queueId,
+                mapId: payload.mapId,
+                level: payload.localPlayer?.level ?? payload.activePlayerLevel ?? 0,
+                isDead: !!payload.localPlayer?.isDead,
+            });
             lastGoodPayload = payload;
             if (overlayHidden) {
                 // Slim ping so the main window stays parked as "in match"
@@ -1082,9 +2848,34 @@ async function liveTick(): Promise<void> {
                 return;
             }
             const fp = overlayFingerprint(payload);
-            if (fp !== lastOverlayFingerprint) {
-                lastOverlayFingerprint = fp;
-                sendOverlayUpdate(withPlayMoments(payload));
+            const changed = fp !== lastOverlayFingerprint;
+            const momentsDue = Date.now() - lastPlayMomentsAt >= PLAY_MOMENTS_MIN_INTERVAL_MS;
+            if (changed || momentsDue) {
+                // tickPlayMoments / tickCoachCues / clip planning are the
+                // expensive side of a tick: run them when a payload is going
+                // out anyway, or at the 2s floor so a quiet match (no stat
+                // changes) still ages cooldowns and hears coach tips.
+                lastPlayMomentsAt = Date.now();
+                const enriched = withPlayMoments(payload);
+                if (changed) {
+                    lastOverlayFingerprint = fp;
+                    lastSentMomentCueContent = momentCueContent(enriched);
+                    sendFullOverlayUpdate(enriched);
+                } else {
+                    // No stat changed, but the moment engine may have produced
+                    // live cues — or retired the last one (when the last cue
+                    // expires withPlayMoments returns the plain payload, so
+                    // the empty state is exactly the "clear the HUD rail"
+                    // signal). Comparing the cue content — including that
+                    // empty state — decides the send: a sticky, unchanged cue
+                    // must not force a resend every 2 s.
+                    const content = momentCueContent(enriched);
+                    if (content !== lastSentMomentCueContent) {
+                        lastSentMomentCueContent = content;
+                        lastOverlayFingerprint = overlayFingerprint(enriched);
+                        sendFullOverlayUpdate(enriched);
+                    }
+                }
             }
             return;
         }
@@ -1099,6 +2890,13 @@ async function liveTick(): Promise<void> {
             considerMatchEnd(clock.gameTime);
             if (!inGame) return;
             noteLiveClock(clock.gameTime);
+            // The cheap clock proves the match is live, so queue + phase + level
+            // must still route the Mayhem poll here (the live-board branch does).
+            syncMayhemPollForMode({
+                ...currentMayhemSignals(),
+                level: lastGoodPayload?.localPlayer?.level ?? lastGoodPayload?.activePlayerLevel ?? 0,
+                isDead: !!lastGoodPayload?.localPlayer?.isDead,
+            });
             if (!overlayHidden) {
                 ensureOverlayShown();
                 holdLastBoard(false, clock.gameTime);
@@ -1116,6 +2914,8 @@ async function liveTick(): Promise<void> {
         if (!overlayHidden) ensureOverlayShown();
         holdLastBoard(overlayHidden);
     } finally {
+        recordLatency('hud.build', performance.now() - hudBuildStart);
+        tickSettings = null;
         tickInFlight = false;
     }
 }
@@ -1124,6 +2924,32 @@ function onPhase(phase: string | null): void {
     // Start the hold timer. The next live tick decides, so a phase label is
     // never judged without a chance to see whether the game clock is moving.
     phaseHoldMs(phase);
+    // A phase change may mean a different game: start a fresh queue read and
+    // drop owned augments left over from a finished match / previous pick.
+    resetQueueRead();
+    scheduleQueueRead(0);
+    if (phase === 'Offline' || phase === 'ChampSelect') {
+        resetMayhemMatchState();
+    }
+    // One history prefetch per champ select, on entry. A pick lock retries it
+    // through ingestChampSelectSession if the client was still walking in.
+    if (phase === 'ChampSelect') {
+        if (lastPrefetchPhase !== 'ChampSelect') {
+            beginChampSelectSession();
+            prefetchHistoryForChampSelect();
+        }
+    } else {
+        champSelectHistoryPrefetched = false;
+    }
+    lastPrefetchPhase = phase;
+    // Loading screen: GameStart, or InProgress before the Live Client answers.
+    // Leaving those phases without a live board means the load was dodged or
+    // cancelled — take the overlay back down.
+    if (isPrematchLoadingPhase(phase, inGame)) {
+        enterPrematchLoading(phase);
+    } else if (prematchLoading) {
+        exitPrematchLoading(`phase-${phase ?? 'none'}`, true);
+    }
     if (isInGamePhase(phase) && !liveTimer) {
         // Read immediately rather than waiting a full interval after loading.
         void liveTick().finally(scheduleLive);
@@ -1139,7 +2965,7 @@ export function pushSummonerUpdate(): void {
         void liveTick();
         return;
     }
-    sendOverlayUpdate({
+    sendFullOverlayUpdate({
         inGame: false,
         enemyBotSummoners: serializeSummoners(),
         timestamp: Date.now(),
@@ -1153,6 +2979,8 @@ export function refreshLiveCadence(): void {
 
 const onStateChange = () => scheduleLive();
 const onChampSelect = (session: unknown) => ingestChampSelectSession(session);
+/** The client's own summoner event: identity for the reconnect session read. */
+const onSummoner = (summoner: unknown) => rememberLocalSummoner(summoner);
 
 export function startGameMonitor(): void {
     if (monitorStarted) return;
@@ -1164,7 +2992,10 @@ export function startGameMonitor(): void {
     lcuSocket.on('phase', onPhase);
     lcuSocket.on('state', onStateChange);
     lcuSocket.on('champSelect', onChampSelect);
+    lcuSocket.on('summoner', onSummoner);
     lcuSocket.start();
+    overlayWindowCreatedUnsubscribe = onOverlayWindowCreated(handleOverlayWindowCreated);
+    setOverlayPageReadyHandler(handleOverlayPageReady);
     // Catch a match that is already running when the app opens.
     void liveTick().finally(scheduleLive);
 }
@@ -1173,18 +3004,37 @@ export function stopGameMonitor(): void {
     monitorStarted = false;
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = null;
-    if (destroyOverlayTimer) clearTimeout(destroyOverlayTimer);
-    destroyOverlayTimer = null;
+    overlayDestroyGate.cancel();
+    if (overlayWindowCreatedUnsubscribe) {
+        overlayWindowCreatedUnsubscribe();
+        overlayWindowCreatedUnsubscribe = null;
+    }
+    setOverlayPageReadyHandler(null);
+    prematchLoading = false;
+    loadingChampion = null;
+    prematchStats = null;
+    prematchHistoryCache.reset();
+    stopQueueRead();
     stopMayhemPoll();
     void setClipperActive(false);
     stopStateService();
     lcuSocket.off('phase', onPhase);
     lcuSocket.off('state', onStateChange);
     lcuSocket.off('champSelect', onChampSelect);
+    lcuSocket.off('summoner', onSummoner);
     lcuSocket.stop();
 }
 
 /** Re-export for main-process IPC handlers that need a one-off LCU read. */
 export { makeLCURequest };
 
-export { buildOverlayPayload, overlayFingerprint, withPlayMoments, resetMatchCaches, liveTick };
+export {
+    buildOverlayPayload,
+    overlayFingerprint,
+    withPlayMoments,
+    momentCueContent,
+    resetMatchCaches,
+    liveTick,
+    mayhemOcrHintValue,
+    pushMayhemManualFeedback,
+};

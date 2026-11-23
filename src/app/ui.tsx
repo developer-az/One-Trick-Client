@@ -25,6 +25,47 @@ export const CardHeader: React.FC<{ title: string; action?: React.ReactNode; sub
   </div>
 );
 
+/**
+ * App-level button set (brief J): primary chrome, secondary ink + hairline,
+ * ghost. 36px tall (40 for `lg`), radius 6, weight 600, one icon slot.
+ * Hover steps the background (never a filter); :active presses 1px;
+ * focus-visible rings in the champion accent.
+ *
+ * `.ot-btn` stays the dense 32px control other views already use, so the
+ * density budget of those screens is untouched.
+ */
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost';
+
+export const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: ButtonVariant;
+    size?: 'md' | 'lg';
+    icon?: React.ReactNode;
+    iconAfter?: React.ReactNode;
+  }
+>(({ variant = 'secondary', size = 'md', icon, iconAfter, className = '', children, type = 'button', ...rest }, ref) => (
+  <button
+    ref={ref}
+    type={type}
+    className={`ot-ui-btn ot-ui-btn-${variant} ot-ui-btn-${size} ${className}`}
+    {...rest}
+  >
+    {icon ? (
+      <span className="ot-ui-btn-icon" aria-hidden="true">
+        {icon}
+      </span>
+    ) : null}
+    {children ? <span className="ot-ui-btn-label">{children}</span> : null}
+    {iconAfter ? (
+      <span className="ot-ui-btn-icon" aria-hidden="true">
+        {iconAfter}
+      </span>
+    ) : null}
+  </button>
+));
+Button.displayName = 'Button';
+
 export const Pill: React.FC<React.PropsWithChildren<{ tone?: Tone; title?: string }>> = ({
   tone = 'muted',
   title,

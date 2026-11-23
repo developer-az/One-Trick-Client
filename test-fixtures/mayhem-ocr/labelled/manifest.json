@@ -1,0 +1,769 @@
+{
+    "schema":  "otc-mayhem-labelled-fixtures/v1",
+    "note":  "Positive fixtures are SYNTHETIC renders, not real gameplay captures. Real-game validation remains open.",
+    "fixtures":  [
+                     {
+                         "id":  "positive-3-en",
+                         "label":  "positive",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/positive-3-en.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+                                             "recursion",
+                                             "eureka",
+                                             "goliath"
+                                         ],
+                         "expectedCardCount":  3,
+                         "notes":  "Three known augment titles at card columns x=0.33/0.50/0.67, name row y=0.40. Synthetic: rendered locally, not a gameplay capture.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nEureka\nGoliath",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.263,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.1312,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Eureka",
+                                                          "rect":  {
+                                                                       "x":  0.4542,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0885,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Goliath",
+                                                          "rect":  {
+                                                                       "x":  0.6193,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0974,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "positive-4-en",
+                         "label":  "positive",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/positive-4-en.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+                                             "recursion",
+                                             "eureka",
+                                             "goliath",
+                                             "dashing"
+                                         ],
+                         "expectedCardCount":  4,
+                         "notes":  "Four known augment titles equally spaced at x=0.245/0.415/0.585/0.755, name row y=0.40. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nEureka\nGoliath\nDashing",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.1776,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.1312,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Eureka",
+                                                          "rect":  {
+                                                                       "x":  0.3693,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0885,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Goliath",
+                                                          "rect":  {
+                                                                       "x":  0.5344,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0974,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Dashing",
+                                                          "rect":  {
+                                                                       "x":  0.7,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.1078,
+                                                                       "h":  0.0509
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "positive-scaled-150",
+                         "label":  "positive",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/positive-scaled-150.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+                                             "recursion",
+                                             "eureka",
+                                             "goliath"
+                                         ],
+                         "expectedCardCount":  3,
+                         "notes":  "Same three titles as positive-3-en rendered at 1.5x scale; checks scale independence. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nEureka\nGoliath",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.2632,
+                                                                       "y":  0.3802,
+                                                                       "w":  0.1333,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Eureka",
+                                                          "rect":  {
+                                                                       "x":  0.4549,
+                                                                       "y":  0.3802,
+                                                                       "w":  0.0906,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Goliath",
+                                                          "rect":  {
+                                                                       "x":  0.6201,
+                                                                       "y":  0.3802,
+                                                                       "w":  0.0993,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "positive-offset-25",
+                         "label":  "positive",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/positive-offset-25.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+                                             "recursion",
+                                             "eureka",
+                                             "goliath"
+                                         ],
+                         "expectedCardCount":  3,
+                         "notes":  "Same three titles as positive-3-en shifted 25 px right and down; checks offset independence. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nEureka\nGoliath",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.276,
+                                                                       "y":  0.4028,
+                                                                       "w":  0.1312,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Eureka",
+                                                          "rect":  {
+                                                                       "x":  0.4672,
+                                                                       "y":  0.4028,
+                                                                       "w":  0.0885,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Goliath",
+                                                          "rect":  {
+                                                                       "x":  0.6323,
+                                                                       "y":  0.4028,
+                                                                       "w":  0.0974,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "negative-champion-row",
+                         "label":  "negative",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/negative-champion-row.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+
+                                         ],
+                         "expectedCardCount":  0,
+                         "notes":  "Three title-case champion names at the same card geometry; must be labelled negative and emit no augment ids. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Yasuo\nAnnie\nWarwick",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Yasuo",
+                                                          "rect":  {
+                                                                       "x":  0.288,
+                                                                       "y":  0.3815,
+                                                                       "w":  0.0812,
+                                                                       "h":  0.037
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Annie",
+                                                          "rect":  {
+                                                                       "x":  0.4589,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0792,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Warwick",
+                                                          "rect":  {
+                                                                       "x":  0.6089,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.1188,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "negative-scoreboard",
+                         "label":  "negative",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/negative-scoreboard.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+
+                                         ],
+                         "expectedCardCount":  0,
+                         "notes":  "Three scoreboard-like champion rows packed vertically at one x, not card-spaced; must emit no augment ids. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Yasuo 12/4/8\nAnnie 9/6/13\nWarwick 15/3/7",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Yasuo 12/4/8",
+                                                          "rect":  {
+                                                                       "x":  0.124,
+                                                                       "y":  0.3454,
+                                                                       "w":  0.1464,
+                                                                       "h":  0.0343
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Annie 9/6/13",
+                                                          "rect":  {
+                                                                       "x":  0.1245,
+                                                                       "y":  0.4037,
+                                                                       "w":  0.1438,
+                                                                       "h":  0.0361
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Warwick 15/3/7",
+                                                          "rect":  {
+                                                                       "x":  0.1083,
+                                                                       "y":  0.463,
+                                                                       "w":  0.1755,
+                                                                       "h":  0.0361
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "negative-one-known-two-junk",
+                         "label":  "negative",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/negative-one-known-two-junk.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+
+                                         ],
+                         "expectedCardCount":  0,
+                         "notes":  "One known title plus two title-case champion rows at card geometry; a single known row is not a valid roll. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nViego\nBrand",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.263,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.1312,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Viego",
+                                                          "rect":  {
+                                                                       "x":  0.4589,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0786,
+                                                                       "h":  0.0509
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Brand",
+                                                          "rect":  {
+                                                                       "x":  0.6297,
+                                                                       "y":  0.3796,
+                                                                       "w":  0.0776,
+                                                                       "h":  0.0389
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "negative-no-geometry",
+                         "label":  "negative",
+                         "synthetic":  true,
+                         "image":  "test-fixtures/mayhem-ocr/labelled/negative-no-geometry.png",
+                         "source":  "scripts/make_mayhem_fixtures.ps1 (System.Drawing; titles from src/data/mayhem/bundle.json)",
+                         "expectedIds":  [
+
+                                         ],
+                         "expectedCardCount":  0,
+                         "notes":  "Known titles at arbitrary x/y, not card-spaced; geometry must reject them. Synthetic.",
+                         "rawOcr":  {
+                                        "text":  "Recursion\nEureka\nGoliath",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "Recursion",
+                                                          "rect":  {
+                                                                       "x":  0.0479,
+                                                                       "y":  0.2185,
+                                                                       "w":  0.1318,
+                                                                       "h":  0.0435
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Eureka",
+                                                          "rect":  {
+                                                                       "x":  0.5062,
+                                                                       "y":  0.6056,
+                                                                       "w":  0.0891,
+                                                                       "h":  0.0417
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Goliath",
+                                                          "rect":  {
+                                                                       "x":  0.2344,
+                                                                       "y":  0.7685,
+                                                                       "w":  0.0979,
+                                                                       "h":  0.0435
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                         "id":  "negative-champion-select-real",
+                         "label":  "negative",
+                         "synthetic":  false,
+                         "image":  null,
+                         "source":  "https://hexgate.app/screenshots/aram-mayhem-champ-select.webp",
+                         "expectedIds":  [
+
+                                         ],
+                         "expectedCardCount":  0,
+                         "notes":  "Real public champion-select screenshot OCRd once with mayhem-ocr.ps1 -ImagePath; image deliberately not committed. Includes HEX GATE / ARAM MAYHEM chrome and a BEL (U+0007) in the Corki row, exactly as OCR emitted them.",
+                         "rawOcr":  {
+                                        "text":  "PICK YOUR CHAMPION\nHEX GATE\nARAM MAYHEM\nAVAILABLE CHAMPS\nYasuo\nAnnie\nWarwick\nYorick\nC\u0007) Corki\nZyra\nRakan\nVarus\nCHAMP SELECT\nVARUS\nYASUO",
+                                        "lines":  [
+                                                      {
+                                                          "text":  "PICK YOUR CHAMPION",
+                                                          "rect":  {
+                                                                       "x":  0.1625,
+                                                                       "y":  0.0222,
+                                                                       "w":  0.4172,
+                                                                       "h":  0.0487
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "HEX GATE",
+                                                          "rect":  {
+                                                                       "x":  0.7195,
+                                                                       "y":  0.0606,
+                                                                       "w":  0.0594,
+                                                                       "h":  0.0133
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "ARAM MAYHEM",
+                                                          "rect":  {
+                                                                       "x":  0.7094,
+                                                                       "y":  0.1285,
+                                                                       "w":  0.1031,
+                                                                       "h":  0.0133
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "AVAILABLE CHAMPS",
+                                                          "rect":  {
+                                                                       "x":  0.7094,
+                                                                       "y":  0.164,
+                                                                       "w":  0.1125,
+                                                                       "h":  0.0118
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Yasuo",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.2171,
+                                                                       "w":  0.0266,
+                                                                       "h":  0.0148
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Annie",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.2851,
+                                                                       "w":  0.0266,
+                                                                       "h":  0.0148
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Warwick",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.3545,
+                                                                       "w":  0.0391,
+                                                                       "h":  0.0162
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Yorick",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.4225,
+                                                                       "w":  0.0273,
+                                                                       "h":  0.0162
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "C\u0007) Corki",
+                                                          "rect":  {
+                                                                       "x":  0.7109,
+                                                                       "y":  0.4786,
+                                                                       "w":  0.0547,
+                                                                       "h":  0.0399
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Zyra",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.5628,
+                                                                       "w":  0.0195,
+                                                                       "h":  0.0177
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Rakan",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.6307,
+                                                                       "w":  0.0281,
+                                                                       "h":  0.0162
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "Varus",
+                                                          "rect":  {
+                                                                       "x":  0.7422,
+                                                                       "y":  0.7001,
+                                                                       "w":  0.025,
+                                                                       "h":  0.0148
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "CHAMP SELECT",
+                                                          "rect":  {
+                                                                       "x":  0.8398,
+                                                                       "y":  0.062,
+                                                                       "w":  0.0703,
+                                                                       "h":  0.0103
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "VARUS",
+                                                          "rect":  {
+                                                                       "x":  0.2039,
+                                                                       "y":  0.7267,
+                                                                       "w":  0.0727,
+                                                                       "h":  0.0295
+                                                                   }
+                                                      },
+                                                      {
+                                                          "text":  "YASUO",
+                                                          "rect":  {
+                                                                       "x":  0.4633,
+                                                                       "y":  0.7267,
+                                                                       "w":  0.0742,
+                                                                       "h":  0.0295
+                                                                   }
+                                                      }
+                                                  ]
+                                    }
+                     },
+                     {
+                       "id": "positive-headerless-teal",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-headerless-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; name-independent pixel gate)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns x=0.33/0.50/0.67 with dark-teal bodies and light rims, no shop text. Synthetic; expected cardsVisible=true.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.5, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.67, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.245, "body": 3, "rim": 4, "gap": 3 },
+                           { "x": 0.415, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.585, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.755, "body": 3, "rim": 4, "gap": 3 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-headerless-no-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-headerless-no-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; name-independent pixel gate)",
+                       "expectedIds": [],
+                       "expectedCardCount": 0,
+                       "notes": "Same geometry and titles as positive-headerless-teal but non-teal bodies and low-contrast rims. Synthetic; expected cardsVisible=false.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.5, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.67, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.245, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.415, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.585, "body": 0, "rim": 0, "gap": 0 },
+                           { "x": 0.755, "body": 0, "rim": 0, "gap": 0 }
+                         ],
+                         "cardsVisible": false
+                       }
+                     },
+                     {
+                       "id": "positive-4-headerless-teal",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-4-headerless-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; four-card column layout)",
+                       "expectedIds": [],
+                       "expectedCardCount": 4,
+                       "notes": "Four unfamiliar titles at the 4-card columns x=0.245/0.415/0.585/0.755 with dark-teal bodies and light rims, no shop text. Synthetic; card slots align with the four detected boxes.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral\nNebula",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.1958, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.3698, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.5438, "y": 0.3796, "w": 0.0786, "h": 0.0389 } },
+                           { "text": "Nebula", "rect": { "x": 0.7068, "y": 0.3796, "w": 0.0948, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.5, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.67, "body": 6, "rim": 8, "gap": 6 },
+                           { "x": 0.245, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.415, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.585, "body": 9, "rim": 9, "gap": 0 },
+                           { "x": 0.755, "body": 9, "rim": 9, "gap": 0 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-aligned-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-aligned-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles over a wide teal band)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns but over a single wide teal band, not card-shaped boxes. No slot has a card-sized teal patch (body 6/9, rim 0), so it stays unverified even though the coarse global teal hit is true — that is the false positive this fixture pins.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.2812, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.4547, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.6286, "y": 0.3796, "w": 0.0786, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.5, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.67, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.245, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.415, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.585, "body": 6, "rim": 0, "gap": 4 },
+                           { "x": 0.755, "body": 6, "rim": 0, "gap": 4 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "negative-full-width-teal",
+                       "label": "negative",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/negative-full-width-teal.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles over a full-width teal band)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns over one full-width teal band covering the entire body patch. Every slot gets 9 body hits and the coarse flag is true, but the gaps are teal too (gap 6), so the body patch is not bounded by non-teal and it stays unverified. Synthetic; this is the false positive the gap requirement pins.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           { "text": "Zephyr", "rect": { "x": 0.2812, "y": 0.3796, "w": 0.0958, "h": 0.0509 } },
+                           { "text": "Cinder", "rect": { "x": 0.4547, "y": 0.3796, "w": 0.0885, "h": 0.0389 } },
+                           { "text": "Astral", "rect": { "x": 0.6286, "y": 0.3796, "w": 0.0786, "h": 0.0389 } }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.5, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.67, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.245, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.415, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.585, "body": 9, "rim": 0, "gap": 6 },
+                           { "x": 0.755, "body": 9, "rim": 0, "gap": 6 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     },
+                     {
+                       "id": "positive-gold-teal-geometry",
+                       "label": "positive",
+                       "synthetic": true,
+                       "image": "test-fixtures/mayhem-ocr/labelled/positive-gold-teal-geometry.png",
+                       "source": "scripts/make_mayhem_fixtures.ps1 (System.Drawing; unfamiliar titles; gold bodies on the teal-card geometry)",
+                       "expectedIds": [],
+                       "expectedCardCount": 3,
+                       "notes": "Three unfamiliar titles at card columns x=0.33/0.50/0.67 with gold (#c9a962) bodies and non-gold rims, no shop text. Body>=8 on the bounded card slots sets the pixel gate; synthetic.",
+                       "rawOcr": {
+                         "text": "Zephyr\nCinder\nAstral",
+                         "lines": [
+                           {
+                             "text": "Zephyr",
+                             "rect": {
+                               "x": 0.2812,
+                               "y": 0.3796,
+                               "w": 0.0958,
+                               "h": 0.0509
+                             }
+                           },
+                           {
+                             "text": "Cinder",
+                             "rect": {
+                               "x": 0.4547,
+                               "y": 0.3796,
+                               "w": 0.0885,
+                               "h": 0.0389
+                             }
+                           },
+                           {
+                             "text": "Astral",
+                             "rect": {
+                               "x": 0.6286,
+                               "y": 0.3796,
+                               "w": 0.0786,
+                               "h": 0.0389
+                             }
+                           }
+                         ],
+                         "cardSlots": [
+                           { "x": 0.33, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.5, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.67, "body": 9, "rim": 0, "gap": 0 },
+                           { "x": 0.245, "body": 3, "rim": 0, "gap": 3 },
+                           { "x": 0.415, "body": 6, "rim": 0, "gap": 6 },
+                           { "x": 0.585, "body": 6, "rim": 0, "gap": 6 },
+                           { "x": 0.755, "body": 3, "rim": 0, "gap": 3 }
+                         ],
+                         "cardsVisible": true
+                       }
+                     }
+                 ]
+}

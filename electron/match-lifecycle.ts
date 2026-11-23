@@ -37,8 +37,11 @@ export const LIVE_SILENCE_END_MS = 60_000;
 /** When the match clock is deep into the game, tolerate longer Live Client / LCU gaps. */
 export const LIVE_SILENCE_MIDGAME_END_MS = 180_000;
 
-/** Clock must move by more than a poll jitter before we trust that the match is still running. */
-export const LIVE_CLOCK_ADVANCE_SEC = 0.25;
+/** Trusted clock past this point proves a live match; a short socket drop is not game over. */
+const MIDGAME_PROOF_SEC = 300;
+
+export { LIVE_CLOCK_ADVANCE_SEC, isMatchLoading, type MatchLoadingInput } from '../src/logic/matchLoading';
+import { LIVE_CLOCK_ADVANCE_SEC } from '../src/logic/matchLoading';
 
 const IN_GAME = new Set<string>(IN_GAME_PHASES);
 const TERMINAL = new Set<string>(TERMINAL_PHASES);
@@ -91,8 +94,10 @@ export function shouldEndMatch(input: EndMatchInput): boolean {
     }
 
     // Socket dropped and the lockfile is gone, or the phase is unknown.
+    // A trusted mid-game clock keeps the HUD up until the full 180 s silence;
+    // only a menu/terminal phase or a real end can end it sooner.
     const silenceLimit =
-        input.trustedGameTime >= 300 ? LIVE_SILENCE_MIDGAME_END_MS : LIVE_SILENCE_END_MS;
+        input.trustedGameTime >= MIDGAME_PROOF_SEC ? LIVE_SILENCE_MIDGAME_END_MS : LIVE_SILENCE_END_MS;
     return input.liveSilenceMs >= silenceLimit;
 }
 

@@ -1,5 +1,8 @@
 import { MAYHEM_AUGMENT_LEVELS, xpProgressToNextLevel } from './augmentSchedule';
 
+/** Game seconds after load during which the spawn shop offers the first augment. */
+export const MAYHEM_SPAWN_PICK_SECONDS = 120;
+
 /** Required champion level before each augment slot (you start ARAM at 3). */
 export function nextMayhemPickLevel(ownedAugmentCount: number): number | null {
   if (ownedAugmentCount < 0 || ownedAugmentCount >= MAYHEM_AUGMENT_LEVELS.length) return null;
@@ -28,23 +31,31 @@ export interface MayhemPickPhase {
 }
 
 /**
- * When OCR / manual owned list is empty, infer how many augment slots are already behind you.
- * Mayhem blocks leveling past 3 / 7 / 11 / 15 until you pick, so `level > threshold` implies that pick happened.
+ * Legacy level estimate, kept exported for older callers/tests.
+ *
+ * Do NOT use this to decide whether a pick happened: reaching level 3 (or
+ * passing 7 / 11 / 15) only opens the augment shop, a player can stay at
+ * level 5 without picking. The live pick counter is
+ * `observeMayhemPickScan` (src/logic/mayhem/pickCount.ts).
  */
 export function inferMayhemPicksTakenFromLevel(level: number, storedOwnedCount: number): number {
   if (storedOwnedCount > 0) return storedOwnedCount;
   return MAYHEM_AUGMENT_LEVELS.filter((pickLevel) => level > pickLevel).length;
 }
 
-/** Owned ids, manual pick count, and level gate — whichever says you've taken the most picks. */
+/**
+ * Owned ids and the persisted pick count — no level inference.
+ * `_level` stays in the signature so existing call sites keep compiling; the
+ * level gate cannot prove a pick, only an augment window/offer disappearance
+ * or Live Client augment data can.
+ */
 export function resolveMayhemPicksTaken(
-  level: number,
+  _level: number,
   ownedAugmentIds: string[],
   persistedPicksTaken: number
 ): number {
   const owned = ownedAugmentIds.length;
-  const stored = Math.max(owned, Math.max(0, persistedPicksTaken));
-  return Math.max(stored, inferMayhemPicksTakenFromLevel(level, stored));
+  return Math.max(owned, Math.max(0, Math.floor(persistedPicksTaken)));
 }
 
 /**
@@ -93,7 +104,9 @@ export function computeMayhemPickPhase(input: MayhemPickPhaseInput): MayhemPickP
     };
   }
 
-  if (isDead && levelReady) {
+  // The first augment is offered on spawn, alive, in the opening seconds.
+  const spawnPick = picksTaken === 0 && input.gameTime < MAYHEM_SPAWN_PICK_SECONDS;
+  if ((isDead || spawnPick) && levelReady) {
     pickWindowOpen = true;
     hint =
       picksTaken === 0 ? 'First augment — choose on screen' : `Augment pick (L${nextPickLevel})`;
@@ -103,7 +116,7 @@ export function computeMayhemPickPhase(input: MayhemPickPhaseInput): MayhemPickP
   }
 
   const justDied = isDead && !wasDead;
-  const ocrBurst = pickWindowOpen && justDied;
+  const ocrBurst = pickWindowOpen && (justDied || spawnPick);
 
   return {
     pickWindowOpen,

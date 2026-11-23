@@ -1,6 +1,31 @@
 export { };
 
 declare global {
+    /** Structural twin of electron/riot-api.ts RiotStatus. */
+    interface RiotStatus {
+        state: 'no-key' | 'no-identity' | 'ok' | 'invalid-key' | 'error';
+        message: string;
+        riotId: string | null;
+        region: string | null;
+        level: number | null;
+        profileIconId: number | null;
+        ranks: Array<{ queue: string; tier: string; rank: string; lp: number; games: number }>;
+        recentMatchIds: string[];
+        recentMatches: Array<{
+            id: string;
+            champion: string;
+            kills: number;
+            deaths: number;
+            assists: number;
+            win: boolean;
+            queue: string;
+            cs: number;
+            durationMin: number;
+            endedAt: number;
+        }>;
+        fetchedAt: number | null;
+    }
+
     interface FrameCalibration {
         dx: number;
         dy: number;
@@ -16,11 +41,43 @@ declare global {
     type HudModuleId = 'sums' | 'gank' | 'vision' | 'buy' | 'action' | 'mayhem' | 'frames';
     type HudModules = Record<HudModuleId, boolean>;
 
+    /** Whether the last augment-screen scan was verified from card geometry. */
+    type MayhemVerification = 'verified' | 'unverified';
+
+    /** HUD skin pick (Brief I): a named skin, or auto by champion class. */
+    type HudSkinChoice = 'auto' | 'gothic' | 'bloodmoon' | 'arcane' | 'ironclad' | 'warden' | 'hunter' | 'vanguard';
+
+    interface HudSkinSettings {
+        hudSkin: HudSkinChoice;
+        hudSkinOrnaments: boolean;
+        /** Panel surface alpha percent, clamped to 80–100. */
+        hudSkinOpacity: number;
+        /** Ornament size percent, clamped to 75–150. */
+        hudSkinScale: number;
+        hudSkinUseChampColor: boolean;
+    }
+
     interface LcuStatus {
         state: 'searching' | 'connecting' | 'connected';
         phase: string | null;
         summonerName: string | null;
+        /** Riot ID name/tag/puuid — structural twin of electron/lcu-socket.ts LcuSummary. */
+        gameName?: string | null;
+        tagLine?: string | null;
+        puuid?: string | null;
         connectedAt: number | null;
+    }
+
+    /** LCU-backed champ-select scouting row (rank, mastery, recent form). */
+    interface ScoutingPlayer {
+        summonerId: number;
+        championId: number;
+        teamId: number;
+        rankTier?: string | null;
+        rankDivision?: string | null;
+        masteryLevel?: number | null;
+        recentWins?: number;
+        recentGames?: number;
     }
 
     interface AppSettings {
@@ -40,6 +97,49 @@ declare global {
         autoSpells: boolean;
         /** Record the match and save a clip on a kill, death, or Great play. Off by default. */
         autoClip: boolean;
+    /** Dashboard appearance (theme/accent/density/radius/glass/type scale). */
+    appearance: AppearanceSettings;
+        /** Champions pinned on the orbit rail, in display order (max 6). */
+        pinnedChampions: string[];
+        /** Dashboard pixel pet (species + color). Persisted like appearance. */
+        pet: PetSettings;
+    }
+
+    type AppearanceTheme = 'gothic' | 'ember' | 'azure' | 'phantom' | 'ivory';
+    type AppearanceAccent = 'chrome' | 'gold' | 'blood' | 'teal' | 'royal' | 'champion';
+    type AppearanceDensity = 'compact' | 'comfortable' | 'spacious';
+    type AppearanceLayout = 'compact' | 'showcase';
+    type OrnamentLevel = 'none' | 'light' | 'full';
+
+    interface AppearanceSettings {
+        /** Surface / type / line palette. */
+        theme: AppearanceTheme;
+        /** Primary ("yours") accent color. */
+        accent: AppearanceAccent;
+        /** Spacing rhythm. */
+        density: AppearanceDensity;
+        /** Corner radius for cards, inputs and menus, in px (0-24). */
+        radius: number;
+        /** Frosted-glass translucency + blur level for surfaces, 0-100. 0 = opaque (off). */
+        glass: number;
+        /** Dashboard font scale multiplier, 0.85-1.2. */
+        fontScale: number;
+        /** Main champion (Data Dragon id). Empty = follow your most-played champion. */
+        mainChampion: string;
+        /** Compact (current shell) or showcase (larger champion hero). */
+        layoutPreset: AppearanceLayout;
+        /** Ornament intensity, 0-100. 0 = plain chrome, 50 = default, 100 = full filigree. */
+        ornament: number;
+    }
+
+    type PetSpecies = 'imp' | 'pup' | 'wyrm' | 'blob';
+    type PetColor = 'teal' | 'gold' | 'blood' | 'royal' | 'chrome';
+
+    interface PetSettings {
+        /** Which creature the dashboard pet is. */
+        species: PetSpecies;
+        /** Body color choice. */
+        color: PetColor;
     }
 
     interface SavedClipInfo {
@@ -105,7 +205,12 @@ declare global {
         /** Hold-to-show is on and the key helper can see Tab. */
         overlayHold: boolean;
         /** League's display mode and screen recorders running right now. */
-        environment: { windowMode: 'fullscreen' | 'windowed' | 'borderless' | null; recorders: string[] };
+        environment: {
+            windowMode: 'fullscreen' | 'windowed' | 'borderless' | null;
+            recorders: string[];
+            mpoOff: boolean | null;
+            windowedGameOptimizations: boolean | null;
+        };
         lcu: LcuStatus;
         inGame: boolean;
         livePollMs: number | null;
@@ -116,6 +221,10 @@ declare global {
     interface Window {
         electronAPI?: {
             connectLCU: () => Promise<{ success: boolean; credentials?: { port: string; token: string; protocol: string }; error?: string }>;
+            riotStatus?: () => Promise<RiotStatus>;
+            riotSetKey?: (key: string) => Promise<{ ok: boolean; error?: string }>;
+            riotClearKey?: () => Promise<void>;
+            getLiveBuild?:(champion: string, role: string, mode?: 'ranked' | 'aram') => Promise<import('./logic/liveBuild').LiveBuild | null>;
             requestLCU: (method: string, endpoint: string, body?: unknown) => Promise<{ success: boolean; data?: unknown; error?: string }>;
             exportItemSet: (build: {
                 starter: Array<{ id: string }>;
@@ -159,6 +268,7 @@ declare global {
             setOverlayTextScale: (scale: number) => Promise<{ success: boolean; overlayTextScale: number }>;
             setOverlayHudModules: (modules: Partial<HudModules>) => Promise<{ success: boolean; hudModules: HudModules }>;
             setOverlayHudLayout: (layout: unknown) => Promise<{ success: boolean; hudLayout?: unknown }>;
+            setOverlayHudSkin: (skin: Partial<HudSkinSettings>) => Promise<{ success: boolean; hudSkin: HudSkinSettings }>;
             getCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             refreshCatalog: () => Promise<{ success: boolean; catalog?: unknown }>;
             syncLeagueScales: () => Promise<{ success: boolean; hudScale: number; mapScale: number; source?: string }>;
@@ -176,9 +286,11 @@ declare global {
                 overlayTextScale?: number;
                 hudModules?: HudModules;
                 hudLayout?: unknown;
+                hudSkin?: HudSkinSettings;
                 calibration?: OverlayCalibration;
                 gameWidth?: number;
                 gameHeight?: number;
+                version?: string;
             }>;
             onOverlayUpdate: (callback: (payload: unknown) => void) => (() => void) | void;
             onOverlayMeta: (callback: (payload: unknown) => void) => (() => void) | void;
@@ -188,8 +300,10 @@ declare global {
             onLcuStatus?: (callback: (payload: LcuStatus) => void) => () => void;
             getChampSelect?: () => Promise<{ session: unknown | null }>;
             onChampSelect?: (callback: (session: unknown | null) => void) => () => void;
+            getScouting?: () => Promise<{ success: boolean; players: ScoutingPlayer[]; error?: string }>;
 
             getAppSettings?: () => Promise<AppSettings>;
+            getAppVersion?: () => Promise<string>;
             setAppSettings?: (patch: Partial<AppSettings>) => Promise<{ settings: AppSettings; restartRequired: boolean }>;
             relaunchApp?: () => Promise<void>;
             getPerfStats?: () => Promise<PerfStats>;
@@ -198,6 +312,7 @@ declare global {
             revealClip?: (target?: string) => Promise<{ success: boolean; error?: string }>;
             getMatchHistory?: () => Promise<{ success: boolean; games: MatchSummary[]; error?: string }>;
             getMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown }>;
+            onMayhemBundleUpdate?: (callback: (bundle: unknown) => void) => (() => void) | void;
             refreshMayhemBundle?: () => Promise<{ success: boolean; bundle?: unknown; fromNetwork?: boolean; error?: string }>;
             getMayhemOwned?: () => Promise<{ success: boolean; owned?: string[] }>;
             getMayhemRoll?: () => Promise<{ success: boolean; roll?: string[] }>;
@@ -206,6 +321,7 @@ declare global {
             takeMayhemAugment?: (augmentId: string) => Promise<{ success: boolean; owned?: string[] }>;
             setSummonerSpells?: (spellIds: [number, number]) => Promise<{ success: boolean; error?: string }>;
             reportOverlayContent?: (hasContent: boolean) => void;
+            reportOverlayHeartbeat?: (beat: { frames: boolean; pageVisible: boolean }) => void;
         };
     }
 }

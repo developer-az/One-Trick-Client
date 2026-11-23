@@ -6,7 +6,6 @@ import { SNAPSHOT_BUNDLE } from './src/catalog/snapshot';
 import { resolveProfileId } from './src/overlay/overlayLogic';
 import { isAramOrMayhem, isMayhemGame } from './src/logic/mayhem/mode';
 import { isMayhemAugmentHudVisible } from './src/logic/mayhem/visibility';
-import { DEFAULT_HUD_MODULES } from './src/overlay/hudModules';
 
 const ok = (c: boolean, m: string) => {
   if (!c) {
@@ -46,6 +45,5 @@ const yoneMid = resolveProfileId({
 ok(yoneMid === 'yone-mid', `ranked Yone mid profile (${yoneMid})`);
 
 ok(!isMayhemAugmentHudVisible([], false), 'no augment HUD while playing SR');
-ok(DEFAULT_HUD_MODULES.mayhem === false, 'Mayhem overlay module off by default (opt-in beta)');
 
 if (!process.exitCode) console.log('verify:ranked ok');

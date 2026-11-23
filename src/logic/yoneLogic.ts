@@ -186,7 +186,7 @@ export function calculateYoneBuild(enemyTeam: Champion[], allyJungle?: Champion 
         { ...ITEMS.SHIELDBOW, reason: 'Shield + crit to convert E all-ins without dying.' },
       ]
     : [
-        { ...ITEMS.BOTRK, reason: '%HP on-hit in E — highest skirmish WR core (Skill-Capped).' },
+        { ...ITEMS.BOTRK, reason: '%HP on-hit in E — strongest when fights run long against high-HP targets.' },
         { ...ITEMS.SHIELDBOW, reason: 'Crit + lifeline — snap back alive after chunk.' },
       ];
 

@@ -6,6 +6,7 @@ import { roleFromLcuPosition } from '../catalog/roles';
 import { ingestChampionCatalog } from '../data/championCatalog';
 import { solveRoles } from '../logic/championPositions';
 import type { Champion } from '../logic/pykeLogic';
+import { diskSize, orbitTier, type OrbitTier } from './orbitLayout';
 import {
   genericProfileId,
   getProfile,
@@ -20,6 +21,8 @@ import {
   type ProfileId,
 } from '../logic/profiles';
 import type { OverlayBotSummoner } from '../overlay/overlayLogic';
+import { accentSoft, resolveChampionAccent } from '../overlay/champAccent';
+import type { BannerChampion } from './ornaments';
 import type { Toast } from './ui';
 import { sendLoadout, type ExportResult } from './exporter';
 import type { Loadout } from './views/LoadoutView';
@@ -67,6 +70,10 @@ export function useCatalog(): { champions: Champion[]; stamp: string; patch: str
 export interface LeagueState {
   lcu: LcuStatus | null;
   inGame: boolean;
+  /** Overlay reports frozen-clock loading (GameStart / pre-clock). */
+  matchLoading: boolean;
+  liveGameTime: number;
+  trustedGameTime: number;
   enemySummoners: OverlayBotSummoner[];
   /** Live-reported champion of the local player (in game). */
   liveChampionName: string | null;
@@ -76,6 +83,9 @@ export interface LeagueState {
 export function useLeague(): LeagueState {
   const [lcu, setLcu] = useState<LcuStatus | null>(null);
   const [inGame, setInGame] = useState(false);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [liveGameTime, setLiveGameTime] = useState(0);
+  const [trustedGameTime, setTrustedGameTime] = useState(0);
   const [enemySummoners, setEnemySummoners] = useState<OverlayBotSummoner[]>([]);
   const [liveChampionName, setLiveChampionName] = useState<string | null>(null);
   const [liveProfileHint, setLiveProfileHint] = useState<string | null>(null);
@@ -91,6 +101,9 @@ export function useLeague(): LeagueState {
     const unsubUpdate = api.onOverlayUpdate?.((payload) => {
       const data = payload as {
         inGame?: boolean;
+        loading?: boolean;
+        gameTime?: number;
+        trustedGameTime?: number;
         enemyBotSummoners?: OverlayBotSummoner[];
         profileHint?: string | null;
         localPlayer?: { championName?: string } | null;
@@ -100,8 +113,14 @@ export function useLeague(): LeagueState {
         if (!data.inGame) {
           setLiveChampionName(null);
           setLiveProfileHint(null);
+          setMatchLoading(false);
+          setLiveGameTime(0);
+          setTrustedGameTime(0);
         }
       }
+      if (typeof data.loading === 'boolean') setMatchLoading(data.loading);
+      if (typeof data.gameTime === 'number') setLiveGameTime(data.gameTime);
+      if (typeof data.trustedGameTime === 'number') setTrustedGameTime(data.trustedGameTime);
       if (Array.isArray(data.enemyBotSummoners)) setEnemySummoners(data.enemyBotSummoners);
       if (data.localPlayer?.championName) setLiveChampionName(data.localPlayer.championName);
       if (typeof data.profileHint === 'string') setLiveProfileHint(data.profileHint);
@@ -112,7 +131,7 @@ export function useLeague(): LeagueState {
     };
   }, []);
 
-  return { lcu, inGame, enemySummoners, liveChampionName, liveProfileHint };
+  return { lcu, inGame, matchLoading, liveGameTime, trustedGameTime, enemySummoners, liveChampionName, liveProfileHint };
 }
 
 /* -------------------------------------------------------------------- draft */
@@ -416,7 +435,17 @@ export function useAppSettings() {
   }, []);
 
   const update = useCallback((patch: Partial<AppSettings>) => {
-    if (settingsCache) settingsCache = { ...settingsCache, ...patch };
+    // Optimistic: deep-merge `appearance` so a single-field patch (e.g. only
+    // `theme`) doesn't momentarily drop the other appearance choices. The IPC
+    // mirror (updateAppSettings) does the same and returns the full settings.
+    if (settingsCache) {
+      const patchObj = patch as Record<string, unknown>;
+      const nextAppearance =
+        patchObj.appearance && typeof patchObj.appearance === 'object'
+          ? { ...settingsCache.appearance, ...(patchObj.appearance as Partial<AppearanceSettings>) }
+          : settingsCache.appearance;
+      settingsCache = { ...settingsCache, ...patch, appearance: nextAppearance };
+    }
     emitSettings();
     void window.electronAPI?.setAppSettings?.(patch).then((res) => {
       settingsCache = res.settings;
@@ -426,6 +455,155 @@ export function useAppSettings() {
   }, []);
 
   return { settings: settingsCache, update, restartRequired: restartPending };
+}
+
+/* -------------------------------------------------------------- appearance */
+
+/** Human-readable options for the dashboard appearance controls. */
+export const APPEARANCE_THEME_OPTIONS: Array<{ id: AppearanceTheme; label: string; blurb: string }> = [
+  { id: 'gothic', label: 'Gothic', blurb: 'Default ink-black chrome' },
+  { id: 'ember', label: 'Ember', blurb: 'Warm charcoal with low ember glare' },
+  { id: 'azure', label: 'Azure', blurb: 'Cool slate-blue night' },
+  { id: 'phantom', label: 'Phantom', blurb: 'Deep gunmetal violet' },
+  { id: 'ivory', label: 'Ivory', blurb: 'Light parchment reading mode' },
+];
+
+export const APPEARANCE_ACCENT_OPTIONS: Array<{ id: AppearanceAccent; label: string }> = [
+  { id: 'champion', label: 'Champion' },
+  { id: 'chrome', label: 'Chrome' },
+  { id: 'gold', label: 'Gold' },
+  { id: 'blood', label: 'Blood' },
+  { id: 'teal', label: 'Teal' },
+  { id: 'royal', label: 'Royal' },
+];
+
+export const APPEARANCE_DENSITY_OPTIONS: Array<{ id: AppearanceDensity; label: string; hint: string }> = [
+  { id: 'compact', label: 'Compact', hint: 'Tighter rows and cards' },
+  { id: 'comfortable', label: 'Comfortable', hint: 'Default rhythm' },
+  { id: 'spacious', label: 'Spacious', hint: 'Roomier cards and headers' },
+];
+
+export const APPEARANCE_LAYOUT_OPTIONS: Array<{ id: AppearanceLayout; label: string; hint: string }> = [
+  { id: 'compact', label: 'Compact', hint: 'Current shell with a slim champion strip' },
+  { id: 'showcase', label: 'Showcase', hint: 'Large champion hero on Home, wider banner art' },
+];
+
+/**
+ * Ornament bucket for the 0–100 intensity. Mirrors `ornamentLevel` in
+ * electron/app-settings.ts (the persisted contract); parity is exercised by
+ * verify_client_revamp.ts.
+ */
+export function ornamentBucket(value: number): OrnamentLevel {
+  const orn = !Number.isFinite(value) ? 50 : Math.min(100, Math.max(0, Math.round(value)));
+  if (orn <= 0) return 'none';
+  return orn < 75 ? 'light' : 'full';
+}
+
+/**
+ * Map an appearance choice onto root attributes + CSS custom properties. This
+ * mirrors the authoritative `appearanceToCss` in electron/app-settings.ts (the
+ * naming/enum contract is exercised by verify_appearance_settings.ts and
+ * verify_client_revamp.ts).
+ */
+export function appearanceCssMap(app: AppearanceSettings): {
+  attributes: Record<string, string>;
+  vars: Record<string, string>;
+} {
+  const ornament = !Number.isFinite(app.ornament)
+    ? 50
+    : Math.min(100, Math.max(0, Math.round(app.ornament)));
+  return {
+    attributes: {
+      'data-ot-theme': app.theme,
+      'data-ot-accent': app.accent,
+      'data-ot-density': app.density,
+      'data-ot-layout': app.layoutPreset === 'showcase' ? 'showcase' : 'compact',
+      'data-ot-ornament': ornamentBucket(app.ornament),
+    },
+    vars: {
+      '--ot-radius-set': `${app.radius}px`,
+      '--ot-glass': `${app.glass}`,
+      '--ot-font-scale': `${app.fontScale}`,
+      '--ot-ornament': `${ornament / 100}`,
+    },
+  };
+}
+
+/** Apply appearance to the app root so token.css/theme.css react immediately. */
+export function applyAppearance(settings: AppSettings | null): void {
+  if (!settings || !settings.appearance || typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const css = appearanceCssMap(settings.appearance);
+  for (const [key, value] of Object.entries(css.attributes)) root.setAttribute(key, value);
+  for (const [key, value] of Object.entries(css.vars)) root.style.setProperty(key, value);
+  if (settings.appearance.glass > 0) root.setAttribute('data-ot-glass-on', '');
+  else root.removeAttribute('data-ot-glass-on');
+}
+
+/**
+ * Main champion used by the shell: the explicit choice, else the most-played
+ * champion in the match history (numeric keys resolved through the catalog),
+ * else ''. Pure so the settings contract and verify test can share it.
+ */
+export function mainChampionId(
+  appearance: AppearanceSettings | null | undefined,
+  games: MatchSummary[] | null | undefined,
+  champions: ReadonlyArray<{ id: string; key: string }> | null | undefined
+): string {
+  const chosen = typeof appearance?.mainChampion === 'string' ? appearance.mainChampion.trim() : '';
+  if (chosen) return chosen;
+  if (!Array.isArray(games) || !games.length) return '';
+  const counts = new Map<number, { count: number; latest: number }>();
+  for (const game of games) {
+    const key = Number(game?.championId);
+    if (!Number.isFinite(key) || key <= 0) continue;
+    const row = counts.get(key) || { count: 0, latest: 0 };
+    row.count += 1;
+    row.latest = Math.max(row.latest, Number(game.at) || 0);
+    counts.set(key, row);
+  }
+  let best: { id: number; count: number; latest: number } | null = null;
+  for (const [id, row] of counts) {
+    const candidate = { id, count: row.count, latest: row.latest };
+    if (!best || candidate.count > best.count || (candidate.count === best.count && candidate.latest > best.latest)) {
+      best = candidate;
+    }
+  }
+  if (!best) return '';
+  const bestId = best.id;
+  const match = (champions || []).find((c) => String(c.key) === String(bestId));
+  return match ? match.id : '';
+}
+
+/**
+ * Sample the main champion's icon once per champion change and publish it as
+ * --ot-champ / --ot-champ-soft on the app root. The overlay's resolver caches
+ * in memory and localStorage, so this costs one small image fetch ever per
+ * champion and nothing at all unless the champion palette is selected.
+ */
+export function useChampionAccent(champion: BannerChampion | null, enabled: boolean): void {
+  const id = champion?.id || '';
+  const key = champion?.key != null ? String(champion.key) : '';
+  const name = champion?.name || '';
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (!enabled || !id) {
+      root.style.removeProperty('--ot-champ');
+      root.style.removeProperty('--ot-champ-soft');
+      return;
+    }
+    let cancelled = false;
+    void resolveChampionAccent({ id, key, name }).then((hex) => {
+      if (cancelled) return;
+      root.style.setProperty('--ot-champ', hex);
+      root.style.setProperty('--ot-champ-soft', accentSoft(hex));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, key, name, enabled]);
 }
 
 /* -------------------------------------------------------------- auto import */
@@ -537,4 +715,72 @@ export function useMatchHistory(league: LeagueState, wanted: boolean) {
   }, [wanted, connected, inGame]);
 
   return { ...historyState, reload: loadHistory };
+}
+
+/** Rank / mastery / recent form for everyone in a live champ-select session (LCU). */
+export function useScouting(live: boolean): { players: ScoutingPlayer[]; loading: boolean } {
+  const [players, setPlayers] = useState<ScoutingPlayer[]>([]);
+  const [loading, setLoading] = useState(false);
+  const active = live && !!window.electronAPI?.getScouting;
+
+  useEffect(() => {
+    if (!active) return;
+    const api = window.electronAPI!;
+    let cancelled = false;
+    let inFlight = false;
+    const pull = (): void => {
+      // Polls are slower than the LCU read can be; never let two stack up.
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      void api
+        .getScouting!()
+        .then((res) => {
+          if (cancelled) return;
+          if (res?.success && Array.isArray(res.players)) setPlayers(res.players);
+          setLoading(false);
+        })
+        .catch(() => {
+          // Keep the last good roster on a transient LCU failure; only clear
+          // the spinner so the next poll can try again.
+          if (!cancelled) setLoading(false);
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    queueMicrotask(() => {
+      if (!cancelled) setLoading(true);
+    });
+    pull();
+    const id = window.setInterval(pull, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [active]);
+
+  if (!active) return { players: [], loading: false };
+  return { players, loading };
+}
+
+/* ------------------------------------------------------------- disk tier */
+
+/**
+ * Window width to disk tier (arc / segmented bar / icon bar). One resize
+ * listener, one state update per resize: no scroll work, no animation loop.
+ */
+export function useViewportWidth(): number {
+  const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1600 : window.innerWidth));
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return width;
+}
+
+/** Disk tier plus diameter for the current window width. */
+export function useOrbitShell(): { tier: OrbitTier; disk: number; width: number } {
+  const width = useViewportWidth();
+  return { tier: orbitTier(width), disk: diskSize(width), width };
 }

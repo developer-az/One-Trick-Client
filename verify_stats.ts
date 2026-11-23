@@ -1,6 +1,6 @@
 // Match-history parsing and stats math.
 import { alliesFrom, enemiesFrom, roleOf, summarize } from './electron/match-history';
-import { byChampion, recordAgainst, recordWith, wilson } from './src/logic/stats';
+import { byChampion, personalTier, recordAgainst, recordWith, wilson } from './src/logic/stats';
 
 function assert(c: unknown, m: string): void {
   if (!c) {
@@ -62,4 +62,14 @@ assert(recordWith(games, 222).games === 2, 'record with ADC');
 // Smite decides jungle; a smiteless "JUNGLE" lane guess (roaming Pyke) is not jungle.
 assert(roleOf({ spell1Id: 4, spell2Id: 11, timeline: { lane: 'TOP', role: 'SOLO' } }) === 'Jungle', 'smite = jungle');
 assert(roleOf({ spell1Id: 4, spell2Id: 14, timeline: { lane: 'JUNGLE', role: 'NONE' } }) === null, 'roaming support is not jungle');
+const tierRows = byChampion(games);
+assert(personalTier(tierRows[0]) === '—' || personalTier(tierRows[0]) !== 'S', 'tier respects min sample on tiny set');
+const manyWins = Array.from({ length: 12 }, (_, i) => ({
+  ...s!,
+  gameId: 100 + i,
+  win: true,
+}));
+const tierS = byChampion(manyWins)[0];
+assert(personalTier(tierS) === 'S', 'strong CI yields S tier on your history');
+
 console.log('verify:stats ok');

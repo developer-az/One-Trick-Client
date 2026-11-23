@@ -55,14 +55,57 @@ function listRecorders(): Promise<string[]> {
     return pending;
 }
 
+/** `reg query ... /v OverlayTestMode` output → true when MPO is disabled (value 5). */
+export function mpoOffFromReg(stdout: string): boolean {
+    const m = stdout.match(/OverlayTestMode\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+    return !!m && parseInt(m[1], 16) === 5;
+}
+
+/**
+ * `reg query ... /v DirectXUserGlobalSettings` output → Windows 11
+ * "Optimizations for windowed games" on/off; null when Windows never stored it.
+ */
+export function windowedOptimizationsFromReg(stdout: string): boolean | null {
+    const m = stdout.match(/SwapEffectUpgradeEnable=(\d)/);
+    return m ? m[1] === '1' : null;
+}
+
+function regQuery(key: string, value: string): Promise<string> {
+    if (process.platform !== 'win32') return Promise.resolve('');
+    return new Promise((resolve) => {
+        // A missing value exits non-zero with empty stdout; the parsers treat that as "not set".
+        execFile('reg', ['query', key, '/v', value], { windowsHide: true, timeout: 5000 }, (_error, stdout) => resolve(stdout || ''));
+    });
+}
+
 export interface OverlayEnvironment {
     windowMode: LeagueWindowMode;
     recorders: string[];
+    /** MPO disabled via Dwm OverlayTestMode=5 (takes effect after a restart). */
+    mpoOff: boolean | null;
+    /** Windows 11 "Optimizations for windowed games"; null = never set. */
+    windowedGameOptimizations: boolean | null;
+}
+
+let settingsCache: { at: number; mpoOff: boolean | null; windowedGameOptimizations: boolean | null } | null = null;
+
+async function windowsSettings(): Promise<{ mpoOff: boolean | null; windowedGameOptimizations: boolean | null }> {
+    if (process.platform !== 'win32') return { mpoOff: null, windowedGameOptimizations: null };
+    if (settingsCache && Date.now() - settingsCache.at < CACHE_MS) return settingsCache;
+    const [dwm, dx] = await Promise.all([
+        regQuery('HKLM\\SOFTWARE\\Microsoft\\Windows\\Dwm', 'OverlayTestMode'),
+        regQuery('HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences', 'DirectXUserGlobalSettings'),
+    ]);
+    settingsCache = { at: Date.now(), mpoOff: mpoOffFromReg(dwm), windowedGameOptimizations: windowedOptimizationsFromReg(dx) };
+    return settingsCache;
 }
 
 export async function overlayEnvironment(): Promise<OverlayEnvironment> {
+    const [recorders, settings] = await Promise.all([listRecorders(), windowsSettings()]);
     return {
         windowMode: readLeagueHudScales()?.windowMode ?? null,
-        recorders: await listRecorders(),
+        recorders,
+        mpoOff: settings.mpoOff,
+        windowedGameOptimizations: settings.windowedGameOptimizations,
     };
 }

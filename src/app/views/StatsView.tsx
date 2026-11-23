@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import type { Champion } from '../../logic/pykeLogic';
 import { championLossProfile, lossMatchupInsights } from '../../logic/lossInsights';
-import { byChampion, pct, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
+import { byChampion, pct, personalTier, record, recordAgainst, recordWith, type Record_ } from '../../logic/stats';
 import { isDesktop } from '../hooks';
+import type { ViewId } from '../App';
 import { IconStats } from '../icons';
 import { Badge, Card, CardHeader, EmptyState, Portrait } from '../ui';
 
@@ -17,7 +18,8 @@ export const StatsView: React.FC<{
   error: string | null;
   connected: boolean;
   onReload: () => void;
-}> = ({ champions, games, loading, error, connected, onReload }) => {
+  onNavigate?: (view: ViewId) => void;
+}> = ({ champions, games, loading, error, connected, onReload, onNavigate }) => {
   const byKey = useMemo(() => new Map(champions.map((c) => [Number(c.key), c])), [champions]);
   const rows = useMemo(() => byChampion(games || []), [games]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -36,16 +38,23 @@ export const StatsView: React.FC<{
   const header = (
     <div className="ot-page-header">
       <div>
-        <h1 className="ot-page-title">Your stats</h1>
+        <h1 className="ot-page-title ot-orn-title">Your stats</h1>
         <p className="ot-page-sub">
           From your recent Summoner's Rift games in the League client. Remakes and other modes are left out.
         </p>
       </div>
-      {isDesktop && connected ? (
-        <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
-          {loading ? 'Loading' : 'Refresh'}
-        </button>
-      ) : null}
+      <div className="flex items-center gap-2">
+        {onNavigate ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={() => onNavigate('performance')}>
+            Performance
+          </button>
+        ) : null}
+        {isDesktop && connected ? (
+          <button type="button" className="ot-btn ot-btn-ghost" onClick={onReload} disabled={loading}>
+            {loading ? 'Loading' : 'Refresh'}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 
@@ -106,24 +115,39 @@ export const StatsView: React.FC<{
     <div className="ot-page">
       {header}
 
-      <div className="grid gap-5 sm:grid-cols-3 mb-5">
+      <div className="grid gap-4 sm:grid-cols-3 mb-4">
         <Stat label="Games" value={String(overall.games)} hint={`${overall.wins} wins, ${overall.losses} losses`} />
         <Stat label="Win rate" value={pct(overall.winRate)} hint={`95% range ${pct(overall.low)} to ${pct(overall.high)}`} />
         <Stat label="Champions played" value={String(rows.length)} hint={`Most: ${byKey.get(rows[0].championId)?.name || '–'}`} />
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <Card className="mb-4">
+        <CardHeader title="Your tier list" sub="Tiers from your own match history and Wilson intervals — not global meta." />
+        <div className="flex flex-wrap gap-2 mt-2">
+          {rows.slice(0, 12).map((r) => {
+            const c = byKey.get(r.championId);
+            const tier = personalTier(r, MIN_SAMPLE);
+            return (
+              <span key={r.championId} className="ot-chip text-xs">
+                {c?.name || r.championId}: <strong>{tier}</strong>
+              </span>
+            );
+          })}
+        </div>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2" pad={false}>
           <div className="ot-card-pad !pb-2">
             <CardHeader title="By champion" sub="Select a row, then use Matchups for enemies or allies." />
           </div>
-          <table className="w-full text-sm">
+          <table className="ot-table w-full text-sm">
             <thead>
               <tr className="text-left ot-faint text-xs uppercase tracking-wide">
-                <th className="py-2 pl-5 font-semibold">Champion</th>
-                <th className="py-2 font-semibold text-right">G</th>
-                <th className="py-2 font-semibold text-right">WR</th>
-                <th className="py-2 pr-5 font-semibold text-right">KDA</th>
+                <th className="font-semibold">Champion</th>
+                <th className="font-semibold text-right">G</th>
+                <th className="font-semibold text-right">WR</th>
+                <th className="font-semibold text-right">KDA</th>
               </tr>
             </thead>
             <tbody className="ot-num">
@@ -136,17 +160,17 @@ export const StatsView: React.FC<{
                     className={`border-t border-[color:var(--ot-border)] cursor-pointer ${active ? 'bg-[color:var(--ot-surface-2)]' : 'hover:bg-[color:var(--ot-surface-2)]'}`}
                     onClick={() => setSelected(r.championId)}
                   >
-                    <td className="py-2 pl-5">
+                    <td>
                       <span className="flex items-center gap-2.5 min-w-0">
                         <Portrait champion={c || { key: r.championId }} size={28} />
                         <span className="font-medium truncate">{c?.name || `#${r.championId}`}</span>
                       </span>
                     </td>
-                    <td className="py-2 text-right">{r.games}</td>
-                    <td className="py-2 text-right">
+                    <td className="text-right">{r.games}</td>
+                    <td className="text-right">
                       <WinRate r={r} />
                     </td>
-                    <td className="py-2 pr-5 text-right">{r.kda.toFixed(2)}</td>
+                    <td className="text-right">{r.kda.toFixed(2)}</td>
                   </tr>
                 );
               })}
@@ -211,7 +235,7 @@ export const StatsView: React.FC<{
       </div>
 
       {focus != null && (lossInsights.length > 0 || (lossProfile && lossProfile.losses >= 2)) ? (
-        <Card className="mt-5">
+        <Card className="mt-4">
           <CardHeader
             title={`${champName} — loss patterns`}
             sub="Enemies that show up in losses and where your record is weak. Use for runes and build before queue."

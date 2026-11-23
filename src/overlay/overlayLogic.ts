@@ -1,6 +1,7 @@
 import type { Build, MatchupAnalysis } from '../logic/pykeLogic';
 import { profileIdFromChampion, isSupportStyleProfile, profileFocusLane, type ProfileId } from '../logic/profiles';
 import { roleFromLivePosition } from '../catalog/roles';
+import { resolveChampionRef } from '../data/championCatalog';
 import { formatCd } from '../logic/summonerSpells';
 import { formatCannonEta, nextCannon, shouldShowCannonCue } from '../logic/waveLogic';
 import { assessJungleThreat } from '../logic/jungleLogic';
@@ -12,9 +13,22 @@ import {
   type BuildItemRef,
 } from '../logic/buildProgress';
 import { activeThreatsByName } from '../logic/counters';
+import { crossMapCue, type CrossMapQuality } from '../logic/crossMap';
+import { rankOverlayCues, type DangerFusionContext } from '../logic/cueRank';
+import { schemeHoverCues } from '../logic/mapScheme';
 import { inferSituation, type ProfileSituation } from '../logic/situation';
 import { buildAramInGameCues, getAramGankStatus, getAramWardStatus, shouldUseAramOverlay } from '../logic/aramOverlay';
 import { isAramOrMayhem } from '../logic/mayhem/mode';
+import {
+  planBuyOrder,
+  planNextPurchase,
+  type BuyOrderPlan,
+  type PriceLookup,
+} from '../logic/purchasePlan';
+import type { ObjectiveTimers } from '../logic/gameState';
+import type { PetSettings } from '../app/pixelPetLogic';
+import type { LoadingStats } from './loadingStats';
+import type { LoadingSlot } from './loadingScreenGeometry';
 
 export interface OverlayEnemy {
   championName: string;
@@ -22,6 +36,9 @@ export interface OverlayEnemy {
   position?: string;
   isDead?: boolean;
   items?: string[];
+  /** Item gold (full shop prices, consumables excluded), from the Live Client. */
+  itemGold?: number;
+  respawnTimer?: number;
   scores?: {
     assists: number;
     creepScore: number;
@@ -33,6 +50,57 @@ export interface OverlayEnemy {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
   };
+}
+
+export interface EnemyRespawnRow {
+  championName: string;
+  position?: string;
+  remainingSec: number;
+}
+
+/**
+ * Countdown rows for dead enemies, derived locally from the payload clock.
+ * Only dead enemies with a live respawn timer are returned; elapsed wall time
+ * since the payload was built is subtracted so the list keeps ticking without
+ * new IPC sends. Never throws on malformed rows.
+ */
+export function enemyRespawns(
+  enemies: OverlayEnemy[] | undefined,
+  payloadTimestampMs: number | undefined,
+  nowMs: number
+): EnemyRespawnRow[] {
+  const list = Array.isArray(enemies) ? enemies : [];
+  const timestampValid =
+    typeof payloadTimestampMs === 'number' && Number.isFinite(payloadTimestampMs);
+  const elapsedSec = timestampValid
+    ? Math.max(0, nowMs - (payloadTimestampMs as number)) / 1000
+    : 0;
+  const rows: EnemyRespawnRow[] = [];
+  for (const enemy of list) {
+    if (!enemy || enemy.isDead !== true) continue;
+    const timer = enemy.respawnTimer;
+    if (typeof timer !== 'number' || !Number.isFinite(timer) || timer <= 0) continue;
+    const remaining = Math.ceil(timer - elapsedSec);
+    if (remaining <= 0) continue;
+    rows.push({
+      championName: typeof enemy.championName === 'string' ? enemy.championName : '',
+      position: enemy.position,
+      remainingSec: remaining,
+    });
+  }
+  rows.sort((a, b) => {
+    if (a.remainingSec !== b.remainingSec) return a.remainingSec - b.remainingSec;
+    return a.championName.localeCompare(b.championName);
+  });
+  return rows.slice(0, 5);
+}
+
+/** "0:07" / "0:42" / "1:05"; zero or negative prints "0:00". */
+export function formatRespawn(sec: number): string {
+  const safe = Number.isFinite(sec) ? Math.max(0, Math.floor(sec)) : 0;
+  const m = Math.floor(safe / 60);
+  const s = safe % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export interface OverlayBotSummoner {
@@ -54,10 +122,19 @@ export interface OverlayLocalPlayer {
   championName: string;
   level: number;
   isDead: boolean;
-  items: Array<{ itemID: number; displayName: string; count: number; slot: number }>;
+  items: Array<{
+    itemID: number;
+    displayName: string;
+    count: number;
+    slot: number;
+    price?: number;
+    consumable?: boolean;
+  }>;
+  /** Item gold of the local player's inventory. */
+  itemGold?: number;
   scores?: OverlayEnemy['scores'];
   position?: string;
-  currentGold: number;
+  currentGold: number | null;
   summonerSpells?: {
     summonerSpellOne?: { displayName: string };
     summonerSpellTwo?: { displayName: string };
@@ -66,6 +143,21 @@ export interface OverlayLocalPlayer {
 
 export interface OverlayState {
   inGame: boolean;
+  /** Loading screen only — pet overlay, no HUD rails. */
+  loading?: boolean;
+  /** Champion you are loading in as (numeric LCU key + display name). */
+  championId?: number | null;
+  championName?: string | null;
+  /** Recent form on that champion, fetched once per load (see loadingStats.ts). */
+  loadingStats?: LoadingStats | null;
+  /** Your loading-screen slot (side + index among your team), when known. */
+  loadingSlot?: LoadingSlot | null;
+  /** Queue id + map id, captured at load entry and kept for the whole match. */
+  queueId?: number | null;
+  mapId?: number | null;
+  objectiveTimers?: ObjectiveTimers | null;
+  pet?: PetSettings;
+  trustedGameTime?: number;
   gameflowPhase?: string | null;
   gameMode?: string | null;
   gameTime?: number;
@@ -75,7 +167,14 @@ export interface OverlayState {
   isYone?: boolean;
   profileHint?: ProfileId | null;
   enemies?: OverlayEnemy[];
-  allies?: Array<{ championName: string; level: number; position?: string; isDead?: boolean }>;
+  allies?: Array<{
+    championName: string;
+    level: number;
+    position?: string;
+    isDead?: boolean;
+    /** Item gold of this ally, for the team item-gold lead. */
+    itemGold?: number;
+  }>;
   cachedChampSelectEnemies?: Array<{ championId: number; championName?: string; position?: string }>;
   enemyBotSummoners?: OverlayBotSummoner[];
   activePlayerLevel?: number;
@@ -92,6 +191,8 @@ export interface OverlayState {
   mayhemWaitingForDeath?: boolean;
   /** Set when user hits Page Up to close a stuck augment HUD. */
   mayhemAugmentDismissedAt?: number;
+  /** One-time OCR notice (e.g. "Use borderless for augment detection"). */
+  mayhemOcrHint?: string;
 }
 
 export interface OverlayCue {
@@ -111,6 +212,141 @@ export interface OverlayCue {
 
 export type BuildProgressSnapshot = ReturnType<typeof trackBuildProgress>;
 
+export interface BuyRailLine {
+  action: 'buy-full' | 'buy-component' | 'save' | 'no-slot';
+  buyId: string | null;
+  text: string;
+  title: string;
+}
+
+function formatRailGold(value: number): string {
+  return `${value.toLocaleString('en-US')}g`;
+}
+
+/** One-line "what to buy now" for the HUD buy rail, or null when there is nothing to say. */
+export function buyRailLine(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailLine | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  // Live gold is fractional (e.g. 566.546). Plan with whole gold so the rail
+  // never prints decimals.
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown') return null;
+
+  const buyId = plan.buy?.id ?? null;
+  const cost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  let text: string;
+  switch (plan.action) {
+    case 'buy-full':
+      text = `Buy now · ${formatRailGold(cost)}`;
+      break;
+    case 'buy-component':
+      text = `Part · ${formatRailGold(cost)}`;
+      break;
+    case 'save':
+      text = `Need ${formatRailGold(plan.needGold ?? 0)}`;
+      break;
+    case 'no-slot':
+      text = 'No free slot';
+      break;
+    default:
+      return null;
+  }
+
+  return { action: plan.action, buyId, text, title: plan.cue };
+}
+
+export interface BuyRailDetail {
+  name: string;
+  itemId: string;
+  cost: number;
+  goldShort: number | null;
+  kind: 'buy-full' | 'buy-component' | 'save';
+  partOf: string | null;
+}
+
+/**
+ * Structured companion to buyRailLine: same guards and planning inputs,
+ * exposing the item to buy now, its price and how much gold is still missing.
+ * Returns null wherever buyRailLine returns null or has no purchasable item.
+ */
+export function buyRailDetail(
+  state: OverlayState,
+  progress: BuildProgressSnapshot,
+  prices: PriceLookup | null
+): BuyRailDetail | null {
+  if (!prices || !progress.next) return null;
+  const player = state.localPlayer;
+  if (!player) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const wholeGold = Math.floor(currentGold);
+
+  const plan = planNextPurchase({
+    target: progress.next,
+    inventory: player.items,
+    currentGold: wholeGold,
+    prices,
+  });
+  if (!plan || plan.action === 'unknown' || plan.action === 'no-slot') return null;
+
+  const rawCost = plan.buy?.cost ?? plan.remainingCost ?? 0;
+  const cost = Math.round(rawCost);
+  const goldShort = Math.max(0, cost - wholeGold);
+
+  return {
+    name: plan.buy?.name ?? plan.targetName,
+    itemId: plan.buy?.id ?? plan.targetId,
+    cost,
+    goldShort,
+    kind: plan.action,
+    partOf: plan.action === 'buy-component' ? plan.targetName : null,
+  };
+}
+
+/**
+ * The ordered buy plan for one live state: one BUY NEXT + the numbered queue.
+ * The sell-boots cue and the rail decision share one verdict: when
+ * supportBootSlotAdvice says "sell", the plan is re-run with the boots' slot
+ * freed, so the rail shows the actionable purchase — never a contradictory
+ * "no free slot" next to a "sell boots" cue. Null only when the build or a
+ * player read is missing (gold unknown keeps the plan itself honest).
+ */
+export function buyOrderPlanForState(
+  state: OverlayState,
+  build: OverlayCueContext['build'],
+  prices: PriceLookup | null
+): BuyOrderPlan | null {
+  if (!build) return null;
+  const player = state.localPlayer;
+  if (!player || !Array.isArray(player.items)) return null;
+  const currentGold = player.currentGold;
+  if (typeof currentGold !== 'number' || !Number.isFinite(currentGold)) return null;
+  const progress = trackBuildProgress(player.items, build);
+  const behind = situationFromState(state).state === 'behind';
+  const advice = supportBootSlotAdvice(player.items, progress, state.gameTime ?? 0, { behind });
+  return planBuyOrder({
+    build,
+    inventory: player.items,
+    currentGold: Math.floor(currentGold),
+    prices,
+    freeSlot: advice?.action === 'sell',
+  });
+}
+
 export interface OverlayCueContext {
   analysis?: MatchupAnalysis | null;
   build?: Build | null;
@@ -124,13 +360,41 @@ export interface OverlayCueContext {
 export function resolveProfileId(state: OverlayState, fallback?: ProfileId): ProfileId {
   const liveName = state.localPlayer?.championName;
   if (liveName) {
-    const aramStyle = isAramOrMayhem(state.gameMode, state.mapName);
+    const aramStyle = isAramOrMayhem(state.gameMode, state.mapName, {
+      queueId: state.queueId,
+      mapId: state.mapId,
+    });
     const liveRole = aramStyle ? null : roleFromLivePosition(state.localPlayer?.position);
     return profileIdFromChampion(liveName, liveRole);
   }
   if (state.profileHint) return state.profileHint;
   if (state.isYone) return 'yone-mid';
   return fallback || 'pyke-support';
+}
+
+/**
+ * The live champion's own profile, or null when it cannot be resolved. Used by
+ * ARAM-family HUDs so an unknown champion never renders another champion's
+ * build (and the buy rail can hide instead of inventing a support path).
+ */
+export function resolveChampionProfileId(state: OverlayState): ProfileId | null {
+  const liveName = (state.localPlayer?.championName || '').trim();
+  if (!liveName) return null;
+  // An unreadable/unknown name must not become "another champion's" build.
+  if (!resolveChampionRef({ name: liveName })) return null;
+  const aramStyle = isAramOrMayhem(state.gameMode, state.mapName, {
+    queueId: state.queueId,
+    mapId: state.mapId,
+  });
+  const role = aramStyle ? null : roleFromLivePosition(state.localPlayer?.position);
+  const id = profileIdFromChampion(liveName, role);
+  if (id === 'pyke-support') {
+    // profileIdFromChampion falls back to Pyke for an unknown champion; only a
+    // real Pyke may keep that profile.
+    const compact = liveName.toLowerCase().replace(/[^a-z]/g, '');
+    if (compact !== 'pyke') return null;
+  }
+  return id;
 }
 
 /** Behind / even / ahead read straight off the live payload. */
@@ -178,17 +442,60 @@ export function remainingBuildItems(state: OverlayState, build: Build | null | u
   return trackBuildProgress(state.localPlayer?.items, build).remaining;
 }
 
-function mergeMomentCues(base: OverlayCue[], state: OverlayState): OverlayCue[] {
-  const moments = state.momentCues || [];
-  if (!moments.length) return base;
+function buildDangerFusionContext(
+  state: OverlayState,
+  profileId: ProfileId,
+  ctx: OverlayCueContext
+): DangerFusionContext {
+  const gameTime = state.gameTime ?? 0;
+  const focusLane = profileFocusLane(profileId);
+  const flashDown = (state.enemyBotSummoners || []).flatMap((lane) =>
+    lane.spells.filter((spell) => spell.short === 'Flash' && !spell.ready && spell.remaining > 0)
+  );
+  return {
+    profileId,
+    situation: ctx.situation || situationFromState(state),
+    jungleThreat: gameTime > 0 ? assessJungleThreat(gameTime, state.enemies || [], focusLane) : null,
+    botFlashRemainingSec: flashDown[0]?.remaining ?? null,
+    objectiveTimers: state.objectiveTimers,
+    gameTimeSec: gameTime,
+    buildProgress: ctx.buildProgress ?? null,
+    build: ctx.build ?? null,
+  };
+}
+
+function hudCompactCues(cues: OverlayCue[]): OverlayCue[] {
+  return cues.map((cue) => ({
+    ...cue,
+    label: compactCueLabel(cue.label),
+    rationale: (cue.detail || cue.rationale || '').replace(/\s+/g, ' ').trim().slice(0, 68),
+    detail: '',
+    maxAgeSec:
+      cue.maxAgeSec ??
+      (cue.id.includes('roam') || cue.id.includes('cannon') || cue.id === 'flash-up'
+        ? 16
+        : cue.urgency === 'info'
+          ? 14
+          : 28),
+  }));
+}
+
+function mergeMomentCues(
+  base: OverlayCue[],
+  state: OverlayState,
+  profileId: ProfileId,
+  ctx: OverlayCueContext
+): OverlayCue[] {
+  const moments = (state.momentCues || []) as OverlayCue[];
   const seen = new Set<string>();
-  return [...moments, ...base]
-    .filter((c) => {
-      if (seen.has(c.id)) return false;
-      seen.add(c.id);
-      return true;
-    })
-    .slice(0, 4);
+  const merged = [...moments, ...base].filter((c) => {
+    if (seen.has(c.id)) return false;
+    seen.add(c.id);
+    return true;
+  });
+  const fusion = buildDangerFusionContext(state, profileId, ctx);
+  const ranked = rankOverlayCues(merged, fusion, profileFocusLane(profileId));
+  return hudCompactCues(ranked.slice(0, 4));
 }
 
 /** Practical cues from Live Client + matchup analysis — levels, items, clock, mid/bot route. */
@@ -205,23 +512,27 @@ export function buildInGameCues(state: OverlayState, ctx: OverlayCueContext = {}
           buildProgress: trackBuildProgress(state.localPlayer?.items, ctx.build),
         };
 
-  if (isAramOrMayhem(state.gameMode, state.mapName)) {
+  if (
+    isAramOrMayhem(state.gameMode, state.mapName, { queueId: state.queueId, mapId: state.mapId })
+  ) {
     const aram = buildAramInGameCues(state);
     return mergeMomentCues(
-      finalizeCues(aram as OverlayCue[], state, profileId, { skipLaneMacro: true }),
-      state
+      finalizeCues(aram as OverlayCue[], state, profileId, cueCtx, { skipLaneMacro: true }),
+      state,
+      profileId,
+      cueCtx
     );
   }
   if (profileId === 'yone-mid') {
-    return mergeMomentCues(finalizeCues(buildYoneCues(state, cueCtx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildYoneCues(state, cueCtx), state, profileId, cueCtx), state, profileId, cueCtx);
   }
   if (profileId === 'pantheon-support') {
-    return mergeMomentCues(finalizeCues(buildPantheonCues(state, cueCtx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildPantheonCues(state, cueCtx), state, profileId, cueCtx), state, profileId, cueCtx);
   }
   if (profileId === 'pyke-support') {
-    return mergeMomentCues(finalizeCues(buildPykeCues(state, cueCtx), state, profileId), state);
+    return mergeMomentCues(finalizeCues(buildPykeCues(state, cueCtx), state, profileId, cueCtx), state, profileId, cueCtx);
   }
-  return mergeMomentCues(finalizeCues(buildGenericCues(state), state, profileId), state);
+  return mergeMomentCues(finalizeCues(buildGenericCues(state), state, profileId, cueCtx), state, profileId, cueCtx);
 }
 
 /** Shared jungle / vision / wave / threat helpers — no authored-doctrine spam. */
@@ -241,16 +552,18 @@ function buildGenericCues(state: OverlayState): OverlayCue[] {
 }
 
 /** Coach / essay cues — kept in champ-select drawers, never on the live HUD. */
-const COACH_CUE_ID = /^(matchup-doctrine|pro-tip-|jg-threat-|prey-focus|buy-|yone-jg-sync|yone-early|yone-e-trades|yone-side|yone-boots|pan-behind|pan-ahead|early-window|xp-hold)/;
+const COACH_CUE_ID = /^(matchup-doctrine|pro-tip-|jg-threat-|buy-|yone-jg-sync|yone-early|yone-e-trades|yone-side|yone-boots)/;
 
 function appendSupportBootSlotCue(
   cues: OverlayCue[],
   state: OverlayState,
   progress: ReturnType<typeof trackBuildProgress>,
-  behind: boolean
+  behind: boolean,
+  build: OverlayCueContext['build']
 ): void {
   const advice = supportBootSlotAdvice(state.localPlayer?.items, progress, state.gameTime ?? 0, {
     behind,
+    build,
   });
   if (!advice) return;
   cues.push({
@@ -266,9 +579,14 @@ export function isCoachCueId(id: string): boolean {
   return COACH_CUE_ID.test(id);
 }
 
-function compactCueLabel(label: string): string {
+export function compactCueLabel(label: string): string {
   const t = label.replace(/\s+/g, ' ').trim();
-  return t.length <= 18 ? t : `${t.slice(0, 16).trimEnd()}`;
+  if (t.length <= 18) return t;
+  const space = t.lastIndexOf(' ', 17);
+  if (space > 0) {
+    return t.slice(0, space).replace(/[\s.,;:!?-]+$/, '');
+  }
+  return `${t.slice(0, 17)}\u2026`;
 }
 
 function actionCue(
@@ -280,35 +598,16 @@ function actionCue(
   return { id, label: compactCueLabel(label), detail: '', urgency, maxAgeSec };
 }
 
-function cueConfidenceScore(cue: OverlayCue): number {
-  const urgencyScore: Record<OverlayCue['urgency'], number> = {
-    spike: 70,
-    warn: 52,
-    info: 36,
-  };
-  let score = urgencyScore[cue.urgency];
-  if (/^moment-/.test(cue.id)) score += 28;
-  else if (/^(ult-online|pan-ult|yone-ult|sum-flash)$/.test(cue.id)) score += 18;
-  else if (/^(threat-|roam-cannon|cannon-shove)/.test(cue.id)) score += 14;
-  else if (/^(swap-oracle|xp-hold|pan-behind|pan-ahead|prey-focus)/.test(cue.id)) score += 10;
-  else if (/^boot-slot-sell/.test(cue.id)) score += 16;
-  else if (/^buy-/.test(cue.id)) score += 6;
-
-  const maxAge = cue.maxAgeSec ?? 30;
-  if (maxAge <= 20) score += 8;
-  else if (maxAge <= 30) score += 4;
-
-  return Math.max(0, Math.min(100, score));
-}
-
 /** Time-critical HUD lines only — gank square / buy icons / doctrine live elsewhere. */
 function finalizeCues(
   base: OverlayCue[],
   state: OverlayState,
   profileId: ProfileId,
+  ctx: OverlayCueContext,
   opts: { skipLaneMacro?: boolean } = {}
 ): OverlayCue[] {
   const gameTime = state.gameTime ?? 0;
+  const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
   const shared: OverlayCue[] = [];
 
   // Named enemy threats (Naafiri) — short name once ult is online.
@@ -334,33 +633,31 @@ function finalizeCues(
     );
   }
 
+  const fusion = buildDangerFusionContext(state, profileId, ctx);
+  const scheme = schemeHoverCues({
+    profileId,
+    gameTimeSec: gameTime,
+    jungleThreat: fusion.jungleThreat,
+    objectiveTimers: state.objectiveTimers,
+    level,
+  });
+  for (const s of scheme) {
+    shared.push({
+      id: s.id,
+      label: s.label,
+      detail: s.detail,
+      urgency: s.urgency,
+      maxAgeSec: s.maxAgeSec,
+    });
+  }
+
   const seen = new Set<string>();
-  return [...base, ...shared]
-    .filter((cue) => {
-      if (isCoachCueId(cue.id)) return false;
-      if (seen.has(cue.id)) return false;
-      seen.add(cue.id);
-      return true;
-    })
-    .map((cue) => ({ ...cue, confidence: cueConfidenceScore(cue) }))
-    .sort((a, b) => {
-      if ((b.confidence ?? 0) !== (a.confidence ?? 0)) return (b.confidence ?? 0) - (a.confidence ?? 0);
-      return a.id.localeCompare(b.id);
-    })
-    .slice(0, 4)
-    .map((cue) => ({
-      ...cue,
-      label: compactCueLabel(cue.label),
-      rationale: (cue.detail || '').replace(/\s+/g, ' ').trim().slice(0, 68),
-      detail: '',
-      maxAgeSec:
-        cue.maxAgeSec ??
-        (cue.id.includes('roam') || cue.id.includes('cannon') || cue.id === 'flash-up'
-          ? 16
-          : cue.urgency === 'info'
-            ? 14
-            : 28),
-    }));
+  return [...base, ...shared].filter((cue) => {
+    if (isCoachCueId(cue.id)) return false;
+    if (seen.has(cue.id)) return false;
+    seen.add(cue.id);
+    return true;
+  });
 }
 
 function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[] {
@@ -424,11 +721,17 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
   }
 
   if (!behind && minutes >= 3 && minutes <= 8 && level >= 6 && shouldShowCannonCue(gameTime)) {
+    const jg = assessJungleThreat(gameTime, state.enemies || [], 'bot');
+    const jgHot = (jg?.gankRisk === 'high' || jg?.gankRisk === 'medium') && jg?.sideBias === 'bot';
+    const cannon = nextCannon(gameTime);
+    const clock = cannon && cannon.eta > 0 ? formatCannonEta(cannon.eta) : 'now';
+    const quality: CrossMapQuality = analysis?.preyFocus ? 'strong' : 'conditional';
+    const cross = crossMapCue({ quality, jgHot, junglerName: jg?.junglerName, cannonClock: clock });
     cues.push({
-      id: 'roam-cannon',
-      label: 'Roam now',
-      detail: (analysis?.roamAdvice || 'Crash → leave mid/jg.').slice(0, 90),
-      urgency: 'warn',
+      id: 'cross-map-roam',
+      label: cross.label,
+      detail: cross.detail,
+      urgency: jgHot ? 'warn' : 'spike',
       maxAgeSec: 20,
     });
   }
@@ -451,7 +754,7 @@ function buildPantheonCues(state: OverlayState, ctx: OverlayCueContext): Overlay
       urgency: behind ? 'spike' : 'warn',
     });
   }
-  appendSupportBootSlotCue(cues, state, progress, behind);
+  appendSupportBootSlotCue(cues, state, progress, behind, build);
 
   const flashDown = (state.enemyBotSummoners || []).flatMap((l) =>
     l.spells.filter((s) => s.short === 'Flash' && !s.ready && s.remaining > 0)
@@ -636,16 +939,18 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
 
   // Roam: only during the live cannon action window, short TTL
   if (minutes >= 3 && minutes <= 8 && level >= 6 && shouldShowCannonCue(gameTime)) {
-    const roamDetail = analysis?.roamAdvice
-      ? analysis.roamAdvice.slice(0, 100)
-      : hardLane || lowAggro
-        ? 'Crash → leave. Mid only on spent dashes.'
-        : 'Crash → W river / mid.';
+    const jg = assessJungleThreat(gameTime, state.enemies || [], 'bot');
+    const jgHot = (jg?.gankRisk === 'high' || jg?.gankRisk === 'medium') && jg?.sideBias === 'bot';
+    const cannon = nextCannon(gameTime);
+    const clock = cannon && cannon.eta > 0 ? formatCannonEta(cannon.eta) : 'now';
+    const quality: CrossMapQuality =
+      hardLane || lowAggro || unfavorable2v2 ? 'avoid' : analysis?.preyFocus ? 'strong' : 'conditional';
+    const cross = crossMapCue({ quality, jgHot, junglerName: jg?.junglerName, cannonClock: clock });
     cues.push({
-      id: 'roam-cannon',
-      label: 'Roam now',
-      detail: roamDetail,
-      urgency: 'warn',
+      id: 'cross-map-roam',
+      label: cross.label,
+      detail: cross.detail,
+      urgency: jgHot ? 'warn' : 'spike',
       maxAgeSec: 20,
     });
   }
@@ -687,7 +992,7 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   }
 
   const situation = ctx.situation || situationFromState(state);
-  appendSupportBootSlotCue(cues, state, progress, situation.state === 'behind');
+  appendSupportBootSlotCue(cues, state, progress, situation.state === 'behind', build);
 
   const flashDown = (state.enemyBotSummoners || []).flatMap((l) =>
     l.spells.filter((s) => s.short === 'Flash' && !s.ready && s.remaining > 0)
@@ -703,6 +1008,62 @@ function buildPykeCues(state: OverlayState, ctx: OverlayCueContext): OverlayCue[
   }
 
   return cues;
+}
+
+/** 1 Hz overlay clock gate — never tick while the HUD page is hidden. */
+export function shouldRunOverlayClock(input: {
+  inGame: boolean;
+  gameTime: number | null | undefined;
+  locked: boolean;
+  moduleIds: readonly string[];
+  pageVisible: boolean;
+}): boolean {
+  return (
+    input.pageVisible &&
+    input.inGame &&
+    (input.gameTime ?? 0) > 0 &&
+    (!input.locked || input.moduleIds.includes('sums'))
+  );
+}
+
+/** How long a PageUp dismissal keeps the augment panel hidden (unchanged). */
+export const MAYHEM_DISMISS_MS = 120_000;
+
+/**
+ * Is the Mayhem augment panel still hidden by a PageUp dismissal?
+ *
+ * Purely wall-clock: expiry is `now >= dismissedAt + MAYHEM_DISMISS_MS` and
+ * never depends on the HUD page being visible. The old renderer read a
+ * clock-store value that only advanced while the page was visible, so once the
+ * panel hid itself (empty frame past the overlay window's hide grace) the
+ * dismissal could never expire and the panel stayed hidden for the match — in
+ * ARAM that was the window's only content.
+ */
+export function isMayhemDismissedRecently(input: {
+  inMayhem: boolean;
+  dismissedAt: number | null | undefined;
+  nowMs: number;
+}): boolean {
+  if (!input.inMayhem) return false;
+  const dismissedAt = input.dismissedAt;
+  if (typeof dismissedAt !== 'number' || !Number.isFinite(dismissedAt)) return false;
+  const nowMs = Number.isFinite(input.nowMs) ? input.nowMs : 0;
+  return nowMs < dismissedAt + MAYHEM_DISMISS_MS;
+}
+
+/**
+ * Mayhem dismiss-window tick gate.
+ *
+ * Visibility deliberately no longer gates this 1 Hz tick: the tick exists to
+ * expire the dismissal, and a hidden page is exactly when it used to freeze.
+ * A hidden overlay keeps ticking (it is cheap), so the panel can re-evaluate
+ * the wall-clock expiry as soon as it is shown again.
+ */
+export function shouldRunMayhemDismissTick(input: {
+  inMayhem: boolean;
+  dismissedAt: number | null | undefined;
+}): boolean {
+  return input.inMayhem && input.dismissedAt != null;
 }
 
 export function formatGameTime(seconds: number): string {

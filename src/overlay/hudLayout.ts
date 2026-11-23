@@ -1,4 +1,4 @@
-import { HUD_MODULE_IDS, type HudModuleId, type HudModules } from './hudModules';
+import { DEFAULT_HUD_MODULES, HUD_MODULE_IDS, type HudModuleId, type HudModules } from './hudModules';
 
 export type HudAnchor = 'tl' | 'tr' | 'bl' | 'br' | 'center';
 
@@ -38,6 +38,15 @@ export const HUD_LAYOUT_STORAGE_KEY = 'onetrick.hudLayout';
 
 const ANCHORS: HudAnchor[] = ['tl', 'tr', 'bl', 'br', 'center'];
 
+/** Shipped dual-rail default before flush-right migration. */
+const LEGACY_RIGHT_RAIL_X = 0.835;
+const DEFAULT_RIGHT_RAIL_X = 0.982;
+
+function migrateRightRailX(x: number, anchor?: HudAnchor): number {
+  if (anchor === 'tr' && Math.abs(x - LEGACY_RIGHT_RAIL_X) < 0.002) return DEFAULT_RIGHT_RAIL_X;
+  return x;
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
@@ -71,11 +80,11 @@ export function dualRailLayout(): HudLayout {
     name: 'Locked dual-rail',
     elements: [
       moduleElement('sums', { x: 0.018, y: 0.078, visible: true, anchor: 'tl' }),
-      moduleElement('gank', { x: 0.835, y: 0.078, visible: true, anchor: 'tr' }),
-      moduleElement('vision', { x: 0.835, y: 0.26, visible: true, anchor: 'tr' }),
-      moduleElement('buy', { x: 0.835, y: 0.42, visible: true, anchor: 'tr' }),
-      moduleElement('action', { x: 0.835, y: 0.54, visible: true, anchor: 'tr' }),
-      moduleElement('mayhem', { x: 0.835, y: 0.26, visible: false, anchor: 'tr' }),
+      moduleElement('gank', { x: 0.982, y: 0.078, visible: true, anchor: 'tr' }),
+      moduleElement('vision', { x: 0.982, y: 0.26, visible: true, anchor: 'tr' }),
+      moduleElement('buy', { x: 0.982, y: 0.42, visible: true, anchor: 'tr' }),
+      moduleElement('action', { x: 0.982, y: 0.54, visible: true, anchor: 'tr' }),
+      moduleElement('mayhem', { x: 0.982, y: 0.26, visible: true, anchor: 'tr' }),
       moduleElement('frames', { x: 0.5, y: 0.82, visible: false, anchor: 'center' }),
     ],
     stickers: [],
@@ -86,11 +95,11 @@ export function compactRightLayout(): HudLayout {
   return {
     name: 'Compact right',
     elements: [
-      moduleElement('sums', { x: 0.835, y: 0.06, visible: true, anchor: 'tr' }),
-      moduleElement('gank', { x: 0.835, y: 0.28, visible: true, anchor: 'tr' }),
-      moduleElement('vision', { x: 0.835, y: 0.42, visible: true, anchor: 'tr' }),
-      moduleElement('buy', { x: 0.835, y: 0.56, visible: true, anchor: 'tr' }),
-      moduleElement('action', { x: 0.835, y: 0.68, visible: true, anchor: 'tr' }),
+      moduleElement('sums', { x: 0.982, y: 0.06, visible: true, anchor: 'tr' }),
+      moduleElement('gank', { x: 0.982, y: 0.28, visible: true, anchor: 'tr' }),
+      moduleElement('vision', { x: 0.982, y: 0.42, visible: true, anchor: 'tr' }),
+      moduleElement('buy', { x: 0.982, y: 0.56, visible: true, anchor: 'tr' }),
+      moduleElement('action', { x: 0.982, y: 0.68, visible: true, anchor: 'tr' }),
       moduleElement('frames', { x: 0.5, y: 0.82, visible: false, anchor: 'center' }),
     ],
     stickers: [],
@@ -156,7 +165,9 @@ export function normalizeHudLayout(value: unknown): HudLayout {
 
   const elements = fallback.elements.map((base) => {
     const override = byId.get(base.id);
-    return override ? moduleElement(base.id as HudModuleId, { ...base, ...override }) : base;
+    const merged = override ? { ...base, ...override } : { ...base };
+    if (typeof merged.x === 'number') merged.x = migrateRightRailX(merged.x, merged.anchor);
+    return moduleElement(base.id as HudModuleId, merged);
   });
 
   const stickers = Array.isArray(raw.stickers)
@@ -171,15 +182,7 @@ export function normalizeHudLayout(value: unknown): HudLayout {
 }
 
 export function layoutToHudModules(layout: HudLayout): HudModules {
-  const next: HudModules = {
-    sums: true,
-    gank: true,
-    vision: true,
-    buy: true,
-    action: true,
-    mayhem: false,
-    frames: false,
-  };
+  const next: HudModules = { ...DEFAULT_HUD_MODULES };
   for (const id of HUD_MODULE_IDS) {
     const el = layout.elements.find((row) => row.id === id);
     if (el) next[id] = el.visible;
@@ -247,10 +250,20 @@ export function storeHudLayout(layout: HudLayout): void {
 
 export function layoutStyle(
   el: Pick<HudElement, 'x' | 'y' | 'scale' | 'opacity' | 'anchor'>,
-  geo: { offsetX: number; offsetY: number; gameViewW: number; gameViewH: number }
+  geo: {
+    offsetX: number;
+    offsetY: number;
+    gameViewW: number;
+    gameViewH: number;
+    /** Viewport width in CSS px; falls back to the game-view extent when omitted. */
+    vw?: number;
+  }
 ): {
   position: 'absolute';
-  left: number;
+  /** tl/bl/center boxes: the layout box's left edge sits at x. */
+  left?: number;
+  /** tr/br boxes: the layout box's RIGHT edge sits at x (never left-anchored). */
+  right?: number;
   top: number;
   transform: string;
   transformOrigin: string;
@@ -266,12 +279,22 @@ export function layoutStyle(
           : el.anchor === 'center'
             ? 'center'
             : 'top left';
-  return {
-    position: 'absolute',
-    left: geo.offsetX + el.x * geo.gameViewW,
-    top: geo.offsetY + el.y * geo.gameViewH,
-    transform: `scale(${el.scale})`,
+  const left = geo.offsetX + el.x * geo.gameViewW;
+  const top = geo.offsetY + el.y * geo.gameViewH;
+  // Keep --overlay-scale (set from hudScale on the overlay root) inside the
+  // inline transform so it COMPOSES with el.scale instead of being overridden
+  // by it; transformOrigin pins the anchored corner so scaling never moves the
+  // box's edge that faces the game-view border.
+  const transform = `scale(var(--overlay-scale, 1)) scale(${el.scale})`;
+  const shared = {
+    position: 'absolute' as const,
+    top,
+    transform,
     transformOrigin: origin,
     opacity: el.opacity,
   };
+  if (el.anchor === 'tr' || el.anchor === 'br') {
+    return { ...shared, right: (geo.vw ?? geo.offsetX + geo.gameViewW) - left };
+  }
+  return { ...shared, left };
 }

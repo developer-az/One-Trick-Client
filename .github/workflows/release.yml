@@ -111,6 +111,9 @@ jobs:
       - name: Windows packaging metadata
         run: npm run verify:packaging
 
+      - name: Stale launcher cleanup
+        run: npm run verify:stale-launcher
+
       - name: Build TypeScript
         run: npm run electron:build
 
@@ -255,9 +258,9 @@ jobs:
           allowUpdates: true
           replacesArtifacts: true
           draft: false
-          # Only *-beta* tags are marked Pre-release; v1.0.0 / v1.1.0 are full releases
-          prerelease: ${{ contains(github.ref_name, 'beta') }}
-          makeLatest: ${{ !contains(github.ref_name, 'beta') }}
+          # Beta and test tags are marked Pre-release; v1.0.0 / v1.1.0 are full releases
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'test') }}
+          makeLatest: ${{ !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'test') }}
           name: One Trick ${{ github.ref_name }}
           body: |
             **One Trick ${{ github.ref_name }}** — production release.

@@ -17,6 +17,7 @@
     "src/logic/mayhem/types.ts",
     "src/logic/mayhem/mode.ts",
     "src/logic/mayhem/match.ts",
-    "src/logic/mayhem/augmentSchedule.ts"
+    "src/logic/mayhem/augmentSchedule.ts",
+    "src/overlay/hudSkins.ts"
   ]
 }

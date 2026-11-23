@@ -6,6 +6,9 @@ export interface AramHudState {
   gameTime?: number;
   gameMode?: string | null;
   mapName?: string | null;
+  /** Captured at load entry; the only reliable Mayhem signal (queue 2400). */
+  queueId?: number | null;
+  mapId?: number | null;
   activePlayerLevel?: number;
   localPlayer?: {
     level: number;
@@ -24,6 +27,11 @@ export interface AramOverlayCue {
   maxAgeSec?: number;
 }
 
+/** Queue/map signals both renderer mode checks share. */
+function modeSignalsOf(state: AramHudState): { queueId?: number | null; mapId?: number | null } {
+  return { queueId: state.queueId, mapId: state.mapId };
+}
+
 /** ARAM / Mayhem — no jungle gank square. */
 export function getAramGankStatus(): null {
   return null;
@@ -31,7 +39,7 @@ export function getAramGankStatus(): null {
 
 /** Brush / oracle reminders suited to Howling Abyss (classic ARAM — not Mayhem augment HUD). */
 export function getAramWardStatus(state: AramHudState): WardStatus | null {
-  if (isMayhemGame(state.gameMode, state.mapName)) return null;
+  if (isMayhemGame(state.gameMode, state.mapName, modeSignalsOf(state))) return null;
   const gameTime = state.gameTime ?? 0;
   if (gameTime <= 0) return null;
   const minutes = gameTime / 60;
@@ -80,7 +88,7 @@ export function buildAramInGameCues(state: AramHudState): AramOverlayCue[] {
   const level = state.localPlayer?.level ?? state.activePlayerLevel ?? 1;
   const gameTime = state.gameTime ?? 0;
   const minutes = gameTime / 60;
-  const mayhem = isMayhemGame(state.gameMode, state.mapName);
+  const mayhem = isMayhemGame(state.gameMode, state.mapName, modeSignalsOf(state));
 
   if (level === 6) {
     cues.push({ id: 'ult-online', label: 'R online', detail: '', urgency: 'spike', maxAgeSec: 24 });
@@ -98,5 +106,5 @@ export function buildAramInGameCues(state: AramHudState): AramOverlayCue[] {
 }
 
 export function shouldUseAramOverlay(state: AramHudState): boolean {
-  return isAramOrMayhem(state.gameMode, state.mapName);
+  return isAramOrMayhem(state.gameMode, state.mapName, modeSignalsOf(state));
 }

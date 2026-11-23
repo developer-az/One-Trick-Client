@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
     connectLCU: () => ipcRenderer.invoke('lcu-connect'),
+    riotStatus: () => ipcRenderer.invoke('riot-status'),
+    riotSetKey: (key: string) => ipcRenderer.invoke('riot-set-key', key),
+    riotClearKey: () => ipcRenderer.invoke('riot-clear-key'),
+    getLiveBuild:(champion: string, role: string, mode?: string) => ipcRenderer.invoke('live-build-get', champion, role, mode),
     requestLCU: (method: string, endpoint: string, body?: unknown) => ipcRenderer.invoke('lcu-request', method, endpoint, body),
     onUpdate: (callback: (value: unknown) => void) => ipcRenderer.on('main-process-message', (_event, value) => callback(value)),
     exportItemSet: (build: {
@@ -41,6 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setOverlayTextScale: (scale: number) => ipcRenderer.invoke('overlay-set-text-scale', scale),
     setOverlayHudModules: (modules: unknown) => ipcRenderer.invoke('overlay-set-hud-modules', modules),
     setOverlayHudLayout: (layout: unknown) => ipcRenderer.invoke('overlay-set-hud-layout', layout),
+    setOverlayHudSkin: (skin: unknown) => ipcRenderer.invoke('overlay-set-hud-skin', skin),
     getCatalog: () => ipcRenderer.invoke('catalog-get'),
     refreshCatalog: () => ipcRenderer.invoke('catalog-refresh'),
     syncLeagueScales: () => ipcRenderer.invoke('overlay-sync-league-scales'),
@@ -72,6 +77,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('lcu-status', listener);
     },
     getChampSelect: () => ipcRenderer.invoke('champ-select-get'),
+    getScouting: () => ipcRenderer.invoke('scouting-get'),
     onChampSelect: (callback: (session: unknown) => void) => {
         const listener = (_event: Electron.IpcRendererEvent, session: unknown) => callback(session);
         ipcRenderer.on('champ-select', listener);
@@ -80,9 +86,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // App settings + diagnostics
     getAppSettings: () => ipcRenderer.invoke('app-settings-get'),
+    getAppVersion: () => ipcRenderer.invoke('app-get-version'),
     setAppSettings: (patch: unknown) => ipcRenderer.invoke('app-settings-set', patch),
     getMatchHistory: () => ipcRenderer.invoke('match-history-get'),
     getMayhemBundle: () => ipcRenderer.invoke('mayhem-get'),
+    onMayhemBundleUpdate: (callback: (bundle: unknown) => void) => {
+        const listener = (_event: Electron.IpcRendererEvent, bundle: unknown) => callback(bundle);
+        ipcRenderer.on('mayhem-bundle-updated', listener);
+        return () => ipcRenderer.removeListener('mayhem-bundle-updated', listener);
+    },
     refreshMayhemBundle: () => ipcRenderer.invoke('mayhem-refresh'),
     getMayhemOwned: () => ipcRenderer.invoke('mayhem-get-owned'),
     getMayhemRoll: () => ipcRenderer.invoke('mayhem-get-roll'),
@@ -96,4 +108,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getClipperStatus: () => ipcRenderer.invoke('clipper-status'),
     revealClip: (target?: string) => ipcRenderer.invoke('clip-reveal', target),
     reportOverlayContent: (hasContent: boolean) => ipcRenderer.send('overlay-slot-content', !!hasContent),
+    reportOverlayHeartbeat: (beat: { frames: boolean; pageVisible: boolean }) =>
+        ipcRenderer.send('overlay-heartbeat', { frames: !!beat?.frames, pageVisible: !!beat?.pageVisible }),
 });

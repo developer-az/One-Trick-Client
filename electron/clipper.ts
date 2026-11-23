@@ -88,15 +88,20 @@ function segmentsDir(): string {
     return path.join(os.tmpdir(), 'onetrick-clips-segments');
 }
 
-/** Locate ffmpeg: bundled resource first, then PATH. Never throws. */
+/**
+ * Locate ffmpeg: bundled resource first, then PATH. Never throws. An explicit
+ * ONETRICK_FFMPEG is the only candidate, so a bad override fails instead of
+ * silently falling back to some other ffmpeg.
+ */
 async function findFfmpeg(): Promise<string | null> {
-    const candidates = [
-        process.env.ONETRICK_FFMPEG || '',
-        path.join(process.resourcesPath || '', 'ffmpeg.exe'),
-        path.join(process.resourcesPath || '', 'ffmpeg'),
-        path.join(process.cwd(), 'native', 'bin', 'ffmpeg.exe'),
-        'ffmpeg',
-    ].filter((p) => p.length > 0);
+    const candidates = process.env.ONETRICK_FFMPEG
+        ? [process.env.ONETRICK_FFMPEG]
+        : [
+              path.join(process.resourcesPath || '', 'ffmpeg.exe'),
+              path.join(process.resourcesPath || '', 'ffmpeg'),
+              path.join(process.cwd(), 'native', 'bin', 'ffmpeg.exe'),
+              'ffmpeg',
+          ];
     for (const candidate of candidates) {
         const found = await probeFfmpeg(candidate);
         if (found) return candidate;

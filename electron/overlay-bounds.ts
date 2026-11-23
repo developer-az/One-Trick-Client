@@ -1,6 +1,10 @@
 /**
- * Tight overlay window rects. A fullscreen transparent HWND forces DWM to
- * composite the entire game (~24 FPS). Dual-rail becomes two slim columns.
+ * Overlay geometry and pure visibility/health decisions.
+ * History: clusters were once separate tight HWNDs ("a fullscreen transparent
+ * HWND forces DWM to composite the entire game"). The multi-window lifecycle
+ * was retired 2026-11-10 (Step 2 single-window remake) after the overlay kept
+ * vanishing mid-match inside it; the geometry math remains as the reference
+ * for where widgets sit on the display, guarded by verify_overlay_bounds.
  */
 
 export interface OverlayRect {
@@ -132,15 +136,19 @@ function unionRects(rects: OverlayRect[]): OverlayRect | null {
 }
 
 function clampToDisplay(rect: OverlayRect, display: OverlayRect): OverlayRect {
+    // Keep the window's origin on-screen, but never shrink it below the union
+    // of the panels it owns. Right-anchored panels can have their reference box
+    // extend past the display edge (see placedRect); clamping the window size
+    // to the remaining display width used to clip those panels at the window
+    // edge, so preserve the full union and let the OS clip only the transparent
+    // overhang.
     const x = Math.max(display.x, Math.min(display.x + display.width - 8, display.x + rect.x - PAD));
     const y = Math.max(display.y, Math.min(display.y + display.height - 8, display.y + rect.y - PAD));
-    const maxW = display.x + display.width - x;
-    const maxH = display.y + display.height - y;
     return {
         x: Math.round(x),
         y: Math.round(y),
-        width: Math.max(64, Math.min(maxW, rect.width + PAD * 2)),
-        height: Math.max(64, Math.min(maxH, rect.height + PAD * 2)),
+        width: Math.max(64, Math.round(rect.width + PAD * 2)),
+        height: Math.max(64, Math.round(rect.height + PAD * 2)),
     };
 }
 
@@ -196,10 +204,62 @@ export function clusterOverlayWindows(opts: {
     });
 }
 
+/** How often an overlay page reports that it is still producing frames. */
+export const OVERLAY_BEAT_EVERY_MS = 5000;
+/** A shown window that has not produced a frame for this long is treated as not drawing. */
+export const OVERLAY_PAINT_STALL_MS = 25000;
+
 /**
- * Whether a locked overlay window should exist on screen.
- * A live match does not override this: an empty transparent HWND over League
- * keeps DWM compositing the game even when the slot has nothing to draw.
+ * What the OS and the page say about one overlay window. The app's own
+ * "visible" flag is not enough: a window can be shown, on top and still not
+ * be drawn, and only the page can tell whether frames are being produced.
+ */
+export interface OverlayWindowHealth {
+    visible: boolean;
+    minimized: boolean;
+    onTop: boolean;
+    /** Window bounds match the slot it was placed in. */
+    boundsOk: boolean;
+    /** How long the window has been shown; null when hidden. */
+    msShown: number | null;
+    /** Since the page last reported at all; null when it never has. */
+    msSinceBeat: number | null;
+    /** Since the page last reported a produced frame; null when it never has. */
+    msSinceFrame: number | null;
+    /** Page Visibility state from the last report; null when unknown. */
+    pageVisible: boolean | null;
+}
+
+export type OverlayFault =
+    | 'minimized'
+    | 'not-on-top'
+    | 'bounds'
+    | 'no-heartbeat'
+    | 'no-frames'
+    | 'page-hidden';
+
+/** Faults for one window. A hidden window has none: it is hidden on purpose. */
+export function overlayWindowFaults(health: OverlayWindowHealth): OverlayFault[] {
+    if (!health.visible) return [];
+    const faults: OverlayFault[] = [];
+    if (health.minimized) faults.push('minimized');
+    if (!health.onTop) faults.push('not-on-top');
+    if (!health.boundsOk) faults.push('bounds');
+    const shownLongEnough = health.msShown !== null && health.msShown >= OVERLAY_PAINT_STALL_MS;
+    if (shownLongEnough) {
+        const beatStale = health.msSinceBeat === null || health.msSinceBeat >= OVERLAY_PAINT_STALL_MS;
+        const frameStale = health.msSinceFrame === null || health.msSinceFrame >= OVERLAY_PAINT_STALL_MS;
+        if (beatStale) faults.push('no-heartbeat');
+        else if (frameStale) faults.push('no-frames');
+    }
+    if (health.pageVisible === false) faults.push('page-hidden');
+    return faults;
+}
+
+/**
+ * Whether a locked overlay window should exist on screen. Content alone used
+ * to decide this (an empty transparent HWND keeps DWM compositing the game),
+ * but while a game is live presence wins over that cost.
  */
 export function overlayWindowWanted(opts: {
     userHidden: boolean;
@@ -208,10 +268,12 @@ export function overlayWindowWanted(opts: {
     holdToShow: boolean;
     holdDown: boolean;
     emptySlot: boolean;
+    gameLive?: boolean;
 }): boolean {
     if (opts.userHidden || !opts.overlayEnabled) return false;
     if (!opts.locked) return true;
     if (opts.holdToShow && !opts.holdDown) return false;
+    if (opts.gameLive) return true;
     return !opts.emptySlot;
 }
 

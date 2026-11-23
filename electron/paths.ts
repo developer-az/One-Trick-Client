@@ -34,6 +34,14 @@ export function nativeKeyHookPath(): string {
     return path.join(appRoot(), 'native', 'bin', 'onetrick-keys.exe');
 }
 
+/** Native overlay presenter (native/presenter/presenter.c). Same layout as the keyhook. */
+export function nativePresenterPath(): string {
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, 'onetrick-presenter.exe');
+    }
+    return path.join(appRoot(), 'native', 'bin', 'onetrick-presenter.exe');
+}
+
 /** Application user data directory, with graceful fallback for test harnesses outside Electron. */
 export function userDataDir(): string {
     try {

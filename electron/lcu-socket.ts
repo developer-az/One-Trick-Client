@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import {
     makeLCURequest,
+    mapCurrentSummoner,
     readLockfileCredentials,
     setLcuCredentials,
     type LcuCredentials,
@@ -32,7 +33,13 @@ const EVENTS = {
 } as const;
 
 const DISCOVERY_INTERVAL_MS = 3000;
+/** Lockfile probe cadence while idle (no phase seen in the window below). */
+const IDLE_DISCOVERY_INTERVAL_MS = 5000;
+/** Discovery slows to the idle interval once no phase has been seen this long. */
+const IDLE_PHASE_WINDOW_MS = 60_000;
 const RECONNECT_DELAY_MS = 2000;
+/** Champ-select hydrate only runs in these phases; everywhere else the REST call is skipped. */
+const CHAMP_SELECT_HYDRATE_PHASES = new Set(['ChampSelect', 'Lobby']);
 /** Missing lockfile this many probes in a row before an in-game phase is forgotten. */
 const LOCKFILE_MISSES_BEFORE_CLEAR = 3;
 
@@ -42,8 +49,27 @@ export interface LcuSummary {
     state: LcuConnectionState;
     phase: string | null;
     summonerName: string | null;
+    /** Riot ID parts, mirrored into src/types.d.ts LcuStatus (structural twin — no shared type). */
+    gameName?: string | null;
+    tagLine?: string | null;
+    puuid?: string | null;
     connectedAt: number | null;
 }
+
+/** Last-known local player identity, folded from /current-summoner payloads. */
+interface LcuIdentity {
+    summonerName: string | null;
+    gameName: string | null;
+    tagLine: string | null;
+    puuid: string | null;
+}
+
+const EMPTY_IDENTITY: LcuIdentity = {
+    summonerName: null,
+    gameName: null,
+    tagLine: null,
+    puuid: null,
+};
 
 interface LcuEvents {
     state: [LcuConnectionState];
@@ -52,7 +78,7 @@ interface LcuEvents {
     summoner: [unknown | null];
 }
 
-class LcuSocket extends EventEmitter {
+export class LcuSocket extends EventEmitter {
     private ws: WebSocket | null = null;
     private creds: LcuCredentials | null = null;
     private discoveryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,9 +86,11 @@ class LcuSocket extends EventEmitter {
     private stateValue: LcuConnectionState = 'searching';
     private phaseValue: string | null = null;
     private champSelectValue: unknown | null = null;
-    private summonerName: string | null = null;
+    private identity: LcuIdentity = { ...EMPTY_IDENTITY };
     private connectedAt: number | null = null;
     private lockfileMisses = 0;
+    /** Date.now() when a non-null phase was last seen; drives the idle probe rate. */
+    private lastPhaseSeenAt = 0;
 
     override emit<K extends keyof LcuEvents>(event: K, ...args: LcuEvents[K]): boolean {
         return super.emit(event, ...args);
@@ -88,9 +116,38 @@ class LcuSocket extends EventEmitter {
         return {
             state: this.stateValue,
             phase: this.phaseValue,
-            summonerName: this.summonerName,
+            summonerName: this.identity.summonerName,
+            gameName: this.identity.gameName,
+            tagLine: this.identity.tagLine,
+            puuid: this.identity.puuid,
             connectedAt: this.connectedAt,
         };
+    }
+
+    /**
+     * Fold a summoner payload (REST hydrate or WAMP event) into the identity.
+     * The client sends an empty object/Delete while it sits on the login screen,
+     * so that keeps the last-known account instead of blanking the profile.
+     * puuid is the account key: a different one replaces every field, and a
+     * payload that carries a changed Riot ID but no puuid drops the stored key
+     * rather than reporting account A's puuid under account B's name.
+     */
+    applySummoner(data: unknown): void {
+        const next = mapCurrentSummoner(data);
+        if (next && (next.puuid || next.gameName || next.displayName || next.tagLine)) {
+            const switched = Boolean(next.puuid && this.identity.puuid && next.puuid !== this.identity.puuid);
+            const base = switched ? EMPTY_IDENTITY : this.identity;
+            const nameChanged =
+                (next.gameName != null && next.gameName !== base.gameName) ||
+                (next.tagLine != null && next.tagLine !== base.tagLine);
+            this.identity = {
+                summonerName: next.gameName || next.displayName || base.summonerName,
+                gameName: next.gameName ?? base.gameName,
+                tagLine: next.tagLine ?? base.tagLine,
+                puuid: next.puuid ?? (nameChanged ? null : base.puuid),
+            };
+        }
+        this.emit('summoner', data);
     }
 
     start(): void {
@@ -125,6 +182,7 @@ class LcuSocket extends EventEmitter {
         if (next === this.phaseValue) return;
         console.info(`[lcu] phase ${next ?? '(none)'}`);
         this.phaseValue = next;
+        if (next) this.lastPhaseSeenAt = Date.now();
         this.emit('phase', next);
     }
 
@@ -133,12 +191,19 @@ class LcuSocket extends EventEmitter {
         this.emit('champSelect', next);
     }
 
-    private scheduleDiscovery(delay = DISCOVERY_INTERVAL_MS): void {
+    /** 3 s while the client has shown a phase recently, 5 s once it has been idle. */
+    private discoveryDelayMs(): number {
+        return Date.now() - this.lastPhaseSeenAt > IDLE_PHASE_WINDOW_MS
+            ? IDLE_DISCOVERY_INTERVAL_MS
+            : DISCOVERY_INTERVAL_MS;
+    }
+
+    private scheduleDiscovery(delay?: number): void {
         if (!this.running || this.discoveryTimer) return;
         this.discoveryTimer = setTimeout(() => {
             this.discoveryTimer = null;
             void this.discover();
-        }, delay);
+        }, delay ?? this.discoveryDelayMs());
     }
 
     private async discover(): Promise<void> {
@@ -187,7 +252,8 @@ class LcuSocket extends EventEmitter {
             if (this.ws !== ws) return;
             this.ws = null;
             this.connectedAt = null;
-            this.summonerName = null;
+            // The identity is kept: a reconnect on the login screen still shows
+            // the last account, and a different puuid replaces it on login.
             setLcuCredentials(null);
             // A dropped socket is not a phase change. While a match is running the
             // client sends nothing, so this socket goes idle and dies mid-game.
@@ -226,25 +292,28 @@ class LcuSocket extends EventEmitter {
 
     /** Events only fire on change; read current values once after connecting. */
     private async hydrate(): Promise<void> {
+        let phase: string | null = null;
         try {
-            const phase = await makeLCURequest('GET', '/lol-gameflow/v1/gameflow-phase');
-            this.setPhase(typeof phase === 'string' ? phase : null);
+            const phaseRaw = await makeLCURequest('GET', '/lol-gameflow/v1/gameflow-phase');
+            phase = typeof phaseRaw === 'string' ? phaseRaw : null;
+            this.setPhase(phase);
         } catch {
             // Client still booting; the phase event will arrive later.
         }
-        try {
-            const session = await makeLCURequest('GET', '/lol-champ-select/v1/session');
-            if (session) this.setChampSelect(session);
-        } catch {
-            // Not in champ select.
+        // A champ-select session only exists while a pick session is running;
+        // skip the REST hydrate everywhere else (it would only 404, and the
+        // WAMP subscription delivers real changes as they happen).
+        if (phase !== null && CHAMP_SELECT_HYDRATE_PHASES.has(phase)) {
+            try {
+                const session = await makeLCURequest('GET', '/lol-champ-select/v1/session');
+                if (session) this.setChampSelect(session);
+            } catch {
+                // Not in champ select.
+            }
         }
         try {
-            const summoner = (await makeLCURequest('GET', '/lol-summoner/v1/current-summoner')) as {
-                gameName?: string;
-                displayName?: string;
-            } | null;
-            this.summonerName = summoner?.gameName || summoner?.displayName || null;
-            this.emit('summoner', summoner);
+            const summoner = await makeLCURequest('GET', '/lol-summoner/v1/current-summoner');
+            this.applySummoner(summoner);
         } catch {
             // Login screen.
         }
@@ -273,12 +342,9 @@ class LcuSocket extends EventEmitter {
             case EVENTS.champSelect:
                 this.setChampSelect(deleted ? null : payload?.data ?? null);
                 break;
-            case EVENTS.summoner: {
-                const data = (deleted ? null : payload?.data) as { gameName?: string; displayName?: string } | null;
-                this.summonerName = data?.gameName || data?.displayName || null;
-                this.emit('summoner', data);
+            case EVENTS.summoner:
+                this.applySummoner(deleted ? null : payload?.data);
                 break;
-            }
             default:
                 break;
         }

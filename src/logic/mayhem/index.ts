@@ -2,6 +2,7 @@ export * from './types';
 export * from './synergy';
 export * from './rank';
 export * from './mode';
+export * from './hotkey';
 export * from './match';
 export * from './augmentSchedule';
 export * from './champion';

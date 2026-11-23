@@ -25,5 +25,5 @@
     "noUncheckedSideEffectImports": true
   },
   "include": ["src"],
-  "exclude": ["src/logic/mayhem/ocrRunner.ts"]
+  "exclude": ["src/logic/mayhem/ocrRunner.ts", "src/logic/mayhem/ocrScriptPath.ts"]
 }

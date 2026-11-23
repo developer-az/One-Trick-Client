@@ -78,3 +78,97 @@ export function slimMayhemFromApi(augDoc: unknown, comboDoc: unknown): MayhemBun
 
   return sanitizeMayhemBundle(raw);
 }
+
+/** Refresh the bundle at least this often, even when the patch is unchanged. */
+export const MAYHEM_BUNDLE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+export type MayhemRefreshReason = 'missing-cache' | 'patch-mismatch' | 'stale' | 'fresh';
+
+export interface MayhemRefreshDecision {
+  refresh: boolean;
+  reason: MayhemRefreshReason;
+}
+
+export interface MayhemBundleMetaLike {
+  patch?: string;
+  syncedAt?: string;
+}
+
+/**
+ * The patch identity shared by the two naming schemes.
+ *
+ * arammayhem labels a patch by season-year (`26.22`) while Data Dragon / the
+ * client version use the season counter (`16.23.1`); both advance their minor
+ * in lock-step, so the minor is what identifies a patch across the two. A
+ * patch without a dot is compared as-is.
+ */
+function patchKey(patch: string | undefined | null): string {
+  const match = /(\d+)\.(\d+)/.exec(String(patch ?? ''));
+  return match ? match[2] : String(patch ?? '').trim().toLowerCase();
+}
+
+/**
+ * When the cached Mayhem data must be re-fetched.
+ *
+ * Follow the live patch: a cache from another patch is stale by definition
+ * (new augments are exactly what a patch changes). The 24 h age keeps
+ * pick-rate numbers moving even when the patch did not. No cache at all always
+ * refreshes once.
+ */
+export function shouldRefreshMayhemBundle(input: {
+  cached: MayhemBundleMetaLike | null;
+  /** Current game patch, e.g. from the Data Dragon version list. */
+  currentPatch: string | null;
+  nowMs: number;
+  maxAgeMs?: number;
+}): MayhemRefreshDecision {
+  const { cached, currentPatch, nowMs } = input;
+  const maxAgeMs = input.maxAgeMs ?? MAYHEM_BUNDLE_MAX_AGE_MS;
+  if (!cached) return { refresh: true, reason: 'missing-cache' };
+
+  if (currentPatch) {
+    if (patchKey(cached.patch) !== patchKey(currentPatch)) {
+      return { refresh: true, reason: 'patch-mismatch' };
+    }
+  }
+
+  const syncedAt = Date.parse(String(cached.syncedAt ?? ''));
+  if (!Number.isFinite(syncedAt)) return { refresh: true, reason: 'stale' };
+  if (nowMs - syncedAt > maxAgeMs) return { refresh: true, reason: 'stale' };
+  return { refresh: false, reason: 'fresh' };
+}
+
+export interface MayhemRefreshRunResult<T> {
+  decision: MayhemRefreshDecision;
+  /** The data the app should run on: fresh when fetched, existing otherwise. */
+  bundle: T | null;
+  refreshed: boolean;
+  /** Present only when a refresh was attempted and failed. */
+  error?: string;
+}
+
+/**
+ * Apply the freshness policy with an injected fetch, so the failure path is
+ * provable without the network: a failed refresh is silent and keeps whatever
+ * cached/bundled data the app already had.
+ */
+export async function refreshMayhemBundleIfStale<T>(input: {
+  cached: MayhemBundleMetaLike | null;
+  currentPatch: string | null;
+  existing: T | null;
+  nowMs: number;
+  maxAgeMs?: number;
+  fetchBundle: () => Promise<T>;
+}): Promise<MayhemRefreshRunResult<T>> {
+  const decision = shouldRefreshMayhemBundle(input);
+  if (!decision.refresh) {
+    return { decision, bundle: input.existing, refreshed: false };
+  }
+  try {
+    const bundle = await input.fetchBundle();
+    return { decision, bundle, refreshed: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { decision, bundle: input.existing, refreshed: false, error: message };
+  }
+}

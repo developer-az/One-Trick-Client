@@ -185,12 +185,44 @@ export function inferCatalogRole(champion: CatalogChampion | null, assigned?: Ca
 }
 
 /**
+ * Run a non-first-paint task off the hot path: requestIdleCallback when the
+ * browser offers it (capped by the timeout), plain setTimeout otherwise. The
+ * task runs at most once.
+ */
+export function scheduleDeferredCatalogWork(task: () => Promise<void> | void, delayMs = 20_000): void {
+    let ran = false;
+    const run = (): void => {
+        if (ran) return;
+        ran = true;
+        try {
+            void Promise.resolve(task()).catch(() => {
+                /* keep last-good */
+            });
+        } catch {
+            /* keep last-good */
+        }
+    };
+    const ric = typeof window !== 'undefined' ? window.requestIdleCallback : undefined;
+    if (typeof ric === 'function') {
+        ric(run, { timeout: delayMs });
+    } else {
+        setTimeout(run, delayMs);
+    }
+}
+
+/**
  * Load last-good catalog, then refresh from the static API and live DDragon/CDragon.
  * Mid-week champion ships do not wait on an installer.
+ *
+ * `deferRefresh` moves only the non-essential tail — the DDragon version
+ * refresh and the live bundle build — off the first-paint path (they are
+ * scheduled a bit after first HUD paint). The cached/static catalog, which is
+ * what the HUD actually draws, still loads immediately.
  */
 export async function warmCatalog(opts?: {
   apiBase?: string;
   electronGet?: () => Promise<CatalogBundle | null>;
+  deferRefresh?: boolean;
 }): Promise<CatalogBundle | null> {
   const local = readLocalCache();
   if (local) applyBundle(local);
@@ -229,19 +261,26 @@ export async function warmCatalog(opts?: {
     }
   }
 
-  try {
-    await warmDdragonVersion();
-    const live = await buildCatalogBundle();
-    const current = cached;
-    if (
-      !current ||
-      comparePatch(live.manifest.patch, current.manifest.patch) >= 0 ||
-      live.champions.length > current.champions.length
-    ) {
-      applyBundle(live);
-    }
-  } catch {
-    /* keep last-good */
+  const refreshLiveBundle = (): Promise<void> =>
+    (async () => {
+      await warmDdragonVersion();
+      const live = await buildCatalogBundle();
+      const current = cached;
+      if (
+        !current ||
+        comparePatch(live.manifest.patch, current.manifest.patch) >= 0 ||
+        live.champions.length > current.champions.length
+      ) {
+        applyBundle(live);
+      }
+    })().catch(() => {
+      /* keep last-good */
+    });
+
+  if (opts?.deferRefresh) {
+    scheduleDeferredCatalogWork(refreshLiveBundle);
+  } else {
+    await refreshLiveBundle();
   }
 
   return cached;
