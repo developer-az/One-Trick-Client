@@ -229,3 +229,4 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - Items rail: `showBuy` and the locked-slot content test no longer require `!mayhemPanelActive`; the augment panel and the build/icons rail coexist.
 - Item gold (Blitz/Porofessor/Hexgate method): every `playerlist` item carries `price` and `consumable`; `goldDiff.ts` sums held-item shop prices per team, excluding consumables and free trinkets. The rail shows `Items 24.1k vs 23.3k +800`. This is item gold, not total earned gold; unspent gold is not visible to any companion app.
 - New `verify:mayhem-pick-selection` (cursor mapping, cards-gone expiry, pick count, fallback exclusion, OCR cursor parsing, ps1 marker, item gold) wired into `verify:release`. Frozen verifies untouched. `verify:release` exits 0.
+- Published `test-mayhem-pick-items-31` from `3b4d4ef` on `fix/overlay-aram-identity`; the tag and branch point at that commit, so the source matches the zip.
