@@ -282,3 +282,12 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - **OPEN, needs real captures** (none exist on this machine; the four test.34 captures are not on disk): HEARTSTEEL sticker, Debonair Zed, Command Line mixed row, Pentakill screen, and a stickered **gold** card (gold art proves itself per pixel with no rim, so a sticker can cost it hits; it was not loosened without evidence). Run `npx --yes tsx scripts/mayhem-diagnose.ts <png>` on each and record the VERDICT line.
 - **HUD skin health strip** (test.33): not checked in a real game. It is unchanged and still open.
 - `verify:release` exit 0. No ranked, presenter, pick-logic or HUD maths changes, and no version edit.
+
+## 2026-11-23 - test.37: the HUD stops blanking in ranked
+
+- Report: in ranked the overlay disappeared for about 10 s and came back on its own. No code path hid the window: match-end detection, the empty-slot timer, hold-to-show, the presenter supervisor and the native show/hide rules were each checked and none can take it down while a match is live.
+- Cause: the live payload (uildOverlayPayload) sets inGame: !loading, and loading came from isMatchLoading. That predicate returned true for any GameStart phase before looking at the clock. When the client keeps (or replays) GameStart after the game has started, every 2.5 s update arrived as "not in game, loading", so the page swapped the HUD for the loading layer until the phase caught up to InProgress - the 10 s blank.
+- Fix (src/logic/matchLoading.ts): a running match clock in an engaged match now wins over the phase label. Real loading is unchanged (no match engaged, or the clock has not passed the 0.25 s jitter threshold). status.ts and the overlay both read the same predicate, so the dashboard agrees.
+- New erify:match-loading-clock: GameStart with no match / frozen clock / sub-threshold clock stays loading; GameStart mid-match, with an advancing clock, and just after clock start are live; InProgress, Reconnect, Lobby and null-phase behaviour pinned unchanged. Wired into erify:release. erify:release exits 0.
+- **Not confirmed in a live game on this machine** (no ranked capture here). Acceptance for the user: one ranked game to about 5 minutes with no blank.
+- Release 	est-overlay-clock-37 (1.7.1-test.37, native backend) is the **latest** release; 49 old test/beta releases and their tags were deleted, leaving the 21 stable versions plus this build.
