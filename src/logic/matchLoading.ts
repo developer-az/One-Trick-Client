@@ -21,17 +21,21 @@ function clockAdvancing(gameTime: number | null | undefined, trustedGameTime: nu
   return gt > trustedGameTime + LIVE_CLOCK_ADVANCE_SEC;
 }
 
-/** True during GameStart or while the match is up but the clock has not started moving. */
+/**
+ * True during GameStart or while the match is up but the clock has not started moving.
+ * A running clock in an engaged match wins over the phase label: the client can
+ * keep (or replay) GameStart after the game has started, and treating that as
+ * loading blanked the live HUD until the phase caught up.
+ */
 export function isMatchLoading(input: MatchLoadingInput): boolean {
   if (input.phase === 'Reconnect') return false;
-  if (input.phase === LOADING_GAMEFLOW_PHASE) return true;
-
+  const gameStart = input.phase === LOADING_GAMEFLOW_PHASE;
   const inProgress = input.phase === 'InProgress';
   const engaged = !!input.matchEngaged || inProgress;
-  if (!engaged) return false;
+  if (!engaged) return gameStart;
 
   const trusted = input.trustedGameTime ?? 0;
   if (clockAdvancing(input.gameTime, trusted)) return false;
   if (trusted > LIVE_CLOCK_ADVANCE_SEC) return false;
-  return inProgress || !!input.matchEngaged;
+  return true;
 }
