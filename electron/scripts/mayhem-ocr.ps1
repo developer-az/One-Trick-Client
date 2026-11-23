@@ -198,6 +198,19 @@ $CARD_RIM_MIN = 7
 # Both card layouts are 0.17 apart, so half that lands in the inter-card gap.
 $CARD_GAP_OFFSET = 0.085
 
+# Dark indigo card art (real-match capture, 26.23: body 9,18,38 / 8,15,41). It
+# is NOT teal (blue is too strong) and NOT neutral (red is far below 25), so it
+# matched nothing and every scan settled "Could not verify". The window is
+# narrow on purpose: blue-dominant, low red, mid green.
+function Test-CardIndigo {
+  param([int]$R, [int]$G, [int]$B)
+  return (($R -le 26) -and
+          ($G -ge 8 -and $G -le 52) -and
+          ($B -ge 26 -and $B -le 96) -and
+          ($B -ge ($G + 8)) -and
+          ($G -ge ($R - 4)))
+}
+
 function Test-CardBody {
   param([int]$R, [int]$G, [int]$B)
   $teal = (($R -le 12) -and
@@ -239,6 +252,7 @@ function Get-CardSlotEvidence {
   $rimY = [int][Math]::Round(0.303 * $h)
   $innerY = [int][Math]::Round(0.312 * $h)
   $body = 0
+  $indigoHits = 0
   $rim = 0
   $gap = 0
   # Mean body RGB is logged so a real run can confirm the gold window without trusting the predicate.
@@ -251,6 +265,7 @@ function Get-CardSlotEvidence {
       $c = $Bitmap.GetPixel($x, $y)
       $sumR += [int]$c.R; $sumG += [int]$c.G; $sumB += [int]$c.B; $bodySamples += 1
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
+      if (Test-CardIndigo -R $c.R -G $c.G -B $c.B) { $indigoHits += 1 }
     }
   }
   # The 3x3 patch spans card art and title ink, so per-pixel windows reject a
@@ -288,13 +303,35 @@ function Get-CardSlotEvidence {
   for ($i = -4; $i -le 4; $i++) {
     $x = [int][Math]::Round($cx + $i * 0.005 * $w)
     if ($x -lt 0 -or $x -ge $w) { continue }
-    if ($rimY -lt 0 -or $rimY -ge $h -or $innerY -lt 0 -or $innerY -ge $h) { continue }
-    $outer = $Bitmap.GetPixel($x, $rimY)
-    $inner = $Bitmap.GetPixel($x, $innerY)
-    $lumaOuter = 0.2126 * $outer.R + 0.7152 * $outer.G + 0.0722 * $outer.B
-    $lumaInner = 0.2126 * $inner.R + 0.7152 * $inner.G + 0.0722 * $inner.B
-    if ([Math]::Abs($lumaOuter - $lumaInner) -ge 25) { $rim += 1 }
+    $hit = $false
+    if ($rimY -ge 0 -and $rimY -lt $h -and $innerY -ge 0 -and $innerY -lt $h) {
+      $outer = $Bitmap.GetPixel($x, $rimY)
+      $inner = $Bitmap.GetPixel($x, $innerY)
+      $lumaOuter = 0.2126 * $outer.R + 0.7152 * $outer.G + 0.0722 * $outer.B
+      $lumaInner = 0.2126 * $inner.R + 0.7152 * $inner.G + 0.0722 * $inner.B
+      if ([Math]::Abs($lumaOuter - $lumaInner) -ge 25) { $hit = $true }
+    }
+    # The shipped band assumed one card size. Current cards are taller, so the
+    # top border sits anywhere in the upper third: scan it and accept only a
+    # bright edge directly over a dark interior, which no plain background has.
+    if (-not $hit) {
+      for ($k = 0; $k -le 40; $k++) {
+        $yOut = [int][Math]::Round((0.20 + $k * 0.004) * $h)
+        $yIn = [int][Math]::Round((0.20 + $k * 0.004 + 0.010) * $h)
+        if ($yOut -lt 0 -or $yIn -ge $h) { continue }
+        $o = $Bitmap.GetPixel($x, $yOut)
+        $n = $Bitmap.GetPixel($x, $yIn)
+        $lOut = 0.2126 * $o.R + 0.7152 * $o.G + 0.0722 * $o.B
+        $lIn = 0.2126 * $n.R + 0.7152 * $n.G + 0.0722 * $n.B
+        if (($lOut - $lIn) -ge 25 -and $lIn -le 90) { $hit = $true; break }
+      }
+    }
+    if ($hit) { $rim += 1 }
   }
+  # Indigo art counts as a card body only beside a glowing border. The gap rule
+  # stays strict on purpose: this map's background is the same indigo, so
+  # letting indigo satisfy the gap would cancel every real card out.
+  if ($indigoHits -ge 5 -and $rim -gt 0) { $body = [Math]::Max($body, $CARD_BODY_MIN) }
   return [pscustomobject]@{
     x = [Math]::Round($CenterX, 4)
     body = $body
