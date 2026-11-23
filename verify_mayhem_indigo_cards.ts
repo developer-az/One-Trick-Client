@@ -46,7 +46,11 @@ ok(!!body, 'Test-CardBody is declared');
 const gapBlock = ps1.match(/foreach \(\$side in @\(-1, 1\)\)[\s\S]*?\n {2}\}/)?.[0] ?? '';
 ok(gapBlock.includes('Test-CardBody'), 'gap patches still use the strict Test-CardBody window');
 ok(!gapBlock.includes('Test-CardIndigo'), 'indigo never reaches the gap rule');
-ok(/if \(\$indigoHits -ge 5 -and \$rim -gt 0\)/.test(ps1), 'indigo body requires a glowing border (rim > 0)');
+ok(/\$indigoHits -ge 5 -or \(\$darkHits -ge 5/.test(ps1), 'a dark body needs a glowing border, and any non-indigo dark art must also be darker than the gaps');
+ok(/\$gapLuma - \$bodyLuma\) -ge 12/.test(ps1), 'generic dark body is gated on contrast against the gaps');
+// The tier is random every screen and a Command Line screen mixes tiers, so the
+// body rule may not be a single rarity colour.
+ok(!/if \(\$indigoHits -ge 5\) \{ \$body/.test(ps1), 'card body is not keyed on one rarity colour alone');
 ok(/if \(\$hits.Count -ge 2\) \{ \$cardsVisible = 1 \}/.test(ps1), 'cardsVisible still needs two card-like slots');
 
 if (indigo && body) {
@@ -108,11 +112,12 @@ function New-Canvas([int]$w, [int]$h, [int]$r, [int]$g, [int]$b) {
   return $bmp
 }
 # 26.23 card: dark indigo body under a warm glowing top border.
-function Add-IndigoCard([System.Drawing.Bitmap]$bmp, [double]$cx, [switch]$NoBorder) {
+function Add-Card([System.Drawing.Bitmap]$bmp, [double]$cx, [int]$r, [int]$g, [int]$b, [switch]$NoBorder) {
   $w = $bmp.Width; $h = $bmp.Height
   $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-  $ink = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(9, 18, 38))
+  $ink = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($r, $g, $b))
   $glow = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(250, 190, 120))
+  # Half-width 0.070 against 0.17 spacing keeps a real inter-card gap.
   $x0 = [int]($w * ($cx - 0.07)); $x1 = [int]($w * ($cx + 0.07))
   $y0 = [int]($h * 0.24); $y1 = [int]($h * 0.80)
   $gfx.FillRectangle($ink, $x0, $y0, $x1 - $x0, $y1 - $y0)
@@ -121,12 +126,36 @@ function Add-IndigoCard([System.Drawing.Bitmap]$bmp, [double]$cx, [switch]$NoBor
 }
 # Map background: the same indigo as the card, measured between cards.
 $cards = New-Canvas 840 620 16 29 46
-foreach ($cx in @(0.33, 0.5, 0.67)) { Add-IndigoCard -bmp $cards -cx $cx }
+foreach ($cx in @(0.33, 0.5, 0.67)) { Add-Card -bmp $cards -cx $cx -r 9 -g 18 -b 38 }
 foreach ($cx in @(0.33, 0.5, 0.67)) {
   $s = Get-CardSlotEvidence -Bitmap $cards -CenterX $cx
   "cards $($s.x) body=$($s.body) gap=$($s.gap) rim=$($s.rim)"
 }
 $cards.Dispose()
+# Silver tier on the bright cave wall: neutral grey art.
+$silver = New-Canvas 840 620 92 118 104
+foreach ($cx in @(0.33, 0.5, 0.67)) { Add-Card -bmp $silver -cx $cx -r 60 -g 62 -b 64 }
+foreach ($cx in @(0.33, 0.5, 0.67)) {
+  $s = Get-CardSlotEvidence -Bitmap $silver -CenterX $cx
+  "silver $($s.x) body=$($s.body) gap=$($s.gap) rim=$($s.rim)"
+}
+$silver.Dispose()
+# Gold tier: warm art.
+$goldTier = New-Canvas 840 620 92 118 104
+foreach ($cx in @(0.33, 0.5, 0.67)) { Add-Card -bmp $goldTier -cx $cx -r 190 -g 150 -b 70 }
+foreach ($cx in @(0.33, 0.5, 0.67)) {
+  $s = Get-CardSlotEvidence -Bitmap $goldTier -CenterX $cx
+  "gold $($s.x) body=$($s.body) gap=$($s.gap) rim=$($s.rim)"
+}
+$goldTier.Dispose()
+# Maestro headliner: four offerings. A dark art colour no other window names.
+$four = New-Canvas 840 620 92 118 104
+foreach ($cx in @(0.245, 0.415, 0.585, 0.755)) { Add-Card -bmp $four -cx $cx -r 30 -g 24 -b 30 }
+foreach ($cx in @(0.245, 0.415, 0.585, 0.755)) {
+  $s = Get-CardSlotEvidence -Bitmap $four -CenterX $cx
+  "four $($s.x) body=$($s.body) gap=$($s.gap) rim=$($s.rim)"
+}
+$four.Dispose()
 # Same indigo everywhere, no border anywhere: colour alone must prove nothing.
 $band = New-Canvas 840 620 9 18 38
 foreach ($cx in @(0.33, 0.5, 0.67)) {
@@ -136,7 +165,7 @@ foreach ($cx in @(0.33, 0.5, 0.67)) {
 $band.Dispose()
 # Indigo plates with the border removed: still nothing.
 $flat = New-Canvas 840 620 16 29 46
-foreach ($cx in @(0.33, 0.5, 0.67)) { Add-IndigoCard -bmp $flat -cx $cx -NoBorder }
+foreach ($cx in @(0.33, 0.5, 0.67)) { Add-Card -bmp $flat -cx $cx -r 9 -g 18 -b 38 -NoBorder }
 foreach ($cx in @(0.33, 0.5, 0.67)) {
   $s = Get-CardSlotEvidence -Bitmap $flat -CenterX $cx
   "noborder $($s.x) body=$($s.body) gap=$($s.gap) rim=$($s.rim)"
@@ -158,15 +187,20 @@ $flat.Dispose()
   }
   const rows = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const num = (line: string, key: string) => Number(new RegExp(`${key}=(-?\\d+)`).exec(line)?.[1]);
-  for (const row of rows.filter((r) => r.startsWith('cards'))) {
-    ok(num(row, 'body') >= 8 && num(row, 'gap') === 0, `real pixels: ${row} (body>=8, gap=0)`);
-    ok(num(row, 'rim') >= 7, `real pixels: ${row} (glowing border found)`);
+  for (const row of rows.filter((r) => /^(cards|silver|gold|four) /.test(r))) {
+    ok(num(row, 'body') >= 8 && num(row, 'gap') === 0, `${row} (body>=8, gap=0)`);
+    // Bright art (gold) carries its own colour window; dark art must show the
+    // glowing border for its body to count at all.
+    if (/^(cards|silver|four) /.test(row)) ok(num(row, 'rim') >= 7, `${row} (glowing border found)`);
   }
   for (const row of rows.filter((r) => r.startsWith('band') || r.startsWith('noborder'))) {
     ok(num(row, 'body') === 0, `no-border ${row} (colour alone proves no card)`);
   }
-  ok(rows.filter((r) => r.startsWith('cards')).length === 3, 'harness measured three indigo card slots');
-  ok(rows.length === 9, `harness emitted 9 slot rows (got ${rows.length})`);
+  ok(rows.filter((r) => r.startsWith('cards')).length === 3, 'harness measured three prismatic slots');
+  ok(rows.filter((r) => r.startsWith('silver')).length === 3, 'harness measured three silver slots');
+  ok(rows.filter((r) => r.startsWith('gold')).length === 3, 'harness measured three gold slots');
+  ok(rows.filter((r) => r.startsWith('four')).length === 4, 'harness measured four Maestro slots');
+  ok(rows.length === 19, `harness emitted 19 slot rows (got ${rows.length})`);
 }
 
 if (!process.exitCode) console.log('verify:mayhem-indigo-cards ok');

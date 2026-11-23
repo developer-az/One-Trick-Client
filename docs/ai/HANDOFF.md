@@ -258,3 +258,15 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - No ranked/presenter/Mayhem-pick behaviour changed; the HUD skin from test.33 is unchanged.
 - Published `test-mayhem-indigo-34` from this commit.
 
+## 2026-11-23 - test.35: the card look varies per selection, so the reader keys on structure
+
+- Research (LoL wiki ARAM: Mayhem, Riot support, arammayhem.com): the selection screen is not one fixed picture.
+  - The tier is random every screen and the whole game shares it: **Silver / Gold / Prismatic**, each with its own card art. A roll can therefore be grey, gold or indigo depending on the draw.
+  - **Maestro** (Jhin) headliners hand out **four** offerings instead of three (both the ps1 slot set and `pipeline.ts` already model 3- and 4-column rows).
+  - **Command Line** converts rerolls into Hacked Rerolls that upgrade one offering a tier, so one screen can mix rarities side by side.
+  - **HEARTSTEEL** stamps a sticker/decoration on some cards, **Debonair Zed** adds gold/hat text to the card, **Pentakill** has its own three-choice screen, and **K/DA** / **Superfans** grant an extra selection.
+- So colour cannot be the key: test.34's indigo window only covered this patch's prismatic art. The body rule is now **structure**: a dark interior under a glowing top border, either at the known indigo window, or (any other dark art) additionally clearly darker than the gaps between the cards. Bright art (gold) still proves itself through its own colour window. Indigo stays out of the gap rule, so this map's indigo background cannot cancel real cards.
+- `verify:mayhem-indigo-cards` now covers all of it: prismatic (indigo), silver (neutral), gold (bright) and a four-card Maestro screen on the shipped `Get-CardSlotEvidence`, plus two negatives (uniform indigo band, borderless plates => body 0). 19 slot rows. All four real captures still report CARDS_VISIBLE 1 with clean gaps.
+- Bundle stays at 26.23 (225 augments). `verify:release` exits 0 and the mayhem verifies pass.
+- Published `test-mayhem-rare-cards-35`.
+

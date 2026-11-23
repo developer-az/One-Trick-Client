@@ -253,6 +253,7 @@ function Get-CardSlotEvidence {
   $innerY = [int][Math]::Round(0.312 * $h)
   $body = 0
   $indigoHits = 0
+  $darkHits = 0
   $rim = 0
   $gap = 0
   # Mean body RGB is logged so a real run can confirm the gold window without trusting the predicate.
@@ -266,6 +267,7 @@ function Get-CardSlotEvidence {
       $sumR += [int]$c.R; $sumG += [int]$c.G; $sumB += [int]$c.B; $bodySamples += 1
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
       if (Test-CardIndigo -R $c.R -G $c.G -B $c.B) { $indigoHits += 1 }
+      if ((0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B) -le 95) { $darkHits += 1 }
     }
   }
   # The 3x3 patch spans card art and title ink, so per-pixel windows reject a
@@ -328,10 +330,26 @@ function Get-CardSlotEvidence {
     }
     if ($hit) { $rim += 1 }
   }
-  # Indigo art counts as a card body only beside a glowing border. The gap rule
-  # stays strict on purpose: this map's background is the same indigo, so
-  # letting indigo satisfy the gap would cancel every real card out.
-  if ($indigoHits -ge 5 -and $rim -gt 0) { $body = [Math]::Max($body, $CARD_BODY_MIN) }
+  # Colour is the wrong key for "is this a card". The selection tier is random
+  # every screen (Silver / Gold / Prismatic art), a Command Line screen mixes
+  # tiers, and Headliners stamp stickers over the art. So the card is proven by
+  # STRUCTURE instead: a dark interior under a glowing top border. The indigo
+  # window keeps this patch's prismatic body exact; anything else dark must also
+  # be clearly darker than the gaps between the cards, which no plain background
+  # satisfies.
+  if ($rim -gt 0) {
+    $bodyLuma = 255
+    $gapLuma = 0
+    if ($bodySamples -gt 0) {
+      $bodyLuma = 0.2126 * ($sumR / $bodySamples) + 0.7152 * ($sumG / $bodySamples) + 0.0722 * ($sumB / $bodySamples)
+    }
+    if ($gapSamples -gt 0) {
+      $gapLuma = 0.2126 * ($gapR / $gapSamples) + 0.7152 * ($gapG / $gapSamples) + 0.0722 * ($gapB / $gapSamples)
+    }
+    if ($indigoHits -ge 5 -or ($darkHits -ge 5 -and ($gapLuma - $bodyLuma) -ge 12)) {
+      $body = [Math]::Max($body, $CARD_BODY_MIN)
+    }
+  }
   return [pscustomobject]@{
     x = [Math]::Round($CenterX, 4)
     body = $body
