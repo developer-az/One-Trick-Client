@@ -42,7 +42,7 @@ const MODULE_INFO: Record<HudModuleId, { title: string; hint: string }> = {
     title: 'ARAM Mayhem (beta)',
     hint: 'Mayhem only: OCR on augment cards (Windows). Off by default — enable for ARAM Mayhem queues.',
   },
-  frames: { title: 'Frames', hint: 'Decorative borders around the overlay panels.' },
+  frames: { title: 'Frames', hint: 'Game HUD + minimap frame/skin: paints the selected HUD skin around the health, mana and ability bar.' },
 };
 
 interface OverlayControls {

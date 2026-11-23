@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { normalizeChromeColor } from './chromeTheme';
-import { computeLeagueGeometry } from './leagueGeometry';
+import { computeLeagueGeometry, type LeagueGeometry } from './leagueGeometry';
+import { gameHudSkinPieces, gameHudSkinRects } from './gameHudSkin';
+import { HudSkinOrnaments, useHudSkinChrome } from './hudSkinOrnaments';
+import './game-hud-skin.css';
 
 /**
  * League anchors the bottom HUD cluster (spells/items/portrait) to bottom-center
@@ -97,6 +100,46 @@ function EdgeTicks({ color }: { color: string }) {
   );
 }
 
+/**
+ * The skin around League's bottom-centre cluster: a static perimeter in the
+ * active skin language. Pieces come from the pure `gameHudSkin` layout and sit
+ * only in the padding gutter, so the native bars, numbers and icons are never
+ * covered. No measuring, no observers, no animation.
+ */
+function GameHudSkin({ geo, calibration }: { geo: LeagueGeometry; calibration?: OverlayCalibration }) {
+  const { skin, ornaments } = useHudSkinChrome();
+  const { rects, pieces } = useMemo(() => {
+    const r = gameHudSkinRects({ geo, calibration });
+    return { rects: r, pieces: gameHudSkinPieces(r, geo.s) };
+  }, [geo, calibration]);
+  const o = rects.surround;
+  if (o.width <= 0 || o.height <= 0) return null;
+  return (
+    <div
+      className="game-hud-skin"
+      data-ov-skin={skin}
+      aria-hidden
+      style={{
+        left: o.left,
+        top: o.top,
+        width: o.width,
+        height: o.height,
+        ['--ghs-s' as string]: String(geo.s),
+      }}
+    >
+      <span className="ghs-frame" />
+      {pieces.map((p) => (
+        <span
+          key={p.kind}
+          className={`ghs-piece ghs-${p.kind}`}
+          style={{ left: p.rect.left, top: p.rect.top, width: p.rect.width, height: p.rect.height }}
+        />
+      ))}
+      <HudSkinOrnaments skin={skin} ornaments={ornaments} />
+    </div>
+  );
+}
+
 export const ChromeGameHud: React.FC<{
   hudScale?: number;
   mapScale?: number;
@@ -148,7 +191,7 @@ export const ChromeGameHud: React.FC<{
       )}
 
       <div
-        className={`chrome-frame-box chrome-frame-ability ${showGuides ? 'chrome-frame-guide' : 'chrome-frame-live'}`}
+        className={`chrome-frame-box chrome-frame-ability ${showGuides ? 'chrome-frame-guide' : 'chrome-frame-skinned'}`}
         style={{
           left: geo.offsetX + geo.gameViewW / 2 + abilityCal.dx,
           bottom: abilityBottom,
@@ -157,9 +200,15 @@ export const ChromeGameHud: React.FC<{
           transform: 'translateX(-50%)',
         }}
       >
-        <div className="chrome-frame-inner" />
-        <CornerBrackets color={color} armLength={Math.max(14, Math.round(16 * geo.s))} />
-        <EdgeTicks color={color} />
+        {/* Live: the skin below replaces the calibration marks; this box stays
+            as the transparent anchor the handoff check measures. */}
+        {showGuides && (
+          <>
+            <div className="chrome-frame-inner" />
+            <CornerBrackets color={color} armLength={Math.max(14, Math.round(16 * geo.s))} />
+            <EdgeTicks color={color} />
+          </>
+        )}
         {showGuides && (
           <span className="chrome-frame-label">
             Ability HUD
@@ -168,6 +217,8 @@ export const ChromeGameHud: React.FC<{
           </span>
         )}
       </div>
+
+      {!showGuides && <GameHudSkin geo={geo} calibration={calibration} />}
 
       <div
         className={`chrome-frame-box chrome-frame-map ${showGuides ? 'chrome-frame-guide chrome-frame-guide-map' : 'chrome-frame-live'}`}
