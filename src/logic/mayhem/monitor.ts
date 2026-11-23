@@ -63,6 +63,16 @@ export const MAX_DISCOVERY_BURSTS = 6;
  */
 export const MAX_DISCOVERY_EMPTY_BURSTS = 2;
 
+/**
+ * Consecutive trusted frames with no card evidence before a displayed roll is
+ * treated as gone. The selection screen is closed by clicking a card, so after
+ * a pick the cards vanish while the HUD/callouts keep the OCR text non-empty.
+ * One empty frame can be an OCR miss; two at the fast poll (~1.1 s) cannot.
+ */
+export const MAYHEM_CARDS_GONE_SCANS_REQUIRED = 2;
+/** Minimum time since the last accepted roll before the gone streak may purge. */
+export const MAYHEM_CARDS_GONE_GRACE_MS = 1_500;
+
 /** One OCR frame as the monitor sees it (the type `MayhemOcrRead` aliases). */
 export interface MayhemMonitorRead {
   /** Display ids: current matches or the retained roll while the HUD is open. */
@@ -99,6 +109,15 @@ export interface MayhemMonitorRead {
   owner: boolean;
   /** Capture used the primary-screen fallback (no game window matched). */
   fallback?: boolean;
+  /**
+   * Pixel gate verdict: card-sized card bodies were sampled on screen. `false`
+   * is positive evidence that the roll is gone — the signal the HUD stale
+   * timer and the pick counter use after a selection. Absent in older scripts
+   * and hand-built reads, which keep the old behaviour.
+   */
+  cardsVisible?: boolean;
+  /** Cursor normalized to the captured offer band; names the clicked card. */
+  cursor?: { x: number; y: number };
 }
 
 /** A read before the trust gate is attached: everything except `owner`. */
@@ -155,6 +174,10 @@ export interface MayhemMonitorState {
   /** The pending single offer and how many consecutive frames agreed on it. */
   candidateIds: string[];
   candidateScans: number;
+  /** Last frame that put an accepted roll (or promoted candidate) on screen. */
+  lastOfferAt: number;
+  /** Consecutive trusted frames whose pixel gate saw no cards at all. */
+  cardsGoneScans: number;
   discovery: MayhemDiscoveryState;
 }
 
@@ -166,6 +189,8 @@ export function createMayhemMonitorState(): MayhemMonitorState {
     displayIds: [],
     candidateIds: [],
     candidateScans: 0,
+    lastOfferAt: 0,
+    cardsGoneScans: 0,
     discovery: {
       burstStartedAt: null,
       lastScanAt: 0,
@@ -455,6 +480,17 @@ export async function runMayhemMonitorScan(
   // Only a real game-window frame may count: the primary-screen fallback can
   // show offers but cannot prove the game was on top.
   const targetCapture = isTrustedMayhemFrame(read);
+  // A real game-window capture is trustworthy even when the pipeline could not
+  // verify cards: after a pick the screen is full of HUD/callout text, so the
+  // read is `unverified` while the pixel gate positively reports no cards.
+  // That frame is what proves the roll is gone; it must feed both the counter
+  // and the HUD stale timer.
+  const trustedTarget =
+    read.fresh && !read.blackFrame && read.fallback !== true && read.owner !== false;
+  const pixelCardsGone = trustedTarget && read.cardsVisible === false;
+  // A hand-built state may carry display ids without a timestamp; assume it
+  // was just seen so the stale timer never fires on its first scan.
+  if (next.displayIds.length > 0 && next.lastOfferAt <= 0) next.lastOfferAt = input.now;
   const offers = read.frameIds.length;
   // A roll from a patch newer than the bundle can show 1-2 known cards with the
   // rest as `unknown:` placeholders. The pick counter only arms on a full roll,
@@ -472,14 +508,21 @@ export async function runMayhemMonitorScan(
     next.fuzzyScore = read.fuzzyScore;
     if (usable) {
       next.scanStreak = offers > 0 ? next.scanStreak + 1 : 0;
+    }
+    // The counter may also read a pixel-confirmed "cards gone" frame: that is
+    // the only post-selection frame the pipeline will ever produce with junk
+    // text on screen. It still refuses a fallback/background/black frame.
+    if (usable || pixelCardsGone) {
       next.counter = observeMayhemPickScan(next.counter, {
         offerCount: proofOffers,
         isDead: input.isDead,
-        foreground: targetCapture,
+        foreground: targetCapture || pixelCardsGone,
         blackFrame: read.blackFrame,
         liveAugmentIds: input.liveAugmentIds,
         hasDisplayedOffers: read.frameDisplayCount > 0,
       });
+    }
+    if (usable) {
       // A single high-confidence offer is pending, not displayable: promote it
       // only after the same id was read on consecutive qualifying frames.
       if (read.ids.length === 0 && read.candidateIds.length === 1) {
@@ -493,7 +536,19 @@ export async function runMayhemMonitorScan(
         next.candidateScans = 0;
         next.displayIds = read.ids;
       }
+      const promoted =
+        read.ids.length === 0 &&
+        next.displayIds.length > 0 &&
+        next.candidateScans >= MIN_SINGLE_OFFER_SCANS;
+      // Only a frame that actually produced offers refreshes the stale clock;
+      // a retained roll must age so it can expire after a selection.
+      if (offers > 0 || promoted) next.lastOfferAt = input.now;
     }
+    // Card evidence resets the gone streak. The pixel gate is authoritative
+    // when it ran; geometry rows cover scripts that do not report it.
+    const cardEvidence =
+      read.cardsVisible === true || read.frameDisplayCount > 0 || read.ids.length > 0;
+    next.cardsGoneScans = trustedTarget && !cardEvidence ? next.cardsGoneScans + 1 : 0;
     if (discovery && usable && offers > 0) next.discovery.burstOffers += offers;
     if (discovery && usable && offers >= MAYHEM_DISCOVERY_MIN_OFFERS) {
       next.discovery.latched = true;
@@ -512,11 +567,20 @@ export async function runMayhemMonitorScan(
     consecutiveScans: next.scanStreak,
     fuzzyScore: next.fuzzyScore,
   });
-  const hudAction: MayhemHudAction = visible
-    ? 'show'
-    : usable && offers === 0 && read.frameDisplayCount === 0
-      ? 'purge'
-      : 'keep';
+  // After a selection the cards are gone but the screen is not empty: two
+  // trusted frames with no card evidence retire the retained roll. This is what
+  // stops the panel sitting on top of the game for the rest of the match.
+  const cardsGone =
+    next.displayIds.length > 0 &&
+    next.cardsGoneScans >= MAYHEM_CARDS_GONE_SCANS_REQUIRED &&
+    input.now - next.lastOfferAt >= MAYHEM_CARDS_GONE_GRACE_MS;
+  const hudAction: MayhemHudAction = cardsGone
+    ? 'purge'
+    : visible
+      ? 'show'
+      : usable && offers === 0 && read.frameDisplayCount === 0
+        ? 'purge'
+        : 'keep';
 
   // Classification is the monitor's own (latch first, then the frame's offers):
   // `mayhem-likely` stays honest for the unknown queue while still getting the

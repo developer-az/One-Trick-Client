@@ -42,6 +42,7 @@ public class OTMayhemWin32 {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT pt);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   public struct POINT { public int X; public int Y; }
@@ -209,7 +210,24 @@ function Test-CardBody {
           ($G -ge 120 -and $G -le 190) -and
           ($B -ge 40 -and $B -le 130) -and
           ([Math]::Abs($R - $G) -le 60))
-  return ($teal -or $gold)
+  # Dark neutral bodies (real-match log: 40,42,41 / 33,35,35 / 46,47,47). Low
+  # chroma only, so the bluish HUD between cards (29,50,59 / 56,67,69) still
+  # reads as a gap and a continuous band is still rejected by the gap check.
+  $hi = [Math]::Max($R, [Math]::Max($G, $B))
+  $lo = [Math]::Min($R, [Math]::Min($G, $B))
+  $neutral = (($lo -ge 25) -and ($hi -le 70) -and (($hi - $lo) -le 10))
+  return ($teal -or $gold -or $neutral)
+}
+
+# The 3x3 patch spans card art and title ink, so per-pixel windows alone reject a
+# genuine dark card. A patch whose MEAN is a dark neutral is body-like (logged
+# real cards: 40,42,41 / 33,35,35 / 46,47,47). The same rule is applied to the
+# gap patches, so a continuous band reads as a gap and is still rejected.
+function Test-CardMean {
+  param([int]$R, [int]$G, [int]$B)
+  $hi = [Math]::Max($R, [Math]::Max($G, $B))
+  $lo = [Math]::Min($R, [Math]::Min($G, $B))
+  return (($lo -ge 25) -and ($hi -le 70) -and (($hi - $lo) -le 8))
 }
 
 function Get-CardSlotEvidence {
@@ -235,7 +253,22 @@ function Get-CardSlotEvidence {
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
     }
   }
+  # The 3x3 patch spans card art and title ink, so per-pixel windows reject a
+  # genuine dark card whose mean (logged: 40,42,41 / 33,35,35 / 46,47,47) is
+  # clearly neutral. The patch MEAN is the authority for that body reading; the
+  # gap samples below stay strict, so a continuous dark band still fails.
+  if ($bodySamples -gt 0) {
+    $meanR = $sumR / $bodySamples
+    $meanG = $sumG / $bodySamples
+    $meanB = $sumB / $bodySamples
+    if (Test-CardMean -R ([int][Math]::Round($meanR)) -G ([int][Math]::Round($meanG)) -B ([int][Math]::Round($meanB))) {
+      $body = [Math]::Max($body, $CARD_BODY_MIN)
+    }
+  }
   # A teal patch with no non-teal boundary is one band, not separate cards.
+  # One column per side, at the layout's half-pitch: widening it would sample the
+  # neighbouring card on a tight row (the shipped teal fixtures pin this).
+  $gapR = 0; $gapG = 0; $gapB = 0; $gapSamples = 0
   foreach ($side in @(-1, 1)) {
     $gx = [int][Math]::Round($cx + $side * $CARD_GAP_OFFSET * $w)
     if ($gx -lt 0 -or $gx -ge $w) { continue }
@@ -243,8 +276,14 @@ function Get-CardSlotEvidence {
       $y = [int][Math]::Round($bodyY + $dy * $h)
       if ($y -lt 0 -or $y -ge $h) { continue }
       $c = $Bitmap.GetPixel($gx, $y)
+      $gapR += [int]$c.R; $gapG += [int]$c.G; $gapB += [int]$c.B; $gapSamples += 1
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $gap += 1 }
     }
+  }
+  # Mean rule for the gap patches too: a band that is card-like on average is
+  # one continuous surface, never a gap between cards.
+  if ($gapSamples -gt 0 -and (Test-CardMean -R ([int][Math]::Round($gapR / $gapSamples)) -G ([int][Math]::Round($gapG / $gapSamples)) -B ([int][Math]::Round($gapB / $gapSamples)))) {
+    $gap = [Math]::Max($gap, $CARD_BODY_MIN)
   }
   for ($i = -4; $i -le 4; $i++) {
     $x = [int][Math]::Round($cx + $i * 0.005 * $w)
@@ -428,6 +467,30 @@ function Get-OfferGeometry {
   }
 }
 
+# Cursor position normalized to the captured offer band. The augment selection
+# screen is closed by left-clicking one of the cards, so the cursor at the
+# first frame without cards names the card that was taken. Reported in the same
+# 0..1 space as the card columns (the OCR bitmap), never in screen pixels.
+# verify_mayhem_pick_selection.ts pins the marker and the card mapping.
+function Get-CursorInBand {
+  param(
+    [int]$Left,
+    [int]$Top,
+    [int]$Width,
+    [int]$Height
+  )
+  if ($Width -le 0 -or $Height -le 0) { return $null }
+  $pt = New-Object OTMayhemWin32+POINT
+  if (-not [OTMayhemWin32]::GetCursorPos([ref]$pt)) { return $null }
+  $x = ($pt.X - $Left) / $Width
+  $y = ($pt.Y - $Top) / $Height
+  if ($x -lt 0 -or $x -gt 1 -or $y -lt 0 -or $y -gt 1) { return $null }
+  return [pscustomobject]@{
+    x = [Math]::Round($x, 4)
+    y = [Math]::Round($y, 4)
+  }
+}
+
 function Capture-FractionRegion {
   param(
     [int]$BoundsLeft,
@@ -496,6 +559,12 @@ if ($CaptureScreen) {
     $frame = Get-OfferGeometry -BoundsX $target.Left -BoundsY $target.Top -BoundsWidth $target.Width -BoundsHeight $target.Height
     $frameWidth = $frame.Width
     $frameHeight = $frame.Height
+    # Only a real game-window capture proves what the cursor clicked: a
+    # primary-screen fallback may show another window's cursor.
+    $cursor = Get-CursorInBand -Left $frame.Left -Top $frame.Top -Width $frame.Width -Height $frame.Height
+    if ($cursor) {
+      Write-Output ('__OT_CURSOR__' + ($cursor | ConvertTo-Json -Compress))
+    }
     # JSON, not key=value pairs: the game process name is "League of Legends"
     # (it contains spaces) and the old space-separated marker truncated it.
     $targetInfo = [ordered]@{

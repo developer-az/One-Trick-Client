@@ -118,6 +118,8 @@ import {
     type MayhemMonitorState,
 } from '../src/logic/mayhem/monitor';
 import { isMayhemAugmentHudVisible } from '../src/logic/mayhem/visibility';
+import { isUnknownMayhemAugmentId } from '../src/logic/mayhem/match';
+import { pickedMayhemAugment, type MayhemCardCursor } from '../src/logic/mayhem/selection';
 import { decideMayhemPageUp } from '../src/logic/mayhem/hotkey';
 import { loadMayhemBundle, refreshMayhemBundleIfStale } from './mayhem-data';
 import {
@@ -141,6 +143,7 @@ import {
     resetMayhemMatchState,
     setMayhemPicksTaken,
     setMayhemRollIds,
+    setOwnedMayhemAugmentIds,
 } from './mayhem-state';
 
 /**
@@ -1036,10 +1039,34 @@ type PayloadEnemy = {
     position: string | undefined;
     isDead: boolean | undefined;
     items: string[];
+    /** Item gold (full shop prices, consumables excluded) for the gold lead. */
+    itemGold: number;
     scores: LiveClientPlayer['scores'];
     summonerSpells: LiveClientPlayer['summonerSpells'];
     respawnTimer: number;
 };
+
+/**
+ * Item gold as the scoreboard overlays compute it: the full shop price of every
+ * held item, consumables and free trinkets excluded. The Live Client reports the
+ * price on each item row, so no catalog lookup or memory read is needed.
+ */
+function playerItemGold(player: LiveClientPlayer | null | undefined): number {
+    if (!player?.items?.length) return 0;
+    let total = 0;
+    for (const item of player.items) {
+        if (!item || item.consumable === true) continue;
+        if (!item.itemID || item.itemID <= 0) continue;
+        const price = typeof item.price === 'number' && Number.isFinite(item.price) ? item.price : 0;
+        if (price <= 0) continue;
+        const count =
+            typeof item.count === 'number' && Number.isFinite(item.count) && item.count > 0
+                ? Math.floor(item.count)
+                : 1;
+        total += price * count;
+    }
+    return total;
+}
 
 /** Cheap signature of one enemy player — covers every field the HUD enemy row reads. */
 function enemyPlayerSignature(p: LiveClientPlayer): string {
@@ -1079,6 +1106,7 @@ function mapEnemies(enemyPlayers: LiveClientPlayer[]): PayloadEnemy[] {
         position: p.position,
         isDead: p.isDead,
         items: p.items?.map((i) => i.displayName) || [],
+        itemGold: playerItemGold(p),
         scores: p.scores,
         summonerSpells: p.summonerSpells,
         respawnTimer:
@@ -1164,6 +1192,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
             level: p.level,
             position: p.position,
             isDead: p.isDead,
+            itemGold: playerItemGold(p),
         })) || [];
 
     const gameTime = live?.gameData?.gameTime ?? 0;
@@ -1205,6 +1234,7 @@ function buildOverlayPayload(live: LiveClientAllGameData | null, gameflowPhase: 
                   level: localPlayer.level,
                   isDead: localPlayer.isDead,
                   items: localPlayer.items || [],
+                  itemGold: playerItemGold(localPlayer),
                   scores: localPlayer.scores,
                   position: localPlayer.position,
                   currentGold,
@@ -1252,9 +1282,11 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         .map((e) => {
             const cs = e.scores?.creepScore ?? 0;
             const itemCount = (e.items || []).filter((id) => id && id !== '0').length;
-            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${itemBucket}:${Math.ceil((e.respawnTimer ?? 0) / 10)}`;
+            return `${e.championName}:${e.level}:${e.isDead ? 1 : 0}:${cs}:${itemCount}:${e.itemGold ?? 0}:${itemBucket}:${Math.ceil((e.respawnTimer ?? 0) / 10)}`;
         })
         .join('|');
+    // Ally item gold drives the team gold lead; it changes when they shop.
+    const allyGoldKey = (payload.allies || []).map((a) => a.itemGold ?? 0).join(',');
     // 10s buckets — ward/cue clocks tick locally in the overlay renderer.
     // Per-second buckets forced an IPC + full React reconcile every poll.
     const timeBucket = Math.floor((payload.gameTime || 0) / 10);
@@ -1272,6 +1304,8 @@ function overlayFingerprint(payload: ReturnType<typeof buildOverlayPayload>): st
         itemKey,
         goldBucket,
         wardScore,
+        lp?.itemGold ?? 0,
+        allyGoldKey,
         enemyKey,
         payload.isPyke ? 1 : 0,
         payload.profileHint || '',
@@ -1316,6 +1350,16 @@ let mayhemVerifyReader: MayhemScreenReader | undefined;
  */
 let mayhemPickVoidRollIds: string[] = [];
 let mayhemPickVoidAtMs = 0;
+/**
+ * The first frame where the cards were gone: the click that closed the screen
+ * happened just before it, so this cursor names the chosen card. The roll is
+ * copied here because the display ids are purged as soon as the pick counts.
+ */
+let mayhemVanish: { cursor: MayhemCardCursor | null; rollIds: string[] } | null = null;
+/** The augment attributed to the last counted pick, so a reroll can take it back. */
+let mayhemPickedAugmentId: string | null = null;
+/** One bounded shape log per match: does the Live Client expose augments at all? */
+let mayhemLiveAugmentShapeLogged = false;
 /**
  * Memoized payload `enemies` list: built once per enemy-list signature so a
  * tick whose enemies did not change reuses the previous array instead of
@@ -1519,10 +1563,80 @@ function mayhemAugmentHudShouldShow(): boolean {
     });
 }
 
+/**
+ * Fold Live Client owned augments into the persisted list when the game
+ * exposes them. Arena does; Mayhem may not, which is why the click path above
+ * exists as well. Either source is authoritative for the total.
+ */
+function syncMayhemOwnedFromLive(ids: string[]): void {
+    if (!ids.length) return;
+    const owned = getOwnedMayhemAugmentIds();
+    const merged = [...owned];
+    for (const id of ids) {
+        if (id && !merged.includes(id)) merged.push(id);
+    }
+    if (merged.length === owned.length) return;
+    setOwnedMayhemAugmentIds(merged.slice(0, 5));
+    setMayhemPicksTaken(Math.max(getMayhemPicksTaken(), merged.length));
+    overlayLog('mayhem-live-owned', { count: merged.length });
+}
+
+/**
+ * The offer screen closed. Name the card under the cursor that selected it and
+ * remember it as owned; when the cursor is not on a card the pick is still
+ * counted, but no augment is invented.
+ */
+function recordMayhemPickedAugment(rollIds: string[], cursor: MayhemCardCursor | null): void {
+    const picked = pickedMayhemAugment(rollIds, cursor);
+    overlayLog('mayhem-augment-pick', {
+        roll: rollIds.join(','),
+        cursor: cursor ? `${cursor.x},${cursor.y}` : 'none',
+        slot: picked?.index ?? null,
+        id: picked?.id ?? null,
+        source: picked ? 'cursor' : 'unknown',
+    });
+    if (!picked || isUnknownMayhemAugmentId(picked.id)) {
+        mayhemPickedAugmentId = null;
+        return;
+    }
+    mayhemPickedAugmentId = picked.id;
+    const owned = getOwnedMayhemAugmentIds();
+    if (!owned.includes(picked.id)) {
+        setOwnedMayhemAugmentIds([...owned, picked.id]);
+        setMayhemPicksTaken(
+            Math.max(getMayhemPicksTaken(), owned.length + 1, mayhemMonitorState.counter.picksTaken)
+        );
+    }
+}
+
+/** One bounded shape log per match, so a missing augment feed is diagnosable. */
+function logMayhemLiveAugmentShape(
+    live: LiveClientAllGameData,
+    local: LiveClientPlayer | null
+): void {
+    if (mayhemLiveAugmentShapeLogged) return;
+    if (!isMayhemMode(mayhemModeForLive(live))) return;
+    mayhemLiveAugmentShapeLogged = true;
+    const events = live.events?.Events ?? [];
+    const active = live.activePlayer as unknown as Record<string, unknown>;
+    const player = local as unknown as Record<string, unknown> | null;
+    overlayLog('mayhem-live-shape', {
+        activeKeys: Object.keys(active || {}).sort().join(','),
+        playerKeys: player ? Object.keys(player).sort().join(',') : '',
+        hasActiveAugments: Array.isArray(active?.augments),
+        hasPlayerAugments: player ? Array.isArray(player.augments) : false,
+        eventNames: [...new Set(events.map((e) => e.EventName || '').filter(Boolean))]
+            .slice(0, 24)
+            .join(','),
+    });
+}
+
 function clearMayhemLiveOffers(): void {
     mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
     mayhemUnverified = false;
+    mayhemVanish = null;
+    mayhemPickedAugmentId = null;
     setMayhemRollIds([]);
     // Drop the engine's display mirror too: a throttled (non-fresh) scan must
     // not resurrect the roll the HUD just cleared.
@@ -1550,6 +1664,7 @@ function endMayhemPickSession(): void {
 function purgeMayhemOffersFromScreen(): void {
     mayhemMonitorEpoch += 1;
     mayhemOfferIds = [];
+    mayhemVanish = null;
     setMayhemRollIds([]);
     mayhemManualScanUntilMs = 0;
     mayhemMonitorState.displayIds = [];
@@ -1623,7 +1738,13 @@ function syncMayhemPickPhase(live: LiveClientAllGameData): void {
     }
     mayhemWasDead = isDead;
     // Live Client owned augments are authoritative when the game exposes them.
+    // Arena carries them on the active player; check the player row too, since
+    // a Mayhem build may expose them there instead.
     mayhemLiveAugmentIds = readLiveAugmentIds(live.activePlayer);
+    const playerAugments = readLiveAugmentIds(localPlayer);
+    if (playerAugments.length) mayhemLiveAugmentIds = playerAugments;
+    logMayhemLiveAugmentShape(live, localPlayer ?? null);
+    syncMayhemOwnedFromLive(mayhemLiveAugmentIds);
     const events = live.events?.Events;
     if (events?.length && isMayhemMode(mayhemModeForLive(live))) {
         const start = events.length + 8 < mayhemEventScanFrom ? 0 : Math.max(0, mayhemEventScanFrom - 4);
@@ -1962,9 +2083,29 @@ async function tickMayhemOcr(): Promise<void> {
     // Display ids may keep the last roll while the HUD is open; the counter
     // already used this frame's ids only (frameIds) inside the engine.
     mayhemOfferIds = commit.displayIds;
+    const read = scan.read;
+    // The first frame where the cards are gone: the click that closed the
+    // selection screen happened just before it, so this cursor names the card.
+    if (read && mayhemOfferIds.length > 0) {
+        const cardsGoneNow =
+            read.fresh &&
+            !read.blackFrame &&
+            read.frameDisplayCount === 0 &&
+            read.ids.length === 0 &&
+            read.cardsVisible !== true;
+        if (cardsGoneNow && !mayhemVanish) {
+            mayhemVanish = { cursor: read.cursor ?? null, rollIds: mayhemOfferIds.slice() };
+            overlayLog('mayhem-cards-gone', {
+                cursor: read.cursor ? `${read.cursor.x},${read.cursor.y}` : 'none',
+                roll: mayhemOfferIds.join(','),
+            });
+        } else if (!cardsGoneNow) {
+            mayhemVanish = null;
+        }
+    }
     // Only an accepted frame clears the unverified warning; a boxed frame that
     // could not be verified turns it on when there is no roll to keep showing.
-    if (scan.read) mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, scan.read, mayhemOfferIds.length > 0);
+    if (read) mayhemUnverified = mayhemUnverifiedAfterRead(mayhemUnverified, read, mayhemOfferIds.length > 0);
 
     // A reroll re-deals the roll the empty gap just retired: within the reroll
     // window a disjoint roll means that gap was the shop refreshing, not a
@@ -1983,6 +2124,14 @@ async function tickMayhemOcr(): Promise<void> {
             mayhemMonitorState.counter = reroll.state;
             setMayhemPicksTaken(reroll.state.picksTaken);
             mayhemPickPhase = { ...mayhemPickPhase, picksTaken: reroll.state.picksTaken };
+            // The "pick" was the shop re-dealing: take back the augment this
+            // app attributed to it as well, or the owned list drifts upward.
+            if (mayhemPickedAugmentId) {
+                setOwnedMayhemAugmentIds(
+                    getOwnedMayhemAugmentIds().filter((id) => id !== mayhemPickedAugmentId)
+                );
+                mayhemPickedAugmentId = null;
+            }
             mayhemPickVoidRollIds = [];
         } else if (mayhemOfferIds.some((id) => mayhemPickVoidRollIds.includes(id))) {
             // The same roll is back: a misread, not a new pick level.
@@ -1996,19 +2145,29 @@ async function tickMayhemOcr(): Promise<void> {
     if (result.counted > 0) {
         setMayhemPicksTaken(result.state.counter.picksTaken);
         mayhemPickPhase = { ...mayhemPickPhase, picksTaken: result.state.counter.picksTaken };
+        // The vanish snapshot holds the roll that closed the screen; attribute
+        // the click to its card before the display ids are purged.
+        const retiredRoll = mayhemVanish?.rollIds.length
+            ? mayhemVanish.rollIds.slice()
+            : mayhemOfferIds.slice();
+        const pickCursor = mayhemVanish?.cursor ?? read?.cursor ?? null;
+        if (retiredRoll.length) recordMayhemPickedAugment(retiredRoll, pickCursor);
         // Remember which roll the empty gap retired so a reroll can take the
-        // spurious count back (displayIds still holds it on this frame).
-        mayhemPickVoidRollIds = mayhemOfferIds.slice();
+        // spurious count (and the attributed augment) back.
+        mayhemPickVoidRollIds = retiredRoll;
         mayhemPickVoidAtMs = Date.now();
+        mayhemVanish = null;
         purgeMayhemOffersFromScreen();
     } else if (result.scanned) {
         // A single offer stays as a candidate (`keep`) until a second scan
         // makes it visible or a confirmed empty frame purges it. Invalid
         // frames never purge, so a failed capture cannot reset the streak.
-        if (result.hudAction === 'show' || mayhemAugmentHudShouldShow()) {
-            if (!mayhemPickSessionActive) beginMayhemPickSession();
-        } else if (result.hudAction === 'purge') {
+        // A purge action is authoritative: a retained roll must not keep the
+        // panel up after the engine saw the cards disappear.
+        if (result.hudAction === 'purge') {
             purgeMayhemOffersFromScreen();
+        } else if (result.hudAction === 'show' || mayhemAugmentHudShouldShow()) {
+            if (!mayhemPickSessionActive) beginMayhemPickSession();
         }
     }
     pushMayhemOverlayPatch();
@@ -2030,6 +2189,9 @@ function resetMatchCaches(): void {
     mayhemOcrFeedbackHint = undefined;
     mayhemPickVoidRollIds = [];
     mayhemPickVoidAtMs = 0;
+    mayhemVanish = null;
+    mayhemPickedAugmentId = null;
+    mayhemLiveAugmentShapeLogged = false;
     lastChampSelectEnemies = [];
     lastChampSelectSelf = null;
     loadingChampion = null;

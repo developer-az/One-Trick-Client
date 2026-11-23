@@ -65,6 +65,13 @@ export interface MayhemOcrOutput {
    * pipeline aligns these centers with detected card boxes before trusting it.
    */
   cardSlots?: MayhemCardSlot[];
+  /**
+   * Cursor position normalized to the captured offer band, when the capture
+   * script reported one. The card columns use the same space, so the caller can
+   * name the card a left-click selected. Absent for file OCR and fallback
+   * captures (neither can prove which window was on top).
+   */
+  cursor?: { x: number; y: number };
 }
 
 const MARKER = /^__OT_([A-Z0-9_]+)(?:\s+(.*))?__$/;
@@ -137,6 +144,7 @@ function targetFromJson(json: string): MayhemOcrTarget | null {
 const TARGET_JSON_PREFIX = '__OT_TARGET__';
 const LINES_JSON_PREFIX = '__OT_LINES__';
 const CARD_SLOTS_JSON_PREFIX = '__OT_CARD_SLOTS__';
+const CURSOR_JSON_PREFIX = '__OT_CURSOR__';
 
 type Frame = readonly [number, number, number, number];
 const IDENTITY_FRAME: Frame = [0, 0, 1, 1];
@@ -196,6 +204,22 @@ function linesFromJson(json: string): { lines: NonNullable<MayhemOcrOutput['line
   return { lines, frame };
 }
 
+function cursorFromJson(json: string): { x: number; y: number } | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw as Record<string, unknown>;
+  const x = typeof src.x === 'number' ? src.x : NaN;
+  const y = typeof src.y === 'number' ? src.y : NaN;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x, y };
+}
+
 function cardSlotsFromJson(json: string): MayhemCardSlot[] {
   let raw: unknown;
   try {
@@ -238,6 +262,7 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
   let emptyFrame = false;
   const visibilityMarkers: string[] = [];
   const slotPayloads: string[] = [];
+  const cursorPayloads: string[] = [];
 
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -253,6 +278,10 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
     if (trimmed.startsWith(TARGET_JSON_PREFIX)) {
       const parsedTarget = targetFromJson(trimmed.slice(TARGET_JSON_PREFIX.length).trim());
       if (parsedTarget) target = parsedTarget;
+      continue;
+    }
+    if (trimmed.startsWith(CURSOR_JSON_PREFIX)) {
+      cursorPayloads.push(trimmed.slice(CURSOR_JSON_PREFIX.length).trim());
       continue;
     }
     const marker = MARKER.exec(trimmed);
@@ -286,9 +315,12 @@ export function parseMayhemOcrOutput(raw: string): MayhemOcrOutput {
   // (including a marker-shaped OCR line) cannot be told apart from the real
   // payload, so any second marker voids the evidence rather than overriding it.
   const cardSlots = slotPayloads.length === 1 ? cardSlotsFromJson(slotPayloads[0]) : undefined;
+  // Same untrusted stream: more than one cursor marker is ambiguous, so no
+  // position is reported rather than letting the last line win.
+  const cursor = cursorPayloads.length === 1 ? cursorFromJson(cursorPayloads[0]) ?? undefined : undefined;
 
   return {
     text: kept.join('\n'), lines, target, blackFrame, language, noTarget, fallback,
-    emptyFrame, cardsVisible, cardSlots,
+    emptyFrame, cardsVisible, cardSlots, cursor,
   };
 }

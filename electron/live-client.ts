@@ -18,6 +18,10 @@ export interface LiveClientItem {
     displayName: string;
     count: number;
     slot: number;
+    /** Full shop price; the Live Client reports it on every playerlist item. */
+    price?: number;
+    /** Potions, wards, elixirs: used up, so excluded from item-gold totals. */
+    consumable?: boolean;
 }
 
 export interface LiveClientPlayer {

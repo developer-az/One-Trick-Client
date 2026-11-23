@@ -66,13 +66,15 @@ export function shouldActivateMayhemSlot(input: {
 export const OverlayMayhemPanel: React.FC<{
   championName: string;
   ranked: RankedMayhemChoice[];
+  /** Augments already taken this match, newest last. */
+  owned?: Array<{ id: string; name: string }>;
   detecting?: boolean;
   mode?: 'roll' | 'suggest' | 'reading';
   pickHint?: string;
   waitingForDeath?: boolean;
   verification?: MayhemVerification;
   ocrHint?: string;
-}> = ({ championName, ranked, detecting, mode, pickHint, waitingForDeath, verification, ocrHint }) => {
+}> = ({ championName, ranked, owned, detecting, mode, pickHint, waitingForDeath, verification, ocrHint }) => {
   // Never show stale advice or claim a pick. The hint is either a live Scanning
   // status or a finished scan's explicit outcome; only an idle monitor falls
   // back to the long Cannot-verify prompt.
@@ -193,6 +195,15 @@ export const OverlayMayhemPanel: React.FC<{
             PageDown scans · PageUp closes
           </p>
         )}
+
+        {owned && owned.length > 0 ? (
+          <div
+            className="hud-chrome-meta !text-[10px] mt-1 truncate"
+            title={owned.map((aug) => aug.name).join(', ')}
+          >
+            Have {owned.length}/4 · {owned.map((aug) => aug.name).join(', ')}
+          </div>
+        ) : null}
 
         {waitingForDeath ? (
           <div className="hud-chrome-meta !text-[10px] mt-1">Opens again at the next augment</div>

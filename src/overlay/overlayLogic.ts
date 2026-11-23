@@ -36,6 +36,8 @@ export interface OverlayEnemy {
   position?: string;
   isDead?: boolean;
   items?: string[];
+  /** Item gold (full shop prices, consumables excluded), from the Live Client. */
+  itemGold?: number;
   respawnTimer?: number;
   scores?: {
     assists: number;
@@ -120,7 +122,16 @@ export interface OverlayLocalPlayer {
   championName: string;
   level: number;
   isDead: boolean;
-  items: Array<{ itemID: number; displayName: string; count: number; slot: number }>;
+  items: Array<{
+    itemID: number;
+    displayName: string;
+    count: number;
+    slot: number;
+    price?: number;
+    consumable?: boolean;
+  }>;
+  /** Item gold of the local player's inventory. */
+  itemGold?: number;
   scores?: OverlayEnemy['scores'];
   position?: string;
   currentGold: number | null;
@@ -156,7 +167,14 @@ export interface OverlayState {
   isYone?: boolean;
   profileHint?: ProfileId | null;
   enemies?: OverlayEnemy[];
-  allies?: Array<{ championName: string; level: number; position?: string; isDead?: boolean }>;
+  allies?: Array<{
+    championName: string;
+    level: number;
+    position?: string;
+    isDead?: boolean;
+    /** Item gold of this ally, for the team item-gold lead. */
+    itemGold?: number;
+  }>;
   cachedChampSelectEnemies?: Array<{ championId: number; championName?: string; position?: string }>;
   enemyBotSummoners?: OverlayBotSummoner[];
   activePlayerLevel?: number;

@@ -75,6 +75,7 @@ import {
 } from '../logic/mayhem';
 import type { MayhemBundle } from '../logic/mayhem/types';
 import { validateMayhemBundle } from '../logic/mayhem/bundleSanitize';
+import { formatGoldLead, formatItemGold, teamItemGoldLead } from '../logic/goldDiff';
 import {
   isMayhemManualScanHint,
   OverlayMayhemPanel,
@@ -865,6 +866,22 @@ export const OverlayApp: React.FC = () => {
     [state.localPlayer?.items, build]
   );
 
+  /**
+   * Same passive read Blitz/Porofessor use: the Live Client reports every
+   * player's held items and their shop prices, so item gold is a pure sum. It
+   * is not total gold earned (unspent gold is invisible), but it is the gold
+   * actually turned into power.
+   */
+  const itemGoldLead = useMemo(
+    () =>
+      teamItemGoldLead({
+        local: state.localPlayer?.itemGold,
+        allies: state.allies,
+        enemies: state.enemies,
+      }),
+    [state.localPlayer?.itemGold, state.allies, state.enemies]
+  );
+
   const catalog = useSyncExternalStore(subscribeCatalog, getCatalog);
   const prices = useMemo<PriceLookup | null>(() => {
     const byId = catalogItemsById(catalog);
@@ -941,6 +958,15 @@ export const OverlayApp: React.FC = () => {
     const owned = state.mayhemOwnedIds || [];
     return rankMayhemChoices(mayhemChampion, owned, displayMayhemOfferIds, mayhemBundle);
   }, [displayMayhemOfferIds, state.mayhemOwnedIds, mayhemChampion, inMayhem, inAram, mayhemBundle]);
+
+  /** Named augments already taken this match, for the panel's "have" line. */
+  const mayhemOwned = useMemo(() => {
+    const ids = state.mayhemOwnedIds || [];
+    return ids
+      .map((id) => mayhemBundle.augments.find((aug) => aug.id === id))
+      .filter((aug): aug is NonNullable<typeof aug> => !!aug)
+      .map((aug) => ({ id: aug.id, name: aug.name }));
+  }, [state.mayhemOwnedIds, mayhemBundle]);
 
   // Depend on a 1 Hz tick, not Date.now() at render time: without a ticking
   // value the dismiss window never expired until some unrelated update
@@ -1108,7 +1134,6 @@ export const OverlayApp: React.FC = () => {
       (!inAram && hudModules.action && cues.length > 0 && slotHasModule('action')) ||
       ((!inAram || inMayhem) &&
         championProfileKnown &&
-        !mayhemPanelActive &&
         hudModules.buy &&
         buyQueue.length > 0 &&
         slotHasModule('buy')) ||
@@ -1152,12 +1177,13 @@ export const OverlayApp: React.FC = () => {
   }, []);
 
   const showAction = hudModules.action && cues.length > 0 && !inAram;
+  // The augment panel and the item/build rail are independent information:
+  // opening the augment roll must not take the items overlay away.
   const showBuy =
     hudModules.buy &&
     championProfileKnown &&
     buyQueue.length > 0 &&
-    (!inAram || inMayhem) &&
-    !mayhemPanelActive;
+    (!inAram || inMayhem);
 
   const buyRow = useMemo(() => {
     if (!showBuy) return null;
@@ -1207,6 +1233,16 @@ export const OverlayApp: React.FC = () => {
 
     return (
       <div className="flex flex-wrap gap-0.5 items-center min-w-0">
+        {itemGoldLead ? (
+          <div
+            className="hud-chrome-meta !text-[10px] w-full"
+            title="Item gold: full shop price of every held item, consumables excluded (Live Client Data API)"
+          >
+            Items {itemGoldLead.complete ? '' : '~'}
+            {formatItemGold(itemGoldLead.mine)} vs {itemGoldLead.complete ? '' : '~'}
+            {formatItemGold(itemGoldLead.theirs)} · {formatGoldLead(itemGoldLead.diff)}
+          </div>
+        ) : null}
         {buyNow ? (
           <span
             className="hud-buy-next"
@@ -1251,7 +1287,7 @@ export const OverlayApp: React.FC = () => {
         ) : null}
       </div>
     );
-  }, [showBuy, buyOrder, buyQueue]);
+  }, [showBuy, buyOrder, buyQueue, itemGoldLead]);
 
   const actionLine = useMemo(() => {
     if (!showAction) return null;
@@ -1780,6 +1816,7 @@ export const OverlayApp: React.FC = () => {
                 <OverlayMayhemPanel
                   championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
                   ranked={mayhemRanked}
+                  owned={mayhemOwned}
                   mode="roll"
                   verification={state.mayhemVerification}
                   ocrHint={state.mayhemOcrHint}
@@ -1863,6 +1900,7 @@ export const OverlayApp: React.FC = () => {
                 <OverlayMayhemPanel
                   championName={mayhemChampion?.name || state.localPlayer?.championName || 'You'}
                   ranked={mayhemRanked}
+                  owned={mayhemOwned}
                   mode="roll"
                   verification={state.mayhemVerification}
                   ocrHint={state.mayhemOcrHint}

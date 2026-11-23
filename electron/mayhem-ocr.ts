@@ -253,6 +253,12 @@ function logMayhemFrame(detail: {
   decision: MayhemFrameDecision;
   /** Per-slot mean body RGB (`x=r,g,b;…`) so a real run records gold-window evidence. */
   slotBodyRgb: string;
+  /** Per-slot sample counts (`x=b8/g0/r2;…`): which condition of the gate failed. */
+  slotPixels: string;
+  /** Pixel gate verdict (`true/false/?`), the post-selection "cards gone" signal. */
+  cardsVisible: string;
+  /** Cursor in the captured band (`x,y`) at this frame, when reported. */
+  cursor: string;
 }): void {
   overlayLog('mayhem-frame', {
     reason: detail.reason.slice(0, 200),
@@ -263,6 +269,9 @@ function logMayhemFrame(detail: {
     acceptedIds: detail.acceptedIds,
     decision: detail.decision,
     slotBodyRgb: detail.slotBodyRgb,
+    slotPixels: detail.slotPixels,
+    cardsVisible: detail.cardsVisible,
+    cursor: detail.cursor,
   });
 }
 
@@ -490,6 +499,10 @@ export async function detectMayhemOffers(
       blackFrame: parsed.blackFrame,
       foreground,
       fallback: parsed.fallback,
+      cardsVisible: parsed.cardsVisible,
+      // Only a real game-window capture can name what the cursor clicked.
+      cursor:
+        !parsed.fallback && !parsed.noTarget && parsed.target ? parsed.cursor : undefined,
     } satisfies MayhemMonitorReadFields;
     if (parsed.noTarget) {
       lastCaptureMethod = 'none';
@@ -516,6 +529,8 @@ export async function detectMayhemOffers(
           blackFrame: false,
           foreground,
           fallback: false,
+          cardsVisible: parsed.cardsVisible,
+          cursor: parsed.target ? parsed.cursor : undefined,
         },
         owner,
         'unverified'
@@ -534,6 +549,9 @@ export async function detectMayhemOffers(
           blackFrame: parsed.blackFrame,
           foreground,
           fallback: parsed.fallback,
+          cardsVisible: parsed.cardsVisible,
+          cursor:
+            !parsed.fallback && !parsed.noTarget && parsed.target ? parsed.cursor : undefined,
         },
         owner,
         'unverified'
@@ -569,6 +587,12 @@ export async function detectMayhemOffers(
       slotBodyRgb: (parsed.cardSlots ?? [])
         .map((s) => `${s.x}=${s.bodyR ?? '?'},${s.bodyG ?? '?'},${s.bodyB ?? '?'}`)
         .join(';'),
+      slotPixels: (parsed.cardSlots ?? [])
+        .map((s) => `${s.x}=b${s.body}/g${s.gap ?? '?'}/r${s.rim}`)
+        .join(';'),
+      cardsVisible:
+        parsed.cardsVisible === undefined ? '?' : parsed.cardsVisible ? 'true' : 'false',
+      cursor: parsed.cursor ? `${parsed.cursor.x},${parsed.cursor.y}` : 'none',
     });
     if (decision === 'accept') {
       // Keep reroll/fast-poll bookkeeping; the pipeline owns the display ids

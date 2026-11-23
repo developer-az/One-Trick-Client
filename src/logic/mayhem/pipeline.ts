@@ -363,6 +363,25 @@ export function classifyMayhemFrame(input: MayhemFrameInput): MayhemFrameEvidenc
       reasons: ['cards-matched-one-unknown'],
     };
   }
+  // Patch day: two of three titles newer than the bundle. Text alone cannot
+  // prove the row, so aligned card bodies with clean gaps are the authority.
+  // Unknown rows stay display-only placeholders; only knownIds are trusted.
+  if (
+    mode !== 'classic' &&
+    knownIds.length >= 1 &&
+    knownIds.length + unmatchedRows.length === requiredCards &&
+    !areAllChampionNames(unmatchedRows) &&
+    input.cardsVisible === true &&
+    hasAlignedCardPixels(rows, input.cardSlots)
+  ) {
+    const placeholderIds = unmatchedRows.map((row) => unknownMayhemAugmentId(row.text));
+    let placeholderIndex = 0;
+    const ids = rowHits.map((id) => id ?? placeholderIds[placeholderIndex++]);
+    return {
+      ids, knownIds, placeholderIds, decision: 'accept', cardCount,
+      reasons: ['cards-matched-unknown-pixels'],
+    };
+  }
   // A partial read beside known cards is an unanchored title, not a roll:
   // emitting it is what let scoreboard chrome become a phantom pick.
   if (knownIds.length > 0) {
