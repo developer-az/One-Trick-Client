@@ -270,3 +270,15 @@ The three suites that failed on clean test.18 are fixed; `npm run verify:release
 - Bundle stays at 26.23 (225 augments). `verify:release` exits 0 and the mayhem verifies pass.
 - Published `test-mayhem-rare-cards-35`.
 
+
+## 2026-11-22 - test.36: card variants (stickers, mixed rarity, extra selections)
+
+- **Sticker trim** (`Get-CardSlotEvidence`, `electron/scripts/mayhem-ocr.ps1`): up to 3 of the 9 body samples that are bright (luma > 95) are dropped, and the rest are re-tested with the neutral-art mean (`Test-CardMean`). That reading counts only inside the glowing-border block. Gap samples are never trimmed, and the gap-contrast rule keeps the **untrimmed** mean.
+- Why, measured: most stickered cards already passed through `darkHits >= 5` plus gap contrast. The one case that failed was silver art on a background of nearly the same luma: the old probe gave body=7 (refused) and the new one gives body=8 (`pos-sticker-lowcontrast`, red before and green after the change).
+- Regression found and fixed in-session: the first draft also fed the trimmed mean into the contrast rule, which flipped 4 real non-game screenshots (OneDrive\Pictures\Screenshots, e.g. a purple web hero) to CARDS_VISIBLE 1. After the fix, all 94 real screenshots (658 slots) give byte-identical slot evidence and verdicts to the pre-test.36 ps1. A source guard pins it.
+- New `verify:mayhem-card-variants` (102 checks), wired into `verify:release` after `verify:mayhem-indigo-cards`. It covers the predicate table on the logged RGBs, the shipped probe on prismatic, silver, gold, Maestro four-column, mixed-rarity (Hacked Reroll), HEARTSTEEL sticker and Debonair text rows, plus negatives (uniform band, borderless plates, bright cave, flecks on background, majority-bright patch). It also covers back-to-back rolls (an extra selection replaces the roll without merging, each pick is counted once, and trailing empties do not double-count).
+- **Flashy**: still absent upstream (bundle 26.23). Left on the placeholder path on purpose. I added no alias because it could invent an augment.
+- Known limit (test.31 logic, unchanged by design): if an extra selection replaces a roll with no empty frame in between, no pick is counted for the first roll. This is pinned in the new verify.
+- **OPEN, needs real captures** (none exist on this machine; the four test.34 captures are not on disk): HEARTSTEEL sticker, Debonair Zed, Command Line mixed row, Pentakill screen, and a stickered **gold** card (gold art proves itself per pixel with no rim, so a sticker can cost it hits; it was not loosened without evidence). Run `npx --yes tsx scripts/mayhem-diagnose.ts <png>` on each and record the VERDICT line.
+- **HUD skin health strip** (test.33): not checked in a real game. It is unchanged and still open.
+- `verify:release` exit 0. No ranked, presenter, pick-logic or HUD maths changes, and no version edit.

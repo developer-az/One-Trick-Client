@@ -258,6 +258,9 @@ function Get-CardSlotEvidence {
   $gap = 0
   # Mean body RGB is logged so a real run can confirm the gold window without trusting the predicate.
   $sumR = 0; $sumG = 0; $sumB = 0; $bodySamples = 0
+  # Per-sample colours, kept so a Headliner sticker (a bright ink mark on a
+  # minority of the patch) can be trimmed before the patch is judged.
+  $bodyPixels = @()
   foreach ($dx in @(-0.02, 0.0, 0.02)) {
     foreach ($dy in @(-0.02, 0.0, 0.02)) {
       $x = [int][Math]::Round($cx + $dx * $w)
@@ -265,6 +268,7 @@ function Get-CardSlotEvidence {
       if ($x -lt 0 -or $x -ge $w -or $y -lt 0 -or $y -ge $h) { continue }
       $c = $Bitmap.GetPixel($x, $y)
       $sumR += [int]$c.R; $sumG += [int]$c.G; $sumB += [int]$c.B; $bodySamples += 1
+      $bodyPixels += [pscustomobject]@{ R = [int]$c.R; G = [int]$c.G; B = [int]$c.B; L = (0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B) }
       if (Test-CardBody -R $c.R -G $c.G -B $c.B) { $body += 1 }
       if (Test-CardIndigo -R $c.R -G $c.G -B $c.B) { $indigoHits += 1 }
       if ((0.2126 * $c.R + 0.7152 * $c.G + 0.0722 * $c.B) -le 95) { $darkHits += 1 }
@@ -274,6 +278,20 @@ function Get-CardSlotEvidence {
   # genuine dark card whose mean (logged: 40,42,41 / 33,35,35 / 46,47,47) is
   # clearly neutral. The patch MEAN is the authority for that body reading; the
   # gap samples below stay strict, so a continuous dark band still fails.
+  # Sticker trim: a HEARTSTEEL band sticker or Debonair gold text is a bright
+  # mark over a minority of the patch, which drags the MEAN warm and bright and
+  # turned a real card into "no card". Drop at most 3 of the 9 samples, and only
+  # those that are bright (luma > 95, the same line darkHits uses); a majority of
+  # bright samples is not a sticker, so nothing is trimmed and the card must
+  # prove itself as before. The gap samples are never trimmed: the gap rule is
+  # the boundary proof and stays strict.
+  $trimR = $sumR; $trimG = $sumG; $trimB = $sumB; $trimN = $bodySamples
+  $brightCount = @($bodyPixels | Where-Object { $_.L -gt 95 }).Count
+  if ($bodySamples -ge 7 -and $brightCount -gt 0 -and $brightCount -le 3) {
+    foreach ($p in @($bodyPixels | Where-Object { $_.L -gt 95 })) {
+      $trimR -= $p.R; $trimG -= $p.G; $trimB -= $p.B; $trimN -= 1
+    }
+  }
   if ($bodySamples -gt 0) {
     $meanR = $sumR / $bodySamples
     $meanG = $sumG / $bodySamples
@@ -281,6 +299,12 @@ function Get-CardSlotEvidence {
     if (Test-CardMean -R ([int][Math]::Round($meanR)) -G ([int][Math]::Round($meanG)) -B ([int][Math]::Round($meanB))) {
       $body = [Math]::Max($body, $CARD_BODY_MIN)
     }
+  }
+  # The trimmed reading only ever counts under a glowing top border (rim block
+  # below), so trimming cannot make plain background with bright flecks a card.
+  $trimNeutral = $false
+  if ($trimN -gt 0 -and $trimN -lt $bodySamples) {
+    $trimNeutral = Test-CardMean -R ([int][Math]::Round($trimR / $trimN)) -G ([int][Math]::Round($trimG / $trimN)) -B ([int][Math]::Round($trimB / $trimN))
   }
   # A teal patch with no non-teal boundary is one band, not separate cards.
   # One column per side, at the layout's half-pitch: widening it would sample the
@@ -340,13 +364,17 @@ function Get-CardSlotEvidence {
   if ($rim -gt 0) {
     $bodyLuma = 255
     $gapLuma = 0
+    # The contrast rule uses the UNTRIMMED body mean. Feeding it the trimmed
+    # patch let a bright, saturated non-card patch (a web page's purple hero,
+    # real screenshot 2026-11-18) read darker than its gaps and flip
+    # CARDS_VISIBLE on. The trim only feeds the neutral-art test ($trimNeutral).
     if ($bodySamples -gt 0) {
       $bodyLuma = 0.2126 * ($sumR / $bodySamples) + 0.7152 * ($sumG / $bodySamples) + 0.0722 * ($sumB / $bodySamples)
     }
     if ($gapSamples -gt 0) {
       $gapLuma = 0.2126 * ($gapR / $gapSamples) + 0.7152 * ($gapG / $gapSamples) + 0.0722 * ($gapB / $gapSamples)
     }
-    if ($indigoHits -ge 5 -or ($darkHits -ge 5 -and ($gapLuma - $bodyLuma) -ge 12)) {
+    if ($trimNeutral -or $indigoHits -ge 5 -or ($darkHits -ge 5 -and ($gapLuma - $bodyLuma) -ge 12)) {
       $body = [Math]::Max($body, $CARD_BODY_MIN)
     }
   }
