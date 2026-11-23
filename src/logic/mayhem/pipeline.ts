@@ -42,7 +42,7 @@ export interface MayhemFrameEvidence {
   ids: string[];
   /** Bundle ids on an accepted frame (the trust path). */
   knownIds: string[];
-  /** `unknown:` rows on an accepted, all-unknown frame (display only). */
+  /** `unknown:` rows on an accepted frame (display only): all-unknown, or the one unmatched card. */
   placeholderIds: string[];
   decision: MayhemFrameDecision;
   /** Geometry-accepted card rows on this frame, whatever the decision. */
@@ -324,15 +324,43 @@ export function classifyMayhemFrame(input: MayhemFrameInput): MayhemFrameEvidenc
 
   state.pending = null;
   const knownIds: string[] = [];
-  for (const row of rows) {
+  /** Left-to-right display order: a known id, or null for an unmatched card. */
+  const rowHits: Array<string | null> = [];
+  const unmatchedRows: GeometryRow[] = [];
+  for (const row of rows.slice(0, MAX_CARDS)) {
     const hit = matchRow(row.text, augments);
-    if (hit && !knownIds.includes(hit.aug.id)) knownIds.push(hit.aug.id);
-    if (knownIds.length >= MAX_CARDS) break;
+    if (hit && !knownIds.includes(hit.aug.id)) {
+      knownIds.push(hit.aug.id);
+      rowHits.push(hit.aug.id);
+    } else if (!hit) {
+      rowHits.push(null);
+      unmatchedRows.push(row);
+    }
   }
   if (knownIds.length >= requiredCards) {
     return {
       ids: knownIds, knownIds, placeholderIds: [], decision: 'accept', cardCount,
       reasons: ['cards-matched'],
+    };
+  }
+  // A full card row with all but one title known is a roll: one card is newer
+  // than the bundle (patch day) or one title misread. A single known title
+  // beside junk stays rejected below. The unmatched card shows as a
+  // display-only placeholder; only the known ids are trusted for picks. A
+  // champion name in the unmatched slot means a scoreboard/champion-select
+  // read, never a roll.
+  if (
+    knownIds.length >= 2 &&
+    knownIds.length === requiredCards - 1 &&
+    unmatchedRows.length === 1 &&
+    !areAllChampionNames(unmatchedRows)
+  ) {
+    const placeholderIds = unmatchedRows.map((row) => unknownMayhemAugmentId(row.text));
+    let placeholderIndex = 0;
+    const ids = rowHits.map((id) => id ?? placeholderIds[placeholderIndex++]);
+    return {
+      ids, knownIds, placeholderIds, decision: 'accept', cardCount,
+      reasons: ['cards-matched-one-unknown'],
     };
   }
   // A partial read beside known cards is an unanchored title, not a roll:
